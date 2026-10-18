@@ -1,0 +1,252 @@
+diff --git a/src/data_tools/src/dataCapture.cpp b/src/data_tools/src/dataCapture.cpp
+--- a/src/data_tools/src/dataCapture.cpp
++++ b/src/data_tools/src/dataCapture.cpp
+@@ -5,6 +5,7 @@
+ #include <math.h>
+ #include <condition_variable>
+ #include <thread>
++#include <chrono>
+ #include <iostream>
+ #include <cv_bridge/cv_bridge.h>
+ #include <pcl/io/pcd_io.h>
+@@ -57,6 +58,8 @@
+     // std::vector<rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr> subRobotBaseVelConfigs;
+ 
+     rclcpp::Publisher<data_msgs::msg::CaptureStatus>::SharedPtr pubCaptureStatus;
++    rclcpp::CallbackGroup::SharedPtr cameraCallbackGroup;
++    rclcpp::CallbackGroup::SharedPtr jointCallbackGroup;
+ 
+     std::vector<BlockingDeque<sensor_msgs::msg::Image>> cameraColorMsgDeques;
+     std::vector<BlockingDeque<sensor_msgs::msg::Image>> cameraDepthMsgDeques;
+@@ -182,6 +185,9 @@
+ 
+     std::vector<sensor_msgs::msg::JointState> armJointStateList;
+     std::vector<bool> armJointStateChangeList;
++    std::vector<int> cameraColorWarmupStableGaps;
++    std::vector<int> armJointStateWarmupStableGaps;
++    bool recordingWorkersStarted = false;
+ 
+     DataCapture(std::string name, const rclcpp::NodeOptions & options, std::string datasetDir, int episodeIndex, int hz, int timeout, double cropTime=-1, bool useService=false): DataUtility(name, options, datasetDir, episodeIndex) {
+         this->useService = useService;
+@@ -220,6 +226,8 @@
+         liftMotorMsgDeques = std::vector<BlockingDeque<bt_task_msgs::msg::LiftMotorMsg>>(liftMotorNames.size());
+         #endif
+         instructionTextDeques = std::vector<BlockingDeque<data_msgs::msg::Instruction>>(instructionTextTopics.size());
++        cameraColorWarmupStableGaps = std::vector<int>(cameraColorNames.size(), 0);
++        armJointStateWarmupStableGaps = std::vector<int>(armJointStateNames.size(), 0);
+ 
+         subCameraColors = std::vector<rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr>(cameraColorNames.size());
+         subCameraDepths = std::vector<rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr>(cameraDepthNames.size());
+@@ -326,24 +334,31 @@
+         tfBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+         tfListener = std::make_shared<tf2_ros::TransformListener>(*tfBuffer);
+ 
++        cameraCallbackGroup = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
++        jointCallbackGroup = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
++        rclcpp::SubscriptionOptions cameraSubscriptionOptions;
++        cameraSubscriptionOptions.callback_group = cameraCallbackGroup;
++        rclcpp::SubscriptionOptions jointSubscriptionOptions;
++        jointSubscriptionOptions.callback_group = jointCallbackGroup;
++
+         for(int i = 0; i < cameraColorNames.size(); i++){
+             unused = system((std::string("mkdir -p ") + cameraColorDirs.at(i)).c_str());
+-            subCameraColors[i] = create_subscription<sensor_msgs::msg::Image>(cameraColorTopics[i], 2000, [this, i](const sensor_msgs::msg::Image::SharedPtr msg) { this->cameraColorHandler(msg, i);});
+-            subCameraColorConfigs[i] = create_subscription<sensor_msgs::msg::CameraInfo>(cameraColorConfigTopics[i], 2000, [this, i](const sensor_msgs::msg::CameraInfo::SharedPtr msg) { this->cameraColorConfigHandler(msg, i);});
++            subCameraColors[i] = create_subscription<sensor_msgs::msg::Image>(cameraColorTopics[i], 2000, [this, i](const sensor_msgs::msg::Image::SharedPtr msg) { this->cameraColorHandler(msg, i);}, cameraSubscriptionOptions);
++            subCameraColorConfigs[i] = create_subscription<sensor_msgs::msg::CameraInfo>(cameraColorConfigTopics[i], 2000, [this, i](const sensor_msgs::msg::CameraInfo::SharedPtr msg) { this->cameraColorConfigHandler(msg, i);}, cameraSubscriptionOptions);
+         }
+         for(int i = 0; i < cameraDepthNames.size(); i++){
+             unused = system((std::string("mkdir -p ") + cameraDepthDirs.at(i)).c_str());
+-            subCameraDepths[i] = create_subscription<sensor_msgs::msg::Image>(cameraDepthTopics[i], 2000, [this, i](const sensor_msgs::msg::Image::SharedPtr msg) { this->cameraDepthHandler(msg, i);});
+-            subCameraDepthConfigs[i] = create_subscription<sensor_msgs::msg::CameraInfo>(cameraDepthConfigTopics[i], 2000, [this, i](const sensor_msgs::msg::CameraInfo::SharedPtr msg) { this->cameraDepthConfigHandler(msg, i);});
++            subCameraDepths[i] = create_subscription<sensor_msgs::msg::Image>(cameraDepthTopics[i], 2000, [this, i](const sensor_msgs::msg::Image::SharedPtr msg) { this->cameraDepthHandler(msg, i);}, cameraSubscriptionOptions);
++            subCameraDepthConfigs[i] = create_subscription<sensor_msgs::msg::CameraInfo>(cameraDepthConfigTopics[i], 2000, [this, i](const sensor_msgs::msg::CameraInfo::SharedPtr msg) { this->cameraDepthConfigHandler(msg, i);}, cameraSubscriptionOptions);
+         }
+         for(int i = 0; i < cameraPointCloudNames.size(); i++){
+             unused = system((std::string("mkdir -p ") + cameraPointCloudDirs.at(i)).c_str());
+-            subCameraPointClouds[i] = create_subscription<sensor_msgs::msg::PointCloud2>(cameraPointCloudTopics[i], 2000, [this, i](const sensor_msgs::msg::PointCloud2::SharedPtr msg) { this->cameraPointCloudHandler(msg, i);});
+-            subCameraPointCloudConfigs[i] = create_subscription<sensor_msgs::msg::CameraInfo>(cameraPointCloudConfigTopics[i], 2000, [this, i](const sensor_msgs::msg::CameraInfo::SharedPtr msg) { this->cameraPointCloudConfigHandler(msg, i);});
++            subCameraPointClouds[i] = create_subscription<sensor_msgs::msg::PointCloud2>(cameraPointCloudTopics[i], 2000, [this, i](const sensor_msgs::msg::PointCloud2::SharedPtr msg) { this->cameraPointCloudHandler(msg, i);}, cameraSubscriptionOptions);
++            subCameraPointCloudConfigs[i] = create_subscription<sensor_msgs::msg::CameraInfo>(cameraPointCloudConfigTopics[i], 2000, [this, i](const sensor_msgs::msg::CameraInfo::SharedPtr msg) { this->cameraPointCloudConfigHandler(msg, i);}, cameraSubscriptionOptions);
+         }
+         for(int i = 0; i < armJointStateNames.size(); i++){
+             unused = system((std::string("mkdir -p ") + armJointStateDirs.at(i)).c_str());
+-            subArmJointStates[i] = create_subscription<sensor_msgs::msg::JointState>(armJointStateTopics[i], 2000, [this, i](const sensor_msgs::msg::JointState::SharedPtr msg) { this->armJointStateHandler(msg, i);});
++            subArmJointStates[i] = create_subscription<sensor_msgs::msg::JointState>(armJointStateTopics[i], 2000, [this, i](const sensor_msgs::msg::JointState::SharedPtr msg) { this->armJointStateHandler(msg, i);}, jointSubscriptionOptions);
+             armJointStateChangeList[i] = false;
+             sensor_msgs::msg::JointState msg;
+             msg.header.stamp = rclcpp::Time(0);
+@@ -351,7 +366,7 @@
+         }
+         for(int i = 0; i < armEndPoseNames.size(); i++){
+             unused = system((std::string("mkdir -p ") + armEndPoseDirs.at(i)).c_str());
+-            subArmEndPoses[i] = create_subscription<geometry_msgs::msg::PoseStamped>(armEndPoseTopics[i], 2000, [this, i](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { this->armEndPoseHandler(msg, i);});
++            subArmEndPoses[i] = create_subscription<geometry_msgs::msg::PoseStamped>(armEndPoseTopics[i], 2000, [this, i](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { this->armEndPoseHandler(msg, i);}, jointSubscriptionOptions);
+         }
+         for(int i = 0; i < localizationPoseNames.size(); i++){
+             unused = system((std::string("mkdir -p ") + localizationPoseDirs.at(i)).c_str());
+@@ -384,7 +399,66 @@
+         }
+     }
+ 
++    bool waitForStableStreams(double timeoutSeconds=8.0){
++        const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
++        while(std::chrono::steady_clock::now() < deadline){
++            bool ready = true;
++            for(int i=0; i<cameraColorNames.size() && ready; i++){
++                std::lock_guard<std::mutex> lock(cameraColorMsgCountMtxs.at(i));
++                if(cameraColorMsgCounts.at(i) == 0 || cameraColorWarmupStableGaps.at(i) < 15)
++                    ready = false;
++            }
++            for(int i=0; i<armJointStateNames.size() && ready; i++){
++                const bool optionalTopic = std::find(
++                    optionalArmJointStateTopics.begin(), optionalArmJointStateTopics.end(),
++                    armJointStateTopics.at(i)) != optionalArmJointStateTopics.end();
++                if(optionalTopic)
++                    continue;
++                std::lock_guard<std::mutex> lock(armJointStateMsgCountMtxs.at(i));
++                if(armJointStateMsgCounts.at(i) == 0 || armJointStateWarmupStableGaps.at(i) < 25)
++                    ready = false;
++            }
++            if(ready)
++                return true;
++            std::this_thread::sleep_for(std::chrono::milliseconds(20));
++        }
++        return false;
++    }
++
++    void prepareForRecording(){
++        for(auto &deque: cameraColorMsgDeques) deque.clear();
++        for(auto &deque: cameraDepthMsgDeques) deque.clear();
++        for(auto &deque: cameraPointCloudMsgDeques) deque.clear();
++        for(auto &deque: armJointStateMsgDeques) deque.clear();
++        for(auto &deque: armEndPoseMsgDeques) deque.clear();
++        for(auto &deque: localizationPoseMsgDeques) deque.clear();
++        for(auto &deque: gripperEncoderMsgDeques) deque.clear();
++        for(auto &deque: imu9AxisMsgDeques) deque.clear();
++        for(auto &deque: lidarPointCloudMsgDeques) deque.clear();
++        for(auto &deque: robotBaseVelMsgDeques) deque.clear();
++        #ifdef _USELIFT
++        for(auto &deque: liftMotorMsgDeques) deque.clear();
++        #endif
++        for(int i=0; i<cameraColorNames.size(); i++){
++            std::lock_guard<std::mutex> lock(cameraColorMsgCountMtxs.at(i));
++            cameraColorMsgCounts.at(i) = 0;
++            cameraColorStartTimeStamps.at(i) = 0;
++            cameraColorLastTimeStamps.at(i) = 0;
++            cameraColorWarmupStableGaps.at(i) = 0;
++        }
++        for(int i=0; i<armJointStateNames.size(); i++){
++            std::lock_guard<std::mutex> lock(armJointStateMsgCountMtxs.at(i));
++            armJointStateMsgCounts.at(i) = 0;
++            armJointStateStartTimeStamps.at(i) = 0;
++            armJointStateLastTimeStamps.at(i) = 0;
++            armJointStateWarmupStableGaps.at(i) = 0;
++            armJointStateList.at(i).header.stamp = rclcpp::Time(0);
++            armJointStateChangeList.at(i) = false;
++        }
++    }
++
+     void run(){
++        recordingWorkersStarted = true;
+         for(int i = 0; i < cameraColorNames.size(); i++){
+             cameraColorSavingThreads.push_back(new std::thread(&DataCapture::cameraColorSaving, this, i));
+         }
+@@ -430,6 +504,8 @@
+     }
+ 
+     void join(){
++        if(!recordingWorkersStarted)
++            return;
+         for(int i = 0; i < cameraColorNames.size(); i++){
+             cameraColorSavingThreads.at(i)->join();
+             delete cameraColorSavingThreads.at(i);
+@@ -504,13 +580,16 @@
+     }
+ 
+     void cameraColorHandler(const sensor_msgs::msg::Image::SharedPtr& msg, const int& index){
+-        cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+         cameraColorMsgDeques.at(index).push_back(*msg);
++        const double stamp = rclcpp::Time(msg->header.stamp).seconds();
+         std::lock_guard<std::mutex> lock(cameraColorMsgCountMtxs.at(index));
+         if(cameraColorMsgCounts.at(index) == 0){
+-            cameraColorStartTimeStamps.at(index) = rclcpp::Time(msg->header.stamp).seconds();
++            cameraColorStartTimeStamps.at(index) = stamp;
+         }else{
+-            cameraColorLastTimeStamps.at(index) = rclcpp::Time(msg->header.stamp).seconds();
++            const double gap = stamp - cameraColorLastTimeStamps.at(index);
++            cameraColorWarmupStableGaps.at(index) = (gap > 0.0 && gap <= 0.05)
++                ? cameraColorWarmupStableGaps.at(index) + 1 : 0;
++            cameraColorLastTimeStamps.at(index) = stamp;
+         }
+         cameraColorMsgCounts.at(index) += 1;
+         cameraColorFrameIds.at(index) = msg->header.frame_id;
+@@ -769,11 +848,15 @@
+         }
+         armJointStateList.at(index) = *msg;
+         armJointStateMsgDeques.at(index).push_back(*msg);
++        const double stamp = rclcpp::Time(msg->header.stamp).seconds();
+         std::lock_guard<std::mutex> lock(armJointStateMsgCountMtxs.at(index));
+         if(armJointStateMsgCounts.at(index) == 0){
+-            armJointStateStartTimeStamps.at(index) = rclcpp::Time(msg->header.stamp).seconds();
++            armJointStateStartTimeStamps.at(index) = stamp;
+         }else{
+-            armJointStateLastTimeStamps.at(index) = rclcpp::Time(msg->header.stamp).seconds();
++            const double gap = stamp - armJointStateLastTimeStamps.at(index);
++            armJointStateWarmupStableGaps.at(index) = (gap > 0.0 && gap <= 0.05)
++                ? armJointStateWarmupStableGaps.at(index) + 1 : 0;
++            armJointStateLastTimeStamps.at(index) = stamp;
+         }
+         armJointStateMsgCounts.at(index) += 1;
+     }
+@@ -1907,9 +1990,15 @@
+                             this->episodeIndex++;
+                         }
+                         exec->add_node(dataCapture);
+-                        ((DataCapture *)dataCapture.get())->instructionSaving(instructions);
+-                        ((DataCapture *)dataCapture.get())->run();
+                         spinThread = new std::thread(&DataCaptureService::spining, this);
++                        if(!dataCapture->waitForStableStreams()){
++                            stopCapture();
++                            res->success = false;
++                            return;
++                        }
++                        dataCapture->instructionSaving(instructions);
++                        dataCapture->prepareForRecording();
++                        dataCapture->run();
+                         res->success = true;
+                     }
+                 }else{
+@@ -1934,9 +2023,15 @@
+                                 this->episodeIndex++;
+                             }
+                             exec->add_node(dataCapture);
+-                            ((DataCapture *)dataCapture.get())->instructionSaving(instructions);
+-                            ((DataCapture *)dataCapture.get())->run();
+                             spinThread = new std::thread(&DataCaptureService::spining, this);
++                            if(!dataCapture->waitForStableStreams()){
++                                stopCapture();
++                                res->success = false;
++                                return;
++                            }
++                            dataCapture->instructionSaving(instructions);
++                            dataCapture->prepareForRecording();
++                            dataCapture->run();
+                             res->success = true;
+                         // }
+                     }else if(req->end){
+diff --git a/src/data_tools/include/blockingDeque.h b/src/data_tools/include/blockingDeque.h
+--- a/src/data_tools/include/blockingDeque.h
++++ b/src/data_tools/include/blockingDeque.h
+@@ -23,6 +23,11 @@
+             deque.pop_front();
+         deque.push_back(item);
+         condition.notify_one();
++    }
++
++    void clear(){
++        std::lock_guard<std::mutex> lock(mutex);
++        deque.clear();
+     }
+ 
+     void close(){

@@ -1,0 +1,15 @@
+{
+  "root": ".runtime/server",
+  "processing_mode": "demo",
+  "auto_process": true,
+  "profiles": {
+    "agilex_aloha": {
+      "profile_path": "configs/agilex-aloha.json",
+      "provider": "agilex",
+      "raw_formats": ["agilex_joint_camera_hdf5_v1", "agilex_timestamped_directory_v1"],
+      "accepted_capture_profile_hashes": []
+    }
+  },
+  "default_profile": "agilex_aloha",
+  "viewer_origin": "http://127.0.0.1:8082"
+}

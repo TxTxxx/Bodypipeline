@@ -1,0 +1,47 @@
+{
+  "instances": {
+    "bodypipeline-shared": {
+      "host": "server",
+      "service": "bodypipeline-server",
+      "server_port": 8081,
+      "viewer_port": 8082,
+      "viewer_ui_port": 3100,
+      "viewer_data_port": 8765,
+      "root": "/srv/bodypipeline/server",
+      "data_root": "/srv/bodypipeline-data",
+      "config": "/srv/bodypipeline/config/server.json",
+      "environment_file": "/srv/bodypipeline/config/server.env",
+      "profiles": {
+        "agilex_aloha": {
+          "profile_path": "/srv/bodypipeline/configs/agilex-aloha-v2.json",
+          "provider": "agilex",
+          "raw_formats": [
+            "agilex_joint_camera_hdf5_v1",
+            "agilex_timestamped_directory_v1"
+          ]
+        },
+        "newrobot_v1": {
+          "profile_path": "/srv/bodypipeline-newrobot/configs/newrobot.json",
+          "provider": "new_robot",
+          "raw_formats": [
+            "new_robot_timestamped_v1"
+          ]
+        }
+      },
+      "robots": [
+        {
+          "robot_id": "robot-001",
+          "robot_type": "agilex_aloha",
+          "project_id": "teleop",
+          "profile": "agilex_aloha"
+        },
+        {
+          "robot_id": "robot-002",
+          "robot_type": "newrobot",
+          "project_id": "teleop",
+          "profile": "newrobot_v1"
+        }
+      ]
+    }
+  }
+}

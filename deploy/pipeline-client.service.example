@@ -1,0 +1,18 @@
+[Unit]
+Description=Embodied Pipeline Client API
+After=network.target
+
+[Service]
+Type=simple
+User=bodypipeline
+WorkingDirectory=/opt/bodypipeline
+EnvironmentFile=/etc/bodypipeline/client.env
+# Provision once with `uv sync --locked --no-dev`; do not resolve/install at service startup.
+ExecStart=/opt/bodypipeline/.venv/bin/embodied-pipeline client --config /opt/bodypipeline/configs/client.agilex-aloha.json --host 127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=180
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

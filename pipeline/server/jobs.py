@@ -1,0 +1,593 @@
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import threading
+import time
+import uuid
+from pathlib import Path
+
+from pipeline.shared.collections import collection_metadata
+from pipeline.shared.core import (
+    DomainError,
+    atomic_json,
+    digest,
+    executable_path,
+    now,
+)
+
+from .datasets import TARGET_FORMATS
+from .providers import RuntimeCatalog
+from .quality import DOCTOR_CHECK_IDS, doctor_gate
+from .storage import prepare_storage, storage_path
+
+
+class JobRunner:
+    def __init__(self, settings, ingest):
+        self.settings, self.ingest, self.store = settings, ingest, ingest.store
+        self.catalog = RuntimeCatalog(settings)
+        self.lock = threading.RLock()
+        self.shutdown_requested = threading.Event()
+
+    def recover(self):
+        for job in self.store.all("job"):
+            if job["state"] == "RUNNING":
+                job.update(
+                    state="INTERRUPTED",
+                    error="Worker 重启；可显式重试，既有工作目录作为诊断数据保留",
+                    finished_at=now(),
+                )
+                self.store.put("job", job["id"], job)
+
+    def enqueue(self, uid, target_format="v3.0", run_doctor=True, instruction=None):
+        return self._enqueue([uid], target_format, run_doctor, instruction)
+
+    def enqueue_collection(
+        self,
+        collection_id,
+        instruction,
+        target_format="v3.0",
+        run_doctor=True,
+        upload_ids=None,
+    ):
+        if upload_ids is None:
+            upload_ids = []
+            for row in self.store.all("upload"):
+                if row["state"] != "COMMITTED":
+                    continue
+                try:
+                    metadata = collection_metadata(
+                        self.ingest.manifest(row), row["target"], row["prefix"]
+                    )
+                except (DomainError, OSError, ValueError, KeyError):
+                    continue
+                if metadata["collection_id"] == collection_id:
+                    upload_ids.append(row["id"])
+        return self._enqueue(
+            upload_ids, target_format, run_doctor, instruction, collection_id
+        )
+
+    def _enqueue(
+        self, upload_ids, target_format, run_doctor, instruction, collection_id=None
+    ):
+        if target_format not in TARGET_FORMATS or type(run_doctor) is not bool:
+            raise DomainError(
+                "目标格式必须为 v3.0 / v2.1，run_doctor 必须为布尔值", 400
+            )
+        if (
+            not upload_ids
+            or len(upload_ids) > 1000
+            or len(set(upload_ids)) != len(upload_ids)
+        ):
+            raise DomainError("请选择 1–1000 段不重复的已完成采集", 400)
+        with self.lock:
+            uploads = [self.store.get("upload", uid) for uid in upload_ids]
+            uploads.sort(key=lambda row: (row["created_at"], row["id"]))
+            manifests, metadata, runtime_ids = [], [], []
+            for upload in uploads:
+                if upload["state"] != "COMMITTED":
+                    raise DomainError("只有已提交原始数据可以转换")
+                manifest = self.ingest.manifest(upload, fresh=True)
+                runtime = self.catalog.for_stored_record(upload, manifest)
+                runtime_ids.append(runtime.id)
+                manifests.append(manifest)
+                metadata.append(
+                    collection_metadata(manifest, upload["target"], upload["prefix"])
+                )
+            if len(set(runtime_ids)) != 1:
+                raise DomainError(
+                    "批量转换不允许混合不同机器人 Runtime，请按机器人类型分别提交", 400
+                )
+            runtime = self.catalog.get(runtime_ids[0])
+            provider = self.catalog.provider(runtime)
+            cid = collection_id or metadata[0]["collection_id"]
+            if any(m["collection_id"] != cid for m in metadata):
+                raise DomainError(
+                    "批量采集必须属于同一数据集、机器人配置和存储目标", 400
+                )
+            if instruction is None:
+                instruction = manifests[0]["instruction"]
+            if (
+                not isinstance(instruction, str)
+                or not 1 <= len(instruction.strip()) <= 2000
+            ):
+                raise DomainError("请在转换时填写 1–2000 字符的 instruction", 400)
+            instruction = instruction.strip()
+            # The Runtime and its Profile are both Server-owned. Provider code is
+            # selected from the static registry, never from the Client manifest.
+            profile = runtime.profile
+            key = digest(
+                {
+                    "inputs": [(u["id"], u["manifest_hash"]) for u in uploads],
+                    "collection_id": cid,
+                    "instruction": instruction,
+                    "runtime_id": runtime.id,
+                    "provider": provider.id,
+                    "profile_hash": runtime.profile_hash,
+                    "profile": profile,
+                    "mode": self.settings.processing_mode,
+                    "target_format": target_format,
+                    "run_doctor": run_doctor,
+                    "pipeline": "runtime-provider-v2",
+                    "encoding": "libx264-yuv420p",
+                    "letools": "1c417cc9c205f85cd01a5e5860646f1594738354",
+                }
+            )
+            for row in self.store.all("job"):
+                if row["key"] == key and row["state"] not in {
+                    "FAILED",
+                    "INTERRUPTED",
+                    "QUARANTINED",
+                    "BLOCKED",
+                }:
+                    return row
+            job = {
+                "id": str(uuid.uuid4()),
+                "key": key,
+                "upload_id": uploads[0]["id"],
+                "upload_ids": [u["id"] for u in uploads],
+                "source_manifest_hashes": {
+                    u["id"]: u["manifest_hash"] for u in uploads
+                },
+                "collection_id": cid,
+                "dataset_name": metadata[0]["dataset_name"],
+                "source_count": len(uploads),
+                "state": "QUEUED",
+                "stage": "等待 Worker",
+                "created_at": now(),
+                "runtime_id": runtime.id,
+                "provider": provider.id,
+                "profile_hash": runtime.profile_hash,
+                "raw_formats": list(runtime.raw_formats),
+                "accepted_capture_profile_hashes": list(
+                    dict.fromkeys(
+                        [
+                            *runtime.accepted_capture_profile_hashes,
+                            *self.settings.accepted_capture_profile_hashes,
+                        ]
+                    )
+                ),
+                "profile": profile,
+                "processing_mode": self.settings.processing_mode,
+                "target_format": target_format,
+                "run_doctor": run_doctor,
+                "instruction": instruction,
+                "capture_mode": manifests[0]["capture_mode"],
+                "error": None,
+            }
+            job["robot_type"] = runtime.robot_type
+            for field in ("data_layout",):
+                if field in uploads[0]:
+                    job[field] = uploads[0][field]
+            self.store.put("job", job["id"], job)
+            return job
+
+    def runtime_for_job(self, job):
+        """Resolve a trusted Runtime, including jobs created before phase two."""
+        if job.get("runtime_id"):
+            return self.catalog.get(job["runtime_id"])
+        upload_id = job.get("upload_id") or (job.get("upload_ids") or [None])[0]
+        if not upload_id:
+            raise DomainError("任务没有可使用源采集，无法解析机器人 Runtime", 409)
+        upload = self.store.get("upload", upload_id)
+        manifest = self.ingest.manifest(upload)
+        runtime = self.catalog.for_stored_record(upload, manifest)
+        job["runtime_id"] = runtime.id
+        job["provider"] = runtime.provider
+        job["profile_hash"] = runtime.profile_hash
+        job["raw_formats"] = list(runtime.raw_formats)
+        job["accepted_capture_profile_hashes"] = list(
+            dict.fromkeys(
+                [
+                    *runtime.accepted_capture_profile_hashes,
+                    *self.settings.accepted_capture_profile_hashes,
+                ]
+            )
+        )
+        return runtime
+
+    def save(self, job, **updates):
+        job.update(**updates, updated_at=now())
+        self.store.put("job", job["id"], job)
+
+    def command(self, args, work, name):
+        stdout, stderr = work / f"{name}.json", work / f"{name}.stderr.log"
+        with stdout.open("wb") as out, stderr.open("wb") as err:
+            env = self.settings.tool_environment()
+            process = subprocess.Popen(
+                args, stdout=out, stderr=err, start_new_session=True, cwd=work, env=env
+            )
+            try:
+                deadline = time.monotonic() + self.settings.command_timeout
+                while process.poll() is None:
+                    if self.shutdown_requested.wait(0.25):
+                        raise InterruptedError("Worker 收到停止请求")
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("命令执行超时")
+                code = process.returncode
+            except BaseException:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                raise
+        return code, stdout, stderr
+
+    def tick(self):
+        if self.settings.auto_process:
+            for upload in self.store.all("upload"):
+                if (
+                    upload["state"] == "COMMITTED"
+                    and not upload.get("imported")
+                    and upload.get("instruction", "").strip()
+                    and not any(
+                        upload["id"] in j.get("upload_ids", [j.get("upload_id")])
+                        for j in self.store.all("job")
+                    )
+                ):
+                    self.enqueue(upload["id"])
+        queued = [j for j in self.store.all("job") if j["state"] == "QUEUED"]
+        if queued:
+            self.run(queued[-1])
+            return True
+        return False
+
+    def run(self, job):
+        self.save(
+            job,
+            state="RUNNING",
+            stage="原始数据核验与时间对齐",
+            started_at=now(),
+        )
+        try:
+            prepare_storage(self.settings, job)
+            work = storage_path(self.settings, job, "work", job["id"])
+            self.save(job, work_path=str(work))
+            work.mkdir(parents=True, exist_ok=False)
+            runtime = self.runtime_for_job(job)
+            provider = self.catalog.provider(runtime)
+            profile = job.get("profile") or runtime.profile
+            self.save(
+                job,
+                profile=profile,
+                runtime_id=runtime.id,
+                provider=provider.id,
+                profile_hash=job.get("profile_hash", runtime.profile_hash),
+                raw_formats=job.get("raw_formats", list(runtime.raw_formats)),
+            )
+            synthetic = job["capture_mode"] == "mock"
+            blockers = provider.profile_blockers(profile) if not synthetic else []
+            if blockers:
+                self.save(
+                    job,
+                    state="BLOCKED",
+                    stage="等待机器人配置核实",
+                    blockers=blockers,
+                    error="；".join(item["message"] for item in blockers),
+                    finished_at=now(),
+                )
+                return
+            if not synthetic:
+                provider.validate_profile(profile)
+            from pipeline.shared.core import confined, file_hash
+
+            ids = job.get("upload_ids", [job["upload_id"]])
+            reports, robot_reports, sources = [], [], []
+            episode_diagnostics = []
+            aligned = work / "aligned"
+            aligned.mkdir()
+            dimensions = None
+            for index, uid in enumerate(ids):
+                if self.shutdown_requested.is_set():
+                    raise InterruptedError("Worker 收到停止请求")
+                self.save(
+                    job,
+                    stage=f"核验与对齐 episode {index + 1}/{len(ids)}",
+                    current_upload_id=uid,
+                )
+                try:
+                    upload = self.store.get("upload", uid)
+                    manifest = self.ingest.manifest(upload, fresh=True)
+                    if upload["state"] != "COMMITTED" or upload[
+                        "manifest_hash"
+                    ] != job.get("source_manifest_hashes", {}).get(
+                        uid, upload["manifest_hash"]
+                    ):
+                        raise DomainError("源采集状态或 Manifest 与提交快照不一致")
+                    source_runtime = self.catalog.for_stored_record(upload, manifest)
+                    if source_runtime.id != runtime.id:
+                        raise DomainError(
+                            f"源采集 Runtime {source_runtime.id!r} 与任务 Runtime "
+                            f"{runtime.id!r} 不一致"
+                        )
+                    self.catalog.validate_capture(
+                        runtime, manifest, require_compatible_hash=False
+                    )
+                    metadata = collection_metadata(
+                        manifest, upload["target"], upload["prefix"]
+                    )
+                    if (
+                        job.get("collection_id")
+                        and metadata["collection_id"] != job["collection_id"]
+                    ):
+                        raise DomainError("源采集不属于任务数据集")
+                    if (
+                        manifest["capture_mode"] != job["capture_mode"]
+                        or manifest["profile"]["robot_type"] != profile["robot_type"]
+                    ):
+                        raise DomainError("采集模式或机器人类型与转换配置不匹配")
+                    accepted_hashes = {
+                        job.get("profile_hash", digest(profile)),
+                        *job.get(
+                            "accepted_capture_profile_hashes",
+                            runtime.accepted_capture_profile_hashes,
+                        ),
+                    }
+                    if (
+                        not upload.get("imported")
+                        and manifest["profile_hash"] not in accepted_hashes
+                    ):
+                        raise DomainError(
+                            "上传 Profile 与服务器批准版本不同；请审核后将兼容摘要加入该 Runtime"
+                        )
+                    raw = Path(upload["raw_path"])
+                    source_work = work / "sources" / str(index)
+                    for f in manifest["files"]:
+                        if file_hash(confined(raw, f["path"])) != f["sha256"]:
+                            raise DomainError(f"原始文件摘要变化：{f['path']}")
+                    prepared = provider.prepare(raw, source_work / "aligned", profile)
+                    aligned_path = Path(
+                        prepared.pop("aligned_path", source_work / "aligned/episode0")
+                    )
+                    aligned_kind = prepared.pop("aligned_kind", "directory")
+                    robot_report = provider.quality(
+                        aligned_path, profile, synthetic=synthetic
+                    )
+                    shapes = {
+                        k: v["dimensions"]
+                        for k, v in prepared["streams"].items()
+                        if v["dimensions"]
+                    }
+                    if dimensions is not None and shapes != dimensions:
+                        raise DomainError("批量采集的相机分辨率不一致")
+                    dimensions = shapes
+                    target = (
+                        aligned / f"episode{index}.hdf5"
+                        if aligned_kind == "hdf5"
+                        else aligned / f"episode{index}"
+                    )
+                    os.replace(aligned_path, target)
+                    reports.append(
+                        {**prepared, "episode_index": index, "upload_id": uid}
+                    )
+                    robot_reports.append(
+                        {**robot_report, "episode_index": index, "upload_id": uid}
+                    )
+                    sources.append(
+                        {
+                            "episode_index": index,
+                            "upload_id": uid,
+                            "session_id": manifest["session_id"],
+                            "robot_id": manifest["robot_id"],
+                            "manifest_hash": upload["manifest_hash"],
+                            "source_instruction": manifest["instruction"],
+                        }
+                    )
+                    episode_diagnostics.append(
+                        {
+                            "episode_index": index,
+                            "upload_id": uid,
+                            "passed": True,
+                            "error": None,
+                        }
+                    )
+                except Exception as exc:
+                    episode_diagnostics.append(
+                        {
+                            "episode_index": index,
+                            "upload_id": uid,
+                            "passed": False,
+                            "error": str(exc),
+                        }
+                    )
+                self.save(job, episode_diagnostics=episode_diagnostics)
+            failed = [row for row in episode_diagnostics if not row["passed"]]
+            if failed:
+                summary = "；".join(
+                    f"episode {row['episode_index']} / 采集 {row['upload_id']}：{row['error']}"
+                    for row in failed
+                )
+                raise DomainError(
+                    f"{len(failed)}/{len(ids)} 个 episode 未通过核验与对齐：{summary}"
+                )
+            job["alignment_report"] = (
+                reports[0]
+                if len(reports) == 1
+                else {
+                    "frames": sum(r["frames"] for r in reports),
+                    "fps": reports[0].get("fps", profile.get("output_fps")),
+                    "episode_count": len(reports),
+                    "episodes": reports,
+                }
+            )
+            job["robot_report"] = (
+                robot_reports[0]
+                if len(robot_reports) == 1
+                else {
+                    "status": "SYNTHETIC" if synthetic else "PASS",
+                    "joint_limits_enforced": False,
+                    "episodes": robot_reports,
+                }
+            )
+            atomic_json(work / "alignment-report.json", job["alignment_report"])
+            atomic_json(work / "robot-report.json", job["robot_report"])
+            atomic_json(
+                work / "lineage.json",
+                {
+                    "manifest_hash": sources[0]["manifest_hash"],
+                    "sources": sources,
+                    "collection_id": job.get("collection_id"),
+                    "dataset_name": job.get("dataset_name"),
+                    "instruction": job["instruction"],
+                    "runtime_id": runtime.id,
+                    "provider": provider.id,
+                    "profile_hash": job.get("profile_hash", digest(profile)),
+                    "job_id": job["id"],
+                    "expected_tool_commit": "1c417cc9c205f85cd01a5e5860646f1594738354",
+                    **provider.lineage_metadata(profile),
+                    "synthetic": synthetic,
+                    "target_format": job.get("target_format", "v3.0"),
+                    "run_doctor": job.get("run_doctor", True),
+                    "video_encoding": {"codec": "libx264", "pixel_format": "yuv420p"},
+                },
+            )
+            if job["processing_mode"] == "demo":
+                self.save(
+                    job,
+                    state="DEMO_READY",
+                    stage="演示对齐完成（未转换 LeRobot、未运行 Doctor）",
+                    finished_at=now(),
+                )
+                return
+            executable = executable_path(self.settings.letools_bin)
+            if not executable:
+                raise DomainError(
+                    "未找到 letools；请按 README 在独立 Python 3.12 环境安装固定提交并配置 letools_bin"
+                )
+            code, _, err = self.command(
+                [executable, "doctor", "environment"], work, "environment"
+            )
+            if code:
+                raise DomainError(
+                    "letools 环境诊断失败：" + err.read_text(errors="replace")[-1200:]
+                )
+            self.save(job, stage="letools 转换")
+            args = provider.conversion_args(
+                executable=executable,
+                source=work / "aligned",
+                destination=work / "dataset",
+                profile=profile,
+                job=job,
+            )
+            code, _, err = self.command(args, work, "convert")
+            if code:
+                raise DomainError(
+                    f"转换失败（{code}）：{err.read_text(errors='replace')[-2000:]}"
+                )
+            provider.patch_dataset_info(work / "dataset", profile, synthetic=synthetic)
+            self.save(job, stage="深度结构验证")
+            code, _, err = self.command(
+                [executable, "validate", str(work / "dataset"), "--deep"],
+                work,
+                "validate",
+            )
+            if code:
+                raise DomainError(
+                    f"结构验证失败：{err.read_text(errors='replace')[-2000:]}"
+                )
+            info = json.loads((work / "dataset/meta/info.json").read_text())
+            if (
+                info.get("total_episodes") != len(ids)
+                or info.get("total_frames") != job["alignment_report"]["frames"]
+            ):
+                raise DomainError("转换结果的 episode / 帧数与输入快照不一致")
+            self.save(
+                job,
+                dataset_ready=True,
+                dataset_path=str(work / "dataset"),
+                episode_count=len(ids),
+            )
+            if not job.get("run_doctor", True):
+                self.save(
+                    job,
+                    state="CONVERTED",
+                    stage="转换完成，可预览或运行 Doctor",
+                    finished_at=now(),
+                )
+                return
+            self.save(job, stage="Doctor 全量质检")
+            code, output, err = self.command(
+                [
+                    executable,
+                    "doctor",
+                    "check",
+                    str(work / "dataset"),
+                    "--checks",
+                    ",".join(DOCTOR_CHECK_IDS),
+                    "--ci",
+                    "--fail-on",
+                    "warn",
+                ],
+                work,
+                "doctor",
+            )
+            try:
+                doctor = json.loads(output.read_text())
+                if not isinstance(doctor, dict) or not doctor:
+                    raise ValueError("empty report")
+            except (ValueError, OSError) as exc:
+                raise DomainError(
+                    f"Doctor 未生成有效 JSON，属于任务错误而不是质量通过：{err.read_text(errors='replace')[-1200:]}"
+                ) from exc
+            self.save(job, doctor_report=doctor)
+            info = json.loads((work / "dataset/meta/info.json").read_text())
+            gate = doctor_gate(doctor, info, code)
+            job["quality_gate"] = gate
+            job["episode_count"] = info.get("total_episodes")
+            if not gate["passed"]:
+                self.save(
+                    job,
+                    state="QUARANTINED",
+                    stage="转换完成，Doctor 发现问题",
+                    error=f"Doctor exit={code}, severity={gate['severity']}",
+                    dataset_path=str(work / "dataset"),
+                    finished_at=now(),
+                )
+                return
+            self.save(
+                job,
+                state="COMPLETED" if not synthetic else "SYNTHETIC_READY",
+                stage=(
+                    "转换与 Doctor 质检完成"
+                    if not synthetic
+                    else "模拟数据转换与 Doctor 质检完成"
+                ),
+                dataset_path=str(work / "dataset"),
+                finished_at=now(),
+            )
+        except InterruptedError as exc:
+            self.save(
+                job,
+                state="INTERRUPTED",
+                stage="Worker 已停止",
+                error=str(exc),
+                finished_at=now(),
+            )
+        except Exception as exc:
+            self.save(
+                job, state="FAILED", stage="任务失败", error=str(exc), finished_at=now()
+            )

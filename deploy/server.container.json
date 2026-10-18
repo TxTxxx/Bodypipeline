@@ -1,0 +1,6 @@
+{
+  "root": "/data",
+  "processing_mode": "demo",
+  "profile_path": "/app/configs/agilex-aloha.json",
+  "auto_process": true
+}

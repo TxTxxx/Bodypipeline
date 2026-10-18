@@ -1,0 +1,4 @@
+interface:
+  display_name: "机器人适配部署"
+  short_description: "将已完成适配的机器人安全部署到多机器人 BodyPipeline，并隔离 Server 变更影响"
+  default_prompt: "使用 $deploy-robot-adapter，在部署前建立发布边界、验证隔离、执行金丝雀与回滚检查，确保 Server 改动不会影响其他机器人。"

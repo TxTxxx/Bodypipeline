@@ -1,0 +1,853 @@
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (v) =>
+  String(v ?? "").replace(
+    /[&<>"']/g,
+    (x) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        x
+      ],
+  );
+let config = null,
+  captures = [],
+  timer = null,
+  frameTimer = null,
+  healthTimer = null,
+  clockTimer = null,
+  frameController = null,
+  frameFetching = false,
+  previewPaused = false,
+  clientHealth = null,
+  busy = false,
+  polling = false,
+  selectedJob = null,
+  serverUploads = [],
+  serverCollections = [],
+  activeCollection = null,
+  selectedEpisodes = new Set(),
+  serverJobs = [],
+  serverTab = "convert",
+  selectedCheck = null,
+  detailSignature = null,
+  logText = "选择日志查看执行诊断。",
+  requestKey = null;
+const names = {
+  DRAFT: "待启动",
+  STARTING: "正在启动",
+  RECORDING: "录制中",
+  STOPPING: "正在停止",
+  RECOVERY_REQUIRED: "待恢复",
+  REVIEW: "待确认保留",
+  SEALING: "HDF5 打包中",
+  SEALED: "已封存",
+  DISCARDED: "已丢弃",
+  QUEUED: "等待处理",
+  UPLOADING: "正在上传",
+  RETRY: "等待重试",
+  ACKED: "远端已确认",
+  NONE: "未上传",
+  COMMITTING: "正在提交",
+  COMMITTED: "已接收",
+  RUNNING: "处理中",
+  FAILED: "执行失败",
+  QUARANTINED: "质检异常",
+  BLOCKED: "待审批",
+  INTERRUPTED: "任务中断",
+  DEMO_READY: "演示完成",
+  SYNTHETIC_READY: "模拟数据就绪",
+  CONVERTED: "已转换 · 待质检",
+  COMPLETED: "转换完成",
+  MOCK: "模拟数据",
+  PASS: "PASS",
+  WARN: "WARN",
+  FAIL: "FAIL",
+  READY: "已就绪",
+  STOPPED: "未启动",
+  IMPORTED: "历史导入",
+};
+const sourceBadge = (job) => {
+  const upload = serverUploads.find((u) => u.id === job.upload_id);
+  if (job.capture_mode === "mock" || upload?.capture_mode === "mock") return badge("MOCK");
+  if (job.capture_mode === "imported" || upload?.capture_mode === "imported" || upload?.source_kind === "raw_import") return badge("IMPORTED");
+  return "";
+};
+const collectionLocation = (collection) => collection.target === "imported"
+  ? collection.uploads?.[0]?.import_path || "历史数据目录"
+  : `${collection.target}/${collection.prefix || ""}`;
+const bytes = (n) =>
+  n > 1024 ** 3
+    ? (n / 1024 ** 3).toFixed(2) + " GB"
+    : n > 1024 ** 2
+      ? (n / 1024 ** 2).toFixed(1) + " MB"
+      : (n / 1024).toFixed(1) + " KB";
+const badge = (s) =>
+  `<span class="badge ${["FAILED", "FAIL", "RECOVERY_REQUIRED"].includes(s) ? "error" : ["RUNNING", "RECORDING", "UPLOADING", "STARTING", "STOPPING"].includes(s) ? "busy" : ["BLOCKED", "QUARANTINED", "RETRY", "REVIEW", "INTERRUPTED", "WARN", "CONVERTED"].includes(s) ? "warn" : ""}">${esc(names[s] || s)}</span>`;
+function notice(message, error = false) {
+  $("notice").hidden = false;
+  $("notice").textContent = message;
+  $("notice").className = error ? "error" : "";
+}
+async function api(path, method = "GET", body) {
+  const controller = new AbortController();
+  const timeout = method === "GET" ? setTimeout(() => controller.abort(), 12000) : null;
+  try {
+  const r = await fetch(path, {
+    signal: controller.signal,
+    method,
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    if (r.status === 401) showLogin();
+    throw Error(
+      typeof data.detail === "string"
+        ? data.detail
+        : JSON.stringify(data.detail || data),
+    );
+  }
+  return data;
+  } finally { if (timeout) clearTimeout(timeout); }
+}
+function showLogin() {
+  clearTimeout(timer);
+  clearTimeout(frameTimer);
+  clearTimeout(healthTimer);
+  clearInterval(clockTimer);
+  frameController?.abort();
+  $("login-view").hidden = false;
+  $("app-view").hidden = true;
+  config = null;
+  captures = [];
+  clientHealth = null;
+  requestKey = null;
+  setSidebarOpen(false);
+}
+async function action(fn) {
+  if (busy) return;
+  busy = true;
+  const client = config?.role === "client";
+  if (client) {
+    clearTimeout(frameTimer);
+    frameController?.abort();
+    renderClientCaptures();
+  }
+  try {
+    await fn();
+    if (!client) await refresh();
+  } catch (e) {
+    notice(e.message, true);
+  } finally {
+    busy = false;
+    if (config?.role === "server") updateConversionSelection();
+    if (client && config?.role === "client") {
+      renderClientCaptures();
+      void refresh();
+      if (!frameFetching) {
+        clearTimeout(frameTimer);
+        frameTimer = setTimeout(refreshFrames, 1500);
+      }
+    }
+  }
+}
+$("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/login", "POST", { token: $("token").value });
+    $("token").value = "";
+    await boot();
+  } catch (err) {
+    $("login-error").textContent = err.message;
+  }
+});
+$("logout").onclick = async () => {
+  await api("/api/logout", "POST");
+  showLogin();
+};
+async function boot() {
+  try {
+    config = await api("/api/config");
+  } catch {
+    return;
+  }
+  $("login-view").hidden = true;
+  $("app-view").hidden = false;
+  const client = config.role === "client";
+  $("client-nav").hidden = !client;
+  $("server-nav").hidden = client;
+  $("current-page").textContent = client ? "采集工作台" : "数据转换";
+  $("client-view").hidden = !client;
+  $("server-view").hidden = client;
+  $("workspace-label").textContent = client ? "机器人采集" : "中心数据服务";
+  $("nav-label").textContent = client ? "采集工作台" : "数据管理台";
+  $("page-title").textContent = client ? "采集工作台" : "数据管理台";
+  $("page-eyebrow").textContent = client
+    ? "TELEOPERATION COLLECTION"
+    : "DATA OPERATIONS";
+  $("page-description").textContent = client
+    ? "在机器人本地录制，确认保留后可靠上传。"
+    : "从原始采集到可追溯、可审查的 LeRobot 数据版本。";
+  $("mode-badge").textContent = client
+    ? config.mode === "mock"
+      ? "MOCK · 模拟模式"
+      : "ROS2 · 遥操作"
+    : config.processing_mode === "demo"
+      ? "DEMO · 演示处理"
+      : "SERVER · 中心服务";
+  if (client) {
+    $("mock-warning").hidden = config.mode !== "mock";
+    $("robot-label").textContent = config.robot_id;
+    $("local-root").innerHTML = config.local_roots
+      .map((r) => `<option value="${esc(r.id)}">${esc(r.id)}</option>`)
+      .join("");
+    updateLocalPath();
+    $("remote-target").innerHTML = '<option value="default">default（远端待连接）</option>';
+    void loadTargets().catch(() => {
+      $("target-note").textContent = "远端目标暂未更新，请检查连接后刷新页面。";
+    });
+    $("camera-count").textContent = config.profile.cameras.length;
+    $("camera-grid").innerHTML = config.profile.cameras
+      .map(
+        (c) =>
+          `<div class="camera-tile"><img id="cam-${esc(c.id)}" alt="${esc(c.label)} 实时预览"><div class="camera-error" id="err-${esc(c.id)}">等待相机图像…</div><div class="camera-caption">${esc(c.label)} <span>${esc(c.id.toUpperCase())}</span></div></div>`,
+      )
+      .join("");
+    refreshFrames();
+    clearTimeout(healthTimer);
+    void refreshClientHealth();
+    clearInterval(clockTimer);
+    clockTimer = setInterval(updateCaptureClock, 250);
+  } else {
+    $("demo-warning").hidden = config.processing_mode !== "demo";
+    $("health-label").textContent = "● 中心服务已连接";
+    $("conversion-format").innerHTML = (config.conversion_formats || [])
+      .map((f) => `<option value="${esc(f.id)}">${esc(f.label)}</option>`).join("");
+    $("conversion-format").value = config.default_target_format || "v3.0";
+    const roots = config.import_roots || [];
+    $("import-roots").textContent = roots.length
+      ? `允许导入路径：${roots.join("、")}`
+      : "管理员尚未配置 import_roots；配置后重启 Server 才能导入历史目录。";
+    $("import-submit").disabled = !roots.length;
+    setServerTab(location.hash.slice(1) || serverTab, false);
+  }
+  void poll();
+}
+function updateLocalPath() {
+  const selected = config.local_roots.find(
+    (x) => x.id === $("local-root").value,
+  );
+  $("local-path").textContent = selected?.path || "";
+}
+$("local-root").onchange = updateLocalPath;
+async function loadTargets() {
+  const d = await api("/api/targets");
+  $("remote-target").innerHTML = d.targets.length
+    ? d.targets
+        .map(
+          (t) =>
+            `<option value="${esc(t.id)}">${esc(t.label)} / ${esc(t.id)}</option>`,
+        )
+        .join("")
+    : '<option value="default">default（远端待连接）</option>';
+  $("target-note").textContent = d.cached
+    ? "远端离线或不可达，使用缓存/待验证目标；不阻止本地录制。"
+    : "目标由远端授权，路径不代表当前电脑文件夹。";
+}
+async function refreshFrames() {
+  clearTimeout(frameTimer);
+  if (!config || config.role !== "client" || frameFetching) return;
+  if (previewPaused || busy || document.hidden) {
+    frameTimer = setTimeout(refreshFrames, 1500);
+    return;
+  }
+  frameFetching = true;
+  const controller = new AbortController();
+  frameController = controller;
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    await Promise.all(config.profile.cameras.map(async (c) => {
+      const im = $("cam-" + c.id), err = $("err-" + c.id);
+      try {
+        const mode = $("preview-quality").value;
+        const r = await fetch("/api/cameras/" + encodeURIComponent(c.id) + "/frame?preview=" + mode, {signal: controller.signal});
+        if (!r.ok) throw Error();
+        const blob = await r.blob();
+        if (controller.signal.aborted) return;
+        const url = URL.createObjectURL(blob);
+        if (im.dataset.url) URL.revokeObjectURL(im.dataset.url);
+        im.dataset.url = url;
+        im.src = url;
+        err.hidden = true;
+      } catch {
+        if (!controller.signal.aborted) { err.textContent = "预览暂未更新"; err.hidden = false; }
+      }
+    }));
+  } finally {
+    clearTimeout(timeout);
+    frameFetching = false;
+    if (config?.role === "client") frameTimer = setTimeout(refreshFrames, 1500);
+  }
+}
+$("preview-toggle").onclick = () => {
+  previewPaused = !previewPaused;
+  $("preview-toggle").textContent = previewPaused ? "恢复预览" : "暂停预览";
+  $("preview-note").textContent = previewPaused ? "预览已暂停，原始录制不受影响" : "预览独立于原始录制；弱网时可暂停";
+  if (previewPaused) frameController?.abort();
+  else void refreshFrames();
+};
+async function refreshClientHealth() {
+  if (config?.role !== "client") return;
+  try {
+    const health = await api("/api/health");
+    if (config?.role !== "client") return;
+    clientHealth = health;
+    $("health-detail").textContent = JSON.stringify(health, null, 2);
+  } catch {
+    clientHealth = null;
+    $("health-detail").textContent = "健康检查暂未更新；采集控制独立刷新。";
+  } finally {
+    if (config?.role === "client") {
+      renderClientCaptures();
+      healthTimer = setTimeout(refreshClientHealth, 10000);
+    }
+  }
+}
+function acceptCaptures(rows) {
+  const merged = new Map(captures.map((c) => [c.id, c]));
+  for (const row of rows) {
+    const previous = merged.get(row.id);
+    if (!previous || (row.updated_at || 0) >= (previous.updated_at || 0)) merged.set(row.id, row);
+  }
+  captures = [...merged.values()].sort((a, b) => b.created_at - a.created_at);
+  renderClientCaptures();
+}
+function currentCapture() {
+  return captures.find((c) => ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(c.state)) || captures.find((c) => c.state === "REVIEW");
+}
+function updateCaptureClock() {
+  const current = currentCapture();
+  if (["STARTING", "STOPPING"].includes(current?.state)) {
+    $("capture-duration").textContent = names[current.state];
+    return;
+  }
+  const elapsed = current?.started_at ? Math.max(0, (current.stopped_at || Date.now()/1000) - current.started_at) : 0;
+  $("capture-duration").textContent = String(Math.floor(elapsed/60)).padStart(2,"0") + ":" + String(Math.floor(elapsed%60)).padStart(2,"0");
+}
+const normalizedName = (v) => v.normalize("NFKC").trim().replace(/\s+/g, " ");
+function updateClientDatasetSummary() {
+  const name = normalizedName($("dataset-name").value);
+  $("capture-dataset-summary").textContent = name
+    ? `当前数据集：${name}。保留的每次采集作为一个 episode 加入，instruction 在 Server 转换时填写。`
+    : "选择已有数据集或输入新名称；同名任务持续追加 episodes。";
+}
+$("dataset-name").oninput = updateClientDatasetSummary;
+function renderClientDatasets() {
+  const names = [...new Set(captures.map((c) => c.dataset_name || c.instruction))];
+  const options = names.map((name) => `<option value="${esc(name)}"></option>`).join("");
+  if ($("dataset-names").innerHTML !== options) $("dataset-names").innerHTML = options;
+  if (!$("dataset-name").dataset.initialized) {
+    $("dataset-name").dataset.initialized = "true";
+    if (!$("dataset-name").value && names.length) $("dataset-name").value = names[0];
+  }
+  const groups = new Map();
+  for (const row of captures) {
+    const id = row.collection_id || row.id;
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(row);
+  }
+  $("client-dataset-list").innerHTML = groups.size ? [...groups].map(([id, rows]) => {
+    const c = rows[0];
+    return `<tr><td><strong class="task-name">${esc(c.dataset_name || c.instruction)}</strong><span class="sub">${esc(id.slice(0, 12))}</span></td><td>${rows.filter((r) => r.state === "SEALED").length} / ${rows.filter((r) => r.upload_state === "ACKED").length}<span class="sub">${rows.length} 次采集，含待处理和已丢弃</span></td><td>${esc(c.remote_target)}/${esc(c.remote_prefix || "")}<span class="sub">本地 ${esc(c.local_root)}</span></td><td><button type="button" class="secondary" data-use-dataset="${esc(id)}">继续采集</button></td></tr>`;
+  }).join("") : '<tr><td colspan="4" class="empty">填写数据集名称，开始第一段采集。</td></tr>';
+  updateClientDatasetSummary();
+}
+function controls(c) {
+  const buttons = [];
+  if (["RECORDING", "RECOVERY_REQUIRED"].includes(c.state))
+    buttons.push(
+      `<button class="secondary" data-capture="${c.id}" data-op="stop">结束录制</button>`,
+    );
+  if (["DRAFT", "RECORDING", "REVIEW", "RECOVERY_REQUIRED"].includes(c.state))
+    buttons.push(
+      `<button class="danger" data-capture="${c.id}" data-op="discard">丢弃</button>`,
+    );
+  if (c.state === "REVIEW" && !c.capture_failed)
+    buttons.push(
+      `<button class="primary" data-capture="${c.id}" data-op="keep">保留并上传</button>`,
+    );
+  if (c.upload_state === "RETRY")
+    buttons.push(
+      `<button class="secondary" data-capture="${c.id}" data-op="retry-upload">重试上传</button>`,
+    );
+  return `<div class="action-row">${buttons.join("").replaceAll("<button ", busy ? "<button disabled " : "<button ") || '<span class="muted">—</span>'}</div>`;
+}
+$("capture-form").onsubmit = (e) => {
+  e.preventDefault();
+  action(async () => {
+    if (!requestKey)
+      requestKey = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+    const data = {
+      dataset_name: $("dataset-name").value,
+      idempotency_key: requestKey,
+      local_root: $("local-root").value,
+      local_prefix: $("local-prefix").value.trim(),
+      remote_target: $("remote-target").value,
+      remote_prefix: $("remote-prefix").value.trim(),
+    };
+    $("start-button").disabled = true;
+    notice("正在请求开始采集，等待机器人确认…");
+    const c = await api("/api/captures/start", "POST", data);
+    acceptCaptures([c]);
+    requestKey = null;
+    if (c.state !== "RECORDING")
+      throw Error(c.error || "启动未确认，请查看会话状态，勿重复启动");
+    notice("采集已开始。保留后作为一个 episode 加入当前数据集并上传。");
+  });
+};
+document.addEventListener("click", (e) => {
+  const copy = e.target.closest("[data-copy-path]");
+  if (copy) {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(copy.dataset.copyPath).then(() => notice("已复制服务器数据集路径。")).catch(() => notice("无法自动复制，请选中显示的路径手动复制。", true));
+    } else notice("请选中显示的路径手动复制（当前浏览器不支持自动复制）。");
+  }
+  const dataset = e.target.closest("[data-use-dataset]");
+  if (dataset) {
+    const row = captures.find((c) => (c.collection_id || c.id) === dataset.dataset.useDataset);
+    if (row) {
+      $("dataset-name").value = row.dataset_name || row.instruction;
+      $("local-root").value = row.local_root;
+      $("local-prefix").value = row.local_prefix || "";
+      $("remote-target").value = row.remote_target;
+      $("remote-prefix").value = row.remote_prefix || "";
+      updateLocalPath(); updateClientDatasetSummary();
+      $("capture-form").scrollIntoView({behavior: "smooth", block: "center"});
+    }
+  }
+  const b = e.target.closest("[data-op]");
+  if (b)
+    action(async () => {
+      if (
+        b.dataset.op === "discard" &&
+        !confirm(
+          "确认丢弃本次采集？若正在录制，会先停止。数据移入隔离目录，不会上传。",
+        )
+      )
+        return;
+      b.disabled = true;
+      notice(b.dataset.op === "keep" ? "正在提交保留请求…" : "正在等待机器人确认操作…");
+      const c = await api(
+        `/api/captures/${b.dataset.capture}/${b.dataset.op}`,
+        "POST",
+      );
+      acceptCaptures([c]);
+      if (c.state === "SEALING") notice("已保留，后台校验后自动上传。现在可以采集下一条。");
+      else if (c.error) notice(c.error, true);
+      else notice("会话已更新：" + (names[c.state] || c.state));
+    });
+  const p = e.target.closest("[data-process]");
+  if (p)
+    action(async () => {
+      $("conversion-upload").value = p.dataset.process;
+      setServerTab("convert");
+      updateConversionSelection();
+      $("conversion-form").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  const d = e.target.closest("[data-detail]");
+  if (d) {
+    selectJob(d.dataset.detail);
+    setServerTab("results");
+    action(showJob);
+  }
+  const v = e.target.closest("[data-viewer]");
+  if (v) {
+    // Open synchronously so browser popup blocking is not triggered by the API await.
+    const popup = window.open("about:blank", "_blank");
+    if (popup) {
+      popup.opener = null;
+      popup.document.title = "正在启动数据预览";
+      popup.document.body.innerHTML =
+        '<main style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;color:#202124;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在启动数据预览</h1><p style="margin:0">Visualizer 就绪后会自动跳转到当前数据集。</p></main>';
+    }
+    action(async () => {
+      try {
+        const preview = await api(`/api/jobs/${v.dataset.viewer}/viewer`, "POST");
+        selectJob(v.dataset.viewer);
+        setServerTab("results");
+        const target = preview.url || config.viewer_url;
+        if (popup && !popup.closed) popup.location.replace(target);
+        else window.location.assign(target);
+        notice("已打开无鉴权数据预览；首次启动可能较慢，等待页面会自动刷新。");
+      } catch (error) {
+        if (popup && !popup.closed) popup.close();
+        throw error;
+      }
+    });
+  }
+  const tab = e.target.closest("[data-server-tab]");
+  if (tab) setServerTab(tab.dataset.serverTab);
+  const check = e.target.closest("[data-doctor]");
+  if (check) action(async () => {
+    const r = await api(`/api/jobs/${check.dataset.doctor}/checks`, "POST");
+    selectJob(check.dataset.doctor);
+    selectedCheck = r.id;
+    setServerTab("results");
+    notice("Doctor 已进入质检队列。报告独立保存，不改变转换结果。");
+  });
+  const report = e.target.closest("[data-report]");
+  if (report) {
+    selectedCheck = report.dataset.report || null;
+    detailSignature = null;
+    action(showJob);
+  }
+  const l = e.target.closest("[data-log]");
+  if (l)
+    action(async () => {
+      const path = l.dataset.checkLog
+        ? `/api/checks/${l.dataset.checkLog}/logs/${l.dataset.log}`
+        : `/api/jobs/${selectedJob}/logs/${l.dataset.log}`;
+      const r = await api(path);
+      logText = r.text;
+      $("log-output").textContent = logText;
+    });
+});
+function renderClientCaptures() {
+  const rows = captures;
+  renderClientDatasets();
+  const active = rows.find((c) =>
+    ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(
+      c.state,
+    ),
+  );
+  const current = active || rows.find((c) => c.state === "REVIEW");
+  $("start-button").disabled = !!active || busy;
+  $("health-label").textContent = active
+    ? "● " + (names[active.state] || active.state)
+    : clientHealth?.ready
+      ? "● 采集适配器就绪"
+      : clientHealth ? "○ 适配器尚未就绪" : "○ 健康检查待更新";
+  $("capture-state").textContent = current ? names[current.state] : "就绪";
+  updateCaptureClock();
+  $("session-actions").innerHTML = current
+    ? `<span class="small muted">当前会话 ${esc(current.id.slice(0, 8))}</span>${controls(current)}`
+    : "";
+  $("capture-list").innerHTML = rows.length
+    ? rows
+        .map((c) => {
+          const percent = c.total_bytes
+            ? Math.min(
+                100,
+                Math.round((100 * (c.uploaded_bytes || 0)) / c.total_bytes),
+              )
+            : 0;
+          return `<tr><td><strong class="task-name">${esc(c.dataset_name || c.instruction)}</strong><span class="sub">${esc(c.id.slice(0, 8))} · ${new Date(c.created_at * 1000).toLocaleString("zh-CN")}</span>${c.error ? `<span class="sub job-error">${esc(c.error)}</span>` : ""}</td><td>${badge(c.state)}</td><td>${esc(c.remote_target)}<span class="sub">${esc(c.remote_prefix || "/")}</span></td><td>${badge(c.upload_state)} ${c.total_bytes ? `<span class="small">${percent}% · ${bytes(c.total_bytes)}</span><div class="progress"><span data-width="${percent}"></span></div>` : ""}${c.upload_error ? `<span class="sub job-error">${esc(c.upload_error)}</span>` : ""}</td><td>${controls(c)}</td></tr>`;
+        })
+        .join("")
+    : '<tr><td colspan="5" class="empty">还没有采集记录。填写任务描述，开始第一段示教。</td></tr>';
+  document
+    .querySelectorAll("[data-width]")
+    .forEach((el) => (el.style.width = el.dataset.width + "%"));
+}
+async function refresh() {
+  if (!config || polling) return;
+  polling = true;
+  try {
+    if (config.role === "client") {
+      const rows = await api("/api/capture-status");
+      if (config?.role === "client") acceptCaptures(rows);
+    } else {
+      const [uploads, jobs, v] = await Promise.all([
+        api("/api/collections"),
+        api("/api/jobs"),
+        api("/api/viewer"),
+      ]);
+      serverCollections = uploads;
+      serverUploads = uploads.flatMap((c) => c.uploads);
+      serverJobs = jobs;
+      renderServer(serverUploads, jobs);
+      $("viewer-status").innerHTML =
+        badge(v.state) +
+        (v.state === "READY"
+          ? ` <a href="${esc(v.url || config.viewer_url)}" target="_blank" rel="noopener">直接打开预览 ↗</a>`
+          : "") +
+        (v.job_id ? `<span class="sub small muted">任务 ${esc(v.job_id.slice(0, 12))}</span>` : "") +
+        (v.error ? `<p class="job-error">${esc(v.error)}</p>` : "");
+      $("viewer-stop").disabled = !["READY", "STARTING"].includes(v.state);
+      if (selectedJob) await showJob();
+    }
+  } catch (e) {
+    notice(e.message, true);
+  } finally {
+    polling = false;
+  }
+}
+function setSidebarOpen(open, restoreFocus = false) {
+  if (open && !matchMedia("(max-width: 850px)").matches) return;
+  $("app-view").classList.toggle("sidebar-open", open);
+  $("menu-toggle").setAttribute("aria-expanded", String(open));
+  $("sidebar-overlay").hidden = !open;
+  $("workspace").inert = open;
+  if (open) {
+    const nav = $("sidebar").querySelector("nav:not([hidden])");
+    (nav.querySelector('[aria-pressed="true"]') || nav.querySelector(".nav-item")).focus();
+  } else if (restoreFocus) $("menu-toggle").focus();
+}
+$("menu-toggle").onclick = () => setSidebarOpen(!$("app-view").classList.contains("sidebar-open"));
+$("menu-close").onclick = $("sidebar-overlay").onclick = () => setSidebarOpen(false, true);
+$("nav-main").onclick = () => setSidebarOpen(false, true);
+matchMedia("(max-width: 850px)").addEventListener("change", () => setSidebarOpen(false));
+document.addEventListener("keydown", (event) => {
+  if (!$("app-view").classList.contains("sidebar-open")) return;
+  if (event.key === "Escape") { event.preventDefault(); setSidebarOpen(false, true); }
+  if (event.key === "Tab") {
+    const items = [...$("sidebar").querySelectorAll("button, a[href]")].filter((el) => el.getClientRects().length);
+    const first = items[0], last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+});
+window.addEventListener("hashchange", () => {
+  if (config?.role === "server") setServerTab(location.hash.slice(1), false);
+});
+function setServerTab(tab, updateHistory = true) {
+  if (!["uploads", "convert", "results"].includes(tab)) tab = "convert";
+  serverTab = tab;
+  if (updateHistory && location.hash !== "#" + tab) location.hash = tab;
+  document.querySelectorAll("[data-server-panel]").forEach((el) => {
+    el.hidden = el.dataset.serverPanel !== tab;
+  });
+  document.querySelectorAll("[data-server-tab]").forEach((el) => {
+    const active = el.dataset.serverTab === tab;
+    el.setAttribute("aria-pressed", String(active));
+    el.classList.toggle("active", active);
+    if (active) el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
+  });
+  const title = { uploads: "原始数据", convert: "数据转换", results: "预览与质检" }[tab];
+  $("page-title").textContent = $("current-page").textContent = title;
+  $("page-description").textContent = {
+    uploads: "按任务组织原始采集，同一数据集持续接收新的 episodes。",
+    convert: "填写 instruction，批量转换所选 episodes 为一个 LeRobot 数据集。",
+    results: "浏览转换结果、预览多路视频，并查看数据质量报告。",
+  }[tab];
+  document.title = title + " · BodyPipeline";
+  $("job-detail-panel").hidden = !selectedJob || tab !== "results";
+  const wasOpen = $("app-view").classList.contains("sidebar-open");
+  setSidebarOpen(false, wasOpen);
+}
+function selectJob(id) {
+  if (id !== selectedJob) {
+    selectedCheck = null;
+    logText = "选择日志查看执行诊断。";
+  }
+  selectedJob = id;
+  detailSignature = null;
+}
+const unknownRobotType = "__unknown__";
+function rowRobotType(row) {
+  return row.robot_type || row.profile?.robot_type || serverUploads.find((u) => u.id === row.upload_id)?.robot_type || unknownRobotType;
+}
+function robotTypeLabel(type) {
+  return type === unknownRobotType ? "未标注类型（历史数据）" : type === "agilex_aloha" ? "松灵 AgileX ALOHA · agilex_aloha" : type;
+}
+function replaceOptions(element, options, selected) {
+  if (element.dataset.options !== options) {
+    element.dataset.options = options;
+    element.innerHTML = options;
+    element.value = selected;
+  }
+}
+$("server-robot-type").onchange = () => {
+  $("conversion-upload").value = "";
+  selectedJob = null;
+  selectedCheck = null;
+  detailSignature = null;
+  $("job-detail-panel").hidden = true;
+  $("notice").hidden = true;
+  renderServer(serverUploads, serverJobs);
+};
+function chosenCollection() {
+  return serverCollections.find((c) => c.id === $("conversion-upload").value && rowRobotType(c) === $("server-robot-type").value);
+}
+function updateConversionSelection() {
+  const type = $("server-robot-type").value, c = chosenCollection();
+  if (activeCollection !== (c?.id || null)) {
+    activeCollection = c?.id || null;
+    selectedEpisodes = new Set((c?.uploads || []).filter((u) => u.state === "COMMITTED").map((u) => u.id));
+    $("conversion-instruction").value = "";
+  }
+  const ready = (c?.uploads || []).filter((u) => u.state === "COMMITTED");
+  selectedEpisodes = new Set([...selectedEpisodes].filter((id) => ready.some((u) => u.id === id)));
+  $("server-robot-type").disabled = busy;
+  $("conversion-upload").disabled = busy || !type;
+  $("conversion-source").innerHTML = c
+    ? `<strong>${esc(c.dataset_name)}</strong><br>${c.ready_count} / ${c.episode_count} 个 episode 已接收 · ${bytes(c.total_bytes)}<br><span class="path-hint">数据集 ${esc(c.id)} · ${esc(collectionLocation(c))}</span>`
+    : "请选择原始数据集；同一任务的多次采集将合并转换。";
+  $("episode-picker").hidden = !c;
+  const selected = ready.filter((u) => selectedEpisodes.has(u.id));
+  const rows = (c?.uploads || []).map((u, index) => `<tr><td><input aria-label="选择采集 ${esc(u.id)}" data-episode="${esc(u.id)}" type="checkbox" ${selectedEpisodes.has(u.id) ? "checked" : ""} ${u.state !== "COMMITTED" || busy ? "disabled" : ""} /></td><td><strong>${index + 1} · ${esc(u.id.slice(0, 12))}</strong><span class="sub">${esc(u.robot_id)} · ${new Date(u.created_at * 1000).toLocaleString("zh-CN")}</span>${u.conversion_blockers?.length ? '<span class="sub job-error">转换配置待核实</span>' : ""}</td><td>${bytes(u.total_bytes)}<span class="sub">${u.file_count} 个文件</span></td><td>${badge(u.state)}</td></tr>`).join("");
+  if ($("episode-list").dataset.content !== rows) {
+    const focused = document.activeElement?.dataset.episode;
+    $("episode-list").innerHTML = rows;
+    $("episode-list").dataset.content = rows;
+    if (focused) [...$("episode-list").querySelectorAll("[data-episode]")].find((el) => el.dataset.episode === focused)?.focus();
+  }
+  $("episode-all").checked = ready.length > 0 && selected.length === ready.length;
+  $("episode-all").indeterminate = selected.length > 0 && selected.length < ready.length;
+  $("episode-all").disabled = busy || !ready.length;
+  $("episode-selection-count").textContent = `已选 ${selected.length} / ${ready.length} 段可转换采集`;
+  const problems = [...new Set(selected.flatMap((u) => (u.conversion_blockers || []).map((b) => b.message)))];
+  if (config.processing_mode === "real" && !config.letools_available) problems.push("服务器尚未配置可执行的 letools。");
+  $("conversion-warning").hidden = !problems.length;
+  $("conversion-warning").innerHTML = problems.length ? `<strong>转换前需要完成以下配置：</strong><ul>${problems.map((message) => `<li>${esc(message)}</li>`).join("")}</ul>` : "";
+  const instruction = $("conversion-instruction").value.trim();
+  $("conversion-submit").disabled = busy || !c || !selected.length || selected.length > 1000 || !instruction || !$("conversion-format").value || problems.length > 0;
+  $("conversion-submit").textContent = config.processing_mode === "demo" ? "提交批量演示" : `批量转换 ${selected.length} 个 episodes`;
+  $("conversion-help").textContent = problems.length ? "所选采集的配置检查未通过。" : !instruction ? "请填写训练 instruction。" : "本次选择保存为固定快照；后续上传不会改变正在执行的任务。";
+}
+$("import-form").onsubmit = (event) => {
+  event.preventDefault();
+  action(async () => {
+    $("import-submit").disabled = true;
+    try {
+      const row = await api("/api/imports", "POST", {
+        path: $("import-path").value.trim(),
+        robot_type: $("import-robot-type").value.trim() || null,
+      });
+      $("server-robot-type").value = row.robot_type;
+      $("import-path").value = "";
+      $("import-robot-type").value = "";
+      await refresh();
+      if (row.kind === "raw") {
+        setServerTab("convert");
+        notice(`已导入原始数据集「${row.dataset_name}」：${row.file_count} 个文件，${bytes(row.total_bytes)}。请选择该数据集并提交批量转换。`);
+      } else {
+        setServerTab("results");
+        notice(`已导入 LeRobot ${row.target_format} 数据集「${row.dataset_name}」：${row.episode_count} 个 episodes。现在可以直接预览或运行 Doctor。`);
+      }
+    } finally {
+      $("import-submit").disabled = !(config.import_roots || []).length;
+    }
+  });
+};
+$("conversion-upload").onchange = updateConversionSelection;
+$("conversion-format").onchange = updateConversionSelection;
+$("conversion-instruction").oninput = updateConversionSelection;
+$("episode-all").onchange = () => {
+  selectedEpisodes = new Set($("episode-all").checked ? chosenCollection().uploads.filter((u) => u.state === "COMMITTED").map((u) => u.id) : []);
+  updateConversionSelection();
+};
+$("episode-list").onchange = (e) => {
+  const id = e.target.dataset.episode;
+  if (id) { if (e.target.checked) selectedEpisodes.add(id); else selectedEpisodes.delete(id); updateConversionSelection(); }
+};
+$("conversion-form").onsubmit = (event) => {
+  event.preventDefault();
+  action(async () => {
+    $("conversion-submit").disabled = true;
+    const row = await api(`/api/collections/${$("conversion-upload").value}/process`, "POST", {
+      target_format: $("conversion-format").value, run_doctor: $("conversion-doctor").checked,
+      instruction: $("conversion-instruction").value.trim(), upload_ids: [...selectedEpisodes],
+    });
+    notice(`数据集 ${row.dataset_name} · ${row.source_count} 个 episodes · ${row.target_format} · ${names[row.state] || row.state}。`);
+  });
+};
+function renderServer(uploads, jobs) {
+  const runtimeTypes = (config.runtimes || []).map((r) => r.robot_type).filter(Boolean);
+  const types = [...new Set([...runtimeTypes, ...uploads, ...jobs].map(rowRobotType))].sort();
+  const oldType = $("server-robot-type").value;
+  const type = types.includes(oldType) ? oldType : "";
+  if (oldType && !type) {
+    selectedJob = null;
+    detailSignature = null;
+    $("job-detail-panel").hidden = true;
+  }
+  replaceOptions($("server-robot-type"), '<option value="">请选择机器人类型</option>' + types.map((t) => `<option value="${esc(t)}">${esc(robotTypeLabel(t))}</option>`).join(""), type);
+  const robotTypes = [...new Set([config.profile?.robot_type, ...runtimeTypes, ...types].filter(Boolean))];
+  replaceOptions($("import-robot-types"), robotTypes.map((t) => `<option value="${esc(t)}">${esc(robotTypeLabel(t))}</option>`).join(""), $("import-robot-type").value);
+  $("robot-scope-hint").textContent = type ? `当前范围：${robotTypeLabel(type)}。下方数据、任务、结果仅显示此类型；同类型多台设备通过设备 ID 区分。` : "选择后，再选择该类型下的数据集。原始数据、转换任务和预览结果会一起筛选。";
+  uploads = uploads.filter((u) => rowRobotType(u) === type);
+  jobs = jobs.filter((j) => rowRobotType(j) === type);
+  $("metric-uploads").textContent = uploads.filter((x) => x.state === "COMMITTED").length;
+  $("metric-jobs").textContent = jobs.length;
+  $("nav-upload-count").textContent = uploads.length;
+  $("nav-job-count").textContent = jobs.length;
+  $("nav-result-count").textContent = jobs.filter((j) => j.dataset_available).length;
+  $("metric-completed").textContent = jobs.filter((x) => x.dataset_available).length;
+  const collections = serverCollections.filter((c) => rowRobotType(c) === type);
+  $("nav-upload-count").textContent = collections.length;
+  const selected = $("conversion-upload").value;
+  const options = '<option value="">请选择数据集</option>' + collections.map((c) => `<option value="${esc(c.id)}">${c.capture_mode === "mock" ? "[模拟] " : ""}${esc(c.dataset_name)} · ${c.ready_count}/${c.episode_count} episodes · ${esc(c.target)}/${esc(c.prefix)} · ${esc(c.id.slice(0, 6))}</option>`).join("");
+  replaceOptions($("conversion-upload"), options, collections.some((c) => c.id === selected) ? selected : "");
+  updateConversionSelection();
+  $("upload-list").innerHTML = collections.length ? collections.map((c) =>
+    `<tr><td><strong class="task-name">${esc(c.dataset_name)}</strong><span class="sub">${esc(c.id.slice(0, 12))} · ${esc(collectionLocation(c))}</span></td><td>${esc([...new Set(c.uploads.map((u) => u.robot_id))].join(", "))} ${c.capture_mode === "mock" ? badge("MOCK") : c.target === "imported" ? badge("IMPORTED") : ""}</td><td>${bytes(c.total_bytes)}<span class="sub">${c.episode_count} 个 episodes</span></td><td>${c.ready_count} / ${c.episode_count}</td><td><button class="secondary" data-process="${esc(c.id)}">查看 / 批量转换</button></td></tr>`
+  ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型；该类型的数据集将在此显示。</td></tr>';
+  $("job-list").innerHTML = jobs.length ? jobs.map((j) =>
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || 1} 个 episodes</span></td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
+  ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
+  const available = jobs.filter((j) => j.dataset_available);
+  $("result-list").innerHTML = available.length ? available.map((j) =>
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行 Doctor</button><button class="secondary" data-detail="${esc(j.id)}">查看报告</button></div></td></tr>`
+  ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型已转换的数据集。受阻任务的原因可在“数据转换”查看。</td></tr>';
+}
+function datasetLocation(job) {
+  if (!job.dataset_available) return '<span class="small muted">尚无可用转换结果</span>';
+  return `<div class="dataset-location"><span class="small muted">服务器文件系统路径</span><code>${esc(job.dataset_path)}</code><button type="button" class="secondary" data-copy-path="${esc(job.dataset_path)}">复制路径</button></div>`;
+}
+function doctorReport(report, gate) {
+  if (!report) return '<p class="small muted">尚无 Doctor 报告。完成转换后可运行质检。</p>';
+  return `<div class="report-summary">${badge(report.overall_severity)}<span>${esc(report.total_episodes)} 个 episode · ${esc(report.total_frames)} 帧</span></div>
+    <div class="table-scroll"><table class="doctor-table"><thead><tr><th>检查项</th><th>结论</th><th>说明</th></tr></thead><tbody>${(report.checks || []).map((c) =>
+      `<tr><td>${esc(c.name)}</td><td>${badge(c.severity)}</td><td>${(c.messages || []).map((m) => `<div>${esc(m.message)}</div>`).join("") || "—"}</td></tr>`
+    ).join("")}</tbody></table></div>
+    ${gate?.skipped?.length ? `<div class="warning small">未覆盖项：${esc(gate.skipped.map((s) => s.check + "：" + s.reasons.join("；")).join("；"))}</div>` : ""}
+    <details class="report-json"><summary>原始 Doctor 报告</summary><pre>${esc(JSON.stringify(report, null, 2))}</pre></details>`;
+}
+async function showJob() {
+  const id = selectedJob;
+  if (!id) return;
+  const [j, checks] = await Promise.all([api("/api/jobs/" + id), api(`/api/jobs/${id}/checks`)]);
+  if (selectedJob !== id) return;
+  $("job-detail-panel").hidden = serverTab !== "results";
+  const signature = JSON.stringify([j, checks, selectedCheck]);
+  if (signature === detailSignature) return;
+  detailSignature = signature;
+  $("job-detail-title").textContent = "任务 " + j.id.slice(0, 12) + " · LeRobot " + j.target_format;
+  const latest = selectedCheck === "automatic" ? null : checks.find((c) => c.id === selectedCheck) || checks[0];
+  const report = latest ? latest.doctor_report : j.doctor_report;
+  const gate = latest ? latest.quality_gate : j.quality_gate;
+  $("job-detail").innerHTML = `
+    <p class="small"><strong>${esc(j.dataset_name || "历史数据集")}</strong> · ${j.source_count || j.episode_count || 1} 个 episodes</p>
+    <p class="small">Instruction：${esc(j.instruction || "—")}</p>
+    ${badge(j.state)} ${sourceBadge(j)} <span class="small muted">${esc(j.state === "CONVERTED" ? "转换完成（独立质检见报告）" : j.stage)}</span>
+    ${j.error && !j.blockers?.length ? `<p class="job-error">${esc(j.error)}</p>` : ""}
+    ${j.state === "BLOCKED" ? `<div class="warning preflight-detail"><strong>转换尚未启动：此任务使用的机器人配置尚未完成核实</strong><ul>${(j.blockers || []).map((b) => `<li><code>${esc(b.field)}</code>：${esc(b.message)}</li>`).join("")}</ul><p>请核实关节顺序、单位、动作来源和时钟，更新服务器 Profile 后重新提交转换。旧任务保留提交时的配置与阻断记录。</p></div>` : ""}
+    ${datasetLocation(j)}
+    ${j.dataset_available ? "" : `<p class="small muted">${esc(j.dataset_unavailable_reason)}</p>`}
+    ${j.work_path ? `<p class="path-hint">任务工作目录：${esc(j.work_path)}</p>` : ""}
+    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行 Doctor</button>` : ""}<button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button></div>
+    <h3 class="section-label">LeRobot Doctor 质量报告</h3>
+    <p class="small muted">Doctor 报告只用于展示数据质量，不会修改或删除已转换的数据集。模拟数据始终保留模拟标识。</p>
+    <div class="action-row"><button class="secondary" data-report="automatic">转换时的报告</button>${checks.map((c) => `<button class="secondary" data-report="${esc(c.id)}">${esc(new Date(c.created_at * 1000).toLocaleTimeString("zh-CN"))} · ${esc(names[c.state] || c.state)}${c.severity ? " · " + esc(c.severity) : ""}</button>`).join("")}</div>
+    ${latest ? `<p class="small">${badge(latest.state)} ${esc(latest.stage)}${latest.error ? `<span class="job-error"> ${esc(latest.error)}</span>` : ""}</p><div class="action-row"><button class="secondary" data-log="doctor" data-check-log="${esc(latest.id)}">本次质检日志</button><button class="secondary" data-log="validate" data-check-log="${esc(latest.id)}">本次验证日志</button></div>` : ""}
+    ${j.processing_mode === "demo" ? '<p class="small muted">演示模式不生成 LeRobot 数据或 Doctor 报告。</p>' : j.state === "BLOCKED" ? '<p class="small muted">机器人配置检查未通过，Doctor 尚未运行；这不是质检失败。</p>' : doctorReport(report, gate)}
+    <details class="report-json"><summary>时间对齐与转换检查</summary><pre>${esc(JSON.stringify({ alignment: j.alignment_report, robot: j.robot_report, quality_gate: j.quality_gate }, null, 2))}</pre></details>
+    <pre id="log-output">${esc(logText)}</pre>`;
+}
+$("close-detail").onclick = () => {
+  selectedJob = null;
+  $("job-detail-panel").hidden = true;
+};
+$("viewer-stop").onclick = () =>
+  action(async () => {
+    await api("/api/viewer/stop", "POST");
+  });
+async function poll() {
+  if (!config) return;
+  await refresh();
+  if (config) timer = setTimeout(poll, 2000);
+}
+boot();

@@ -1,0 +1,460 @@
+# 部署与运维
+
+本文说明 BodyPipeline 的本地演示、机器人侧 Client、中心 Server、letools 工具链和 Visualizer 的部署方式。命令默认在仓库根目录执行。
+
+> 架构与组件边界见[架构设计](architecture.md)。本文使用通用占位路径，现场主机名、用户名、隧道端点和部署根不应写入公开仓库。
+
+## 1. 部署拓扑
+
+```text
+机器人主机
+├── 机器人驱动 / 相机 / 主从臂系统      # 由机器人厂商或现场环境管理
+├── ROS2 Recorder                      # 已有采集服务
+├── ROS2 Bridge                        # loopback :8090
+├── BodyPipeline Client                # :8080
+└── 本地数据盘                          # captures + JSON state
+
+中心服务器
+├── BodyPipeline Server                # :8081
+├── Viewer Gateway                     # :8082
+├── 数据根                              # incoming / raw / work
+├── 历史数据导入白名单                   # import_roots
+└── 独立 letools / Visualizer 环境      # .runtime/letools-venv
+```
+
+Client 与 Server 都固定单 worker。不要把同一个数据根挂载给多个写进程，也不要依赖 NFS 提供跨主机文件锁语义。
+
+## 2. 运行环境
+
+### 2.1 主环境
+
+```bash
+curl -LsSf https://astral.sh/uv/0.13.1/install.sh | sh
+uv sync --locked
+```
+
+| 项目 | 约定 |
+| --- | --- |
+| uv | `>=0.13.1,<0.14` |
+| Python | 默认 3.12；主项目兼容 3.10+ |
+| 主虚拟环境 | `.venv/` |
+| Web | 原生 HTML / CSS / JavaScript，无 Node 构建步骤 |
+| 系统 | Linux 或 macOS，POSIX 文件系统 |
+
+生产服务安装运行依赖即可：
+
+```bash
+uv sync --locked --no-dev
+```
+
+### 2.2 letools 工具环境
+
+```bash
+bash scripts/install_letools.sh
+```
+
+脚本会：
+
+- 读取 `environments/letools/pyproject.toml` 与 `uv.lock`；
+- 创建 `.runtime/letools-venv/`；
+- 安装固定版本 letools；
+- 校验并固定上游提交。
+
+Server 配置中的 `letools_bin` 应指向该环境的可执行文件。工具环境与主服务环境隔离，避免 letools 的重依赖污染 Client / Server。
+
+### 2.3 ROS2 Bridge 环境
+
+Bridge 必须使用机器人系统 Python 和 ROS2 Humble 环境，不能把 ROS ABI 替换成 uv 下载的独立 Python。
+
+```bash
+cd /path/to/Bodypipeline
+uv venv --python /usr/bin/python3 .venv-ros
+uv sync --locked --no-dev --active
+.venv-ros/bin/python -c 'import h5py, numpy, PIL; print(h5py.__version__)'
+source /opt/ros/humble/setup.bash
+source /path/to/robot_ws/install/setup.bash
+```
+
+实际 Python 路径以机器人系统为准。`rclpy` 必须来自 ROS 环境；同时，Bridge 的配置加载会导入
+HDF5 契约模块，因此同一系统 Python ABI 下还必须能正常导入 `h5py`、NumPy 和 Pillow。若平台
+wheel 未随同步正确安装，可使用与当前 AgileX ALOHA 相同的兼容安装方式：
+
+```bash
+.venv-ros/bin/python -m pip install --no-deps h5py==3.16.0
+```
+
+安装后必须重新执行上面的 import 检查并重启 Bridge。不要把 ROS Bridge 切到普通 `.venv`，也不要
+用独立 Python 替换机器人 ROS ABI。
+
+## 3. 配置与密钥
+
+### 3.1 环境变量
+
+```text
+PIPELINE_TOKEN
+PIPELINE_DEVICE_TOKEN
+PIPELINE_BRIDGE_TOKEN
+```
+
+| 变量 | 要求 |
+| --- | --- |
+| `PIPELINE_TOKEN` | 至少 24 字符，用于 Client / Server 网页登录 |
+| `PIPELINE_DEVICE_TOKEN` | 至少 24 字符，与用户密钥不同，用于上传 |
+| `PIPELINE_BRIDGE_TOKEN` | 至少 24 字符，仅用于 Client ↔ Bridge |
+
+多设备 Server 使用 `devices` 注册表时，每台机器人应通过独立 `token_env` 注入密钥。不要把密钥写入 JSON、Git、脚本参数或前端 localStorage。
+
+### 3.2 Client 配置
+
+```json
+{
+  "mode": "ros2",
+  "root": "/var/lib/bodypipeline/client",
+  "local_roots": {
+    "robot-data": "/var/lib/bodypipeline/captures"
+  },
+  "server_url": "http://127.0.0.1:8081",
+  "bridge_url": "http://127.0.0.1:8090",
+  "profile_path": "configs/agilex-aloha-v2.json",
+  "min_free_bytes": 10737418240
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `mode` | `mock` 或 `ros2` |
+| `root` | Client 状态、锁和默认目录 |
+| `local_roots` | 页面可选择的本地存储根 |
+| `server_url` | Client 可达的 Server 地址 |
+| `bridge_url` | Bridge 地址，通常为 loopback |
+| `profile_path` | 机器人 Profile |
+| `min_free_bytes` | 录制低水位，低于该值时自动停止 |
+| `robot_id` / `project_id` | 与 Server 设备注册一致 |
+| `targets` | 远端存储目标 ID 与展示名称 |
+
+`local_roots` 当前要求解析后的路径没有符号链接。旧 AgileX ALOHA recorder 还要求本地路径由受控 ASCII 字符组成。
+
+### 3.3 Server 配置
+
+```json
+{
+  "root": "/srv/bodypipeline/state",
+  "data_root": "/srv/bodypipeline-data",
+  "import_roots": [
+    "/srv/bodypipeline-imports",
+    "/srv/bodypipeline-data"
+  ],
+  "processing_mode": "real",
+  "profiles": {
+    "agilex_aloha": {
+      "profile_path": "/opt/bodypipeline/configs/agilex-aloha-v2.json",
+      "provider": "agilex",
+      "raw_formats": ["agilex_joint_camera_hdf5_v1", "agilex_timestamped_directory_v1"],
+      "accepted_capture_profile_hashes": []
+    }
+  },
+  "default_profile": "agilex_aloha",
+  "auto_process": false,
+  "viewer_origin": "http://127.0.0.1:8082",
+  "letools_bin": "/opt/bodypipeline/.runtime/letools-venv/bin/letools",
+  "viewer_bun": "/opt/bodypipeline/.runtime/viewer-toolchain/node_modules/.bin/bun"
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `root` | Server 状态、锁和 Viewer 缓存 |
+| `data_root` | 新上传、原始数据、任务工作区和转换结果 |
+| `import_roots` | 允许原地导入的历史数据目录 |
+| `processing_mode` | `demo` 或 `real` |
+| `profiles` | `runtime_id` 到 Server 受信任 Provider / Profile / 原始格式的注册表 |
+| `default_profile` | 未显式绑定设备的默认 Runtime ID；多个 Runtime 时必填 |
+| `auto_process` | 是否自动处理单个上传；批量工作流建议 `false` |
+| `viewer_origin` | 浏览器可访问的 Viewer 根地址 |
+| `letools_bin` | letools CLI |
+| `viewer_bun` | Bun 可执行文件，留空时从 `PATH` 查找 |
+
+旧版单 Profile 配置仍兼容：未提供 `profiles` 时，`profile_path` 会生成 Runtime `default`。新部署应使用显式 `profiles`，这样后续新增机器人只需注册新 Runtime，不需要替换所有机器人共用的 Profile。
+
+`import_roots` 也会被加入数据集预览的允许根。不要配置 `/` 或包含敏感数据的父目录。
+
+### 3.4 多设备注册
+
+```json
+{
+  "devices": [
+    {
+      "robot_id": "robot-001",
+      "project_id": "teleop",
+      "token_env": "ROBOT_DEVICE_TOKEN",
+      "targets": ["default"],
+      "profile": "agilex_aloha"
+    },
+    {
+      "robot_id": "robot-002",
+      "project_id": "teleop",
+      "token_env": "ROBOT_002_DEVICE_TOKEN",
+      "targets": ["default"],
+      "profile": "new_robot_runtime"
+    }
+  ]
+}
+```
+
+每个 `token_env` 必须提供不同的有效密钥，`(robot_id, project_id)` 不能重复。`profile` 必须指向 `profiles` 中已注册的 Runtime。Server 用认证后的设备身份选择 Provider/Profile，Client 自报的 `robot_type`、`raw_format` 和 Profile 摘要只能用于一致性校验，不能用于动态路由或加载代码。
+
+同一 Server 的批量转换要求所有 episode 属于同一 Runtime。不同机器人应分别提交任务；不能通过修改 Manifest 把数据强制路由到另一个 Provider。
+
+
+## 4. 本地演示
+
+```bash
+uv sync --locked
+uv run --locked python scripts/demo.py
+```
+
+| 服务 | 地址 |
+| --- | --- |
+| Client | `http://127.0.0.1:8080` |
+| Server | `http://127.0.0.1:8081` |
+| Viewer | `http://127.0.0.1:8082/` |
+
+首次运行生成 `.runtime/local-credentials.json`，权限为 `0600`。使用 `PIPELINE_TOKEN` 登录 Client / Server；Viewer 不需要登录。
+
+基础演示使用 `processing_mode=demo`，不会生成真实 LeRobot 数据。安装工具链后可运行：
+
+```bash
+bash scripts/install_letools.sh
+uv run --locked python scripts/demo.py --real-processing
+```
+
+本地演示的数据保存在 `.runtime/client` 与 `.runtime/server`。
+
+## 5. 机器人侧部署
+
+以下以 systemd 管理三个进程为例。实际 service 名称和路径可按现场调整。
+
+### 5.1 ROS2 Recorder
+
+机器人已有 recorder 继续由机器人环境管理。BodyPipeline 不启动机械臂驱动，也不发送运动命令。
+
+AgileX ALOHA Legacy recorder 可使用仓库中的 headless 启动脚本：
+
+```bash
+scripts/run_recorder_headless.sh
+```
+
+应先确认 service 模式、数据目录、episode 参数和状态 topic 与 Profile 一致。旧 GUI 若同时启动 recorder，会造成双 owner 和目录冲突。
+
+### 5.2 ROS2 Bridge
+
+```bash
+source /opt/ros/humble/setup.bash
+source /path/to/robot_ws/install/setup.bash
+export PIPELINE_TOKEN='...'
+export PIPELINE_DEVICE_TOKEN='...'
+export PIPELINE_BRIDGE_TOKEN='...'
+uv run --locked --active python -m pipeline.cli bridge \
+  --config configs/client.agilex-aloha.json \
+  --host 127.0.0.1 \
+  --port 8090
+```
+
+Bridge 必须监听 loopback。它负责调用 ROS2 CaptureService、等待 recorder 就绪、订阅状态和相机图像。采集写入完成后才允许 Client 进入保留阶段。
+
+适配多机器人或修改共享 Server 时，发布流程使用 [`agents/skills/deploy-robot-adapter/SKILL.md`](../agents/skills/deploy-robot-adapter/SKILL.md)。该 Skill 要求优先为目标机器人启动独立 Server 实例，并验证 service、端口、`root`、`data_root`、Profile 和 Viewer 资源均不重叠；无法证明共享改动完全向后兼容时，不得覆盖现有 Server。
+
+### 5.3 Client
+
+```bash
+export PIPELINE_TOKEN='...'
+export PIPELINE_DEVICE_TOKEN='...'
+export PIPELINE_BRIDGE_TOKEN='...'
+uv run --locked python -m pipeline.cli client \
+  --config configs/client.agilex-aloha.json \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+如果 Client 不直接暴露给操作者，可以保持 loopback 并通过 SSH 隧道访问。systemd 模板见 `deploy/pipeline-client.service.example`。
+
+### 5.4 Client 启动检查
+
+```bash
+curl -sS http://127.0.0.1:8090/health
+curl -sS -H "Authorization: Bearer $PIPELINE_TOKEN" \
+  http://127.0.0.1:8080/api/health
+```
+
+应确认：
+
+- Bridge 能找到 recorder service；
+- 相机 topic 有新鲜帧；
+- 四路关节 topic 连续；
+- Client 数据盘高于 `min_free_bytes`；
+- 没有旧 GUI / 旧 recorder 同时占用采集服务。
+
+## 6. Server 部署
+
+```bash
+export PIPELINE_TOKEN='...'
+export PIPELINE_DEVICE_TOKEN='...'
+export ROBOT_DEVICE_TOKEN='...'
+uv run --locked python -m pipeline.cli server \
+  --config configs/server.json \
+  --host 127.0.0.1 \
+  --port 8081
+```
+
+生产建议让 Server 只监听 loopback，由反向代理或 SSH 隧道提供访问。Server 启动时会恢复上传、任务和预览状态；未完成的转换任务会标为 `INTERRUPTED`，不会自动重复执行外部工具。
+
+### 6.1 数据根
+
+```text
+<data_root>/<robot_type>/
+├── incoming/                    # 单文件 HDF5 分块暂存
+├── raw/                         # 已提交的 episode.hdf5
+└── work/                        # aligned HDF5 + LeRobot 数据集
+```
+
+`data_root` 必须存在且可写。`robot_type` 只能包含字母、数字、下划线和连字符。目录分类不等于转换能力：新增机器人类型仍需在 `profiles` 注册 Provider、Profile 和 `raw_formats`，并完成适配测试。
+
+当前 AgileX ALOHA 保留时只上传一个自包含 `episode.hdf5`，Server 不解包原始目录。一次批量转换会为每个
+来源生成 `work/<job_id>/aligned/episodeN.hdf5`，再调用一次 letools 生成单个
+`work/<job_id>/dataset`。单文件 HDF5 主要减少小文件、目录遍历、RPC 和元数据开销；相机仍保留
+原始 JPEG 编码，因此不能承诺上传字节数会显著下降。
+
+批量任务最多包含 1000 个 episodes，并要求所有来源属于同一 Runtime、Profile、collection 和采集
+模式。Server 会保留逐 episode 诊断；只要任一 episode 失败，就不会生成正式可预览数据集。
+
+### 6.2 历史数据导入
+
+Server 管理员可在页面导入：
+
+- 含 `manifest.json` 和 `episode.hdf5` 的当前采集，或含 `data/episode0` / `raw/episode0` 的旧采集；
+- 含 `meta/info.json` 的 LeRobot v2.1 / v3.0 数据集。
+
+导入路径必须位于 `import_roots` 或 `data_root` 下。导入是原地登记，不复制、不移动、不改写。Server 只保存路径、摘要和任务引用。
+
+### 6.3 转换工具检查
+
+```bash
+<letools_bin> doctor environment
+```
+
+转换时 Server 还会执行：
+
+```text
+letools convert <aligned> <dataset> --source-format hdf5 --preset <generated-preset> --to v2.1|v3.0
+letools validate <dataset>
+letools doctor check <dataset> --json ...
+```
+
+Server 固定排除 Doctor 的 kinematics 检查，执行其余 11 项非运动学检查。关节限位不参与转换准入。
+
+## 7. Viewer
+
+Visualizer 由 Server 启动为单实例会话，并由 Viewer Gateway 代理：
+
+```bash
+uv run --locked python -m pipeline.cli viewer \
+  --config configs/server.json \
+  --host 127.0.0.1 \
+  --port 8082
+```
+
+要求：
+
+- `viewer_origin` 必须是操作者浏览器可访问的地址；
+- Bun 位于 `viewer_bun` 或服务 `PATH` 中；
+- `viewer_ui_port` 与 `viewer_data_port` 不被其他进程占用；
+- 只读会话默认 30 分钟过期；
+- Viewer 入口不鉴权，应限制在内网或受保护的反向代理后。
+
+Server 页面点击“打开数据预览”后会启动会话。未启动或会话过期时，Viewer 入口返回不可用状态，而不是登录页。
+
+## 8. 网络与隧道
+
+开发机可通过 SSH 本地端口转发访问受控网络中的服务。下面的主机和用户均为占位符：
+
+```bash
+ssh -N -L 18080:127.0.0.1:8080 <robot-host>
+ssh -N -L 18081:127.0.0.1:8081 <server-host>
+ssh -N -L 18082:127.0.0.1:8082 <server-host>
+```
+
+| 页面 | 本地地址 |
+| --- | --- |
+| Client | `http://127.0.0.1:18080` |
+| Server | `http://127.0.0.1:18081` |
+| Viewer | `http://127.0.0.1:18082/` |
+
+关闭开发机浏览器隧道不会中断机器人到 Server 的上传隧道。若端口在监听但页面无响应，应先检查 SSH 转发日志，不能只看本地端口。
+
+## 9. API 边界
+
+页面不需要展示接口文档。服务 API 仅作为前后端和部署脚本契约使用，主要分组如下：
+
+| 分组 | 路径 |
+| --- | --- |
+| Client 采集 | `/api/captures*`、`/api/cameras/*/frame` |
+| Client 健康与目标 | `/api/health`、`/api/targets` |
+| Server 设备上传 | `/device/uploads*`、`/device/targets` |
+| Server 数据集与任务 | `/api/collections*`、`/api/jobs*` |
+| Server 导入 | `/api/imports` |
+| Server 质检 | `/api/jobs/{id}/checks`、`/api/checks/*` |
+| Server Viewer | `/api/jobs/{id}/viewer`、`/api/viewer*` |
+
+所有管理 API 使用 `PIPELINE_TOKEN` 登录后的 Cookie；设备 API 使用独立设备密钥；Bridge API 使用 `PIPELINE_BRIDGE_TOKEN` 且只允许 loopback。
+
+## 10. 备份、迁移与清理
+
+- 备份 Server 的 `root/state`、`data_root/raw`、`data_root/work` 和导入数据源目录。
+- 备份 Client 的 `root/state` 与 `local_roots`。
+- 不要只备份 JSON 状态；Manifest、原始文件和报告必须一起备份。
+- 旧版本状态迁移使用 `scripts/migrate_state.py` 或 `scripts/migrate_server_data.py`，执行前先做完整文件系统备份。
+- 丢弃数据当前隔离在 `discarded/`，不会自动物理删除。
+- Server 返回持久化 ACK 后，Client 只清理已成功封存到 HDF5 的 recorder 临时目录
+  `raw/episode0/`；`episode.hdf5` 与 `manifest.json` 保留。上传失败、提交失败或 ACK 校验失败
+  时不清理任何原始暂存目录。
+- 如现场需要删除已上传的 `episode.hdf5`，必须另行走经批准的数据保留和备份流程。
+- Doctor 不自动修复、裁剪或删除数据。
+
+## 11. 故障排查
+
+### Client 无法连接
+
+```bash
+curl -sS http://127.0.0.1:8090/health
+curl -sS http://127.0.0.1:8080/healthz
+systemctl --user status bodypipeline-bridge bodypipeline-client
+```
+
+检查 Bridge 是否加载了 ROS 环境、`PIPELINE_BRIDGE_TOKEN` 是否一致、Client 配置中的 `bridge_url` 是否正确。
+
+### 实时预览没有画面
+
+先区分三种情况：
+
+1. `/api/cameras/<id>/frame` 返回 503：没有新鲜帧，检查相机 topic、Bridge 和驱动。
+2. 返回有效 JPEG 但接近全黑：链路正常，检查曝光、光照、镜头遮挡和相机输出。
+3. 浏览器不显示但 curl 能拿到图片：检查浏览器控制台、缓存和页面静态资源。
+
+录制的原始文件与低分辨率预览是两条路径，不能用预览结果替代录制完整性验收。
+
+### 转换报时间对齐越界
+
+查看任务中的 `episode_diagnostics`，确认具体 episode、流、帧号和误差。先检查 recorder 启动瞬态、topic 连续性、时间戳单位和磁盘写入，不要直接放宽 `max_camera_skew_ms` / `max_action_age_ms`。AgileX ALOHA 已知启动空洞见[recorder 修复文档](robots/agilex-recorder-fix.md)。
+
+### Doctor 不可用
+
+```bash
+<letools_bin> doctor environment
+<letools_bin> --version
+```
+
+确认 `letools_bin` 指向独立工具环境、固定提交未变化、Bun 可用于 Visualizer，且 Server 进程有权限读取数据集。
+
+### 页面显示转换结果不存在
+
+转换结果只在该任务达到可预览状态且 `work/<job_id>/dataset` 存在时可用。时间对齐失败、配置阻断或转换中断的任务只有诊断目录，没有可预览数据集。历史任务可通过任务记录中的只读路径兼容访问，但不会自动迁移。
