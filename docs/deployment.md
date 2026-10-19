@@ -98,7 +98,7 @@ PIPELINE_BRIDGE_TOKEN
 
 | 变量 | 要求 |
 | --- | --- |
-| `PIPELINE_TOKEN` | 至少 24 字符，用于 Client / Server 网页登录 |
+| `PIPELINE_TOKEN` | 至少 24 字符，用于 Client / Server / Viewer 网页登录 |
 | `PIPELINE_DEVICE_TOKEN` | 至少 24 字符，与用户密钥不同，用于上传 |
 | `PIPELINE_BRIDGE_TOKEN` | 至少 24 字符，仅用于 Client ↔ Bridge |
 
@@ -219,7 +219,7 @@ uv run --locked python scripts/demo.py
 | Server | `http://127.0.0.1:8081` |
 | Viewer | `http://127.0.0.1:8082/` |
 
-首次运行生成 `.runtime/local-credentials.json`，权限为 `0600`。使用 `PIPELINE_TOKEN` 登录 Client / Server；Viewer 不需要登录。
+首次运行生成 `.runtime/local-credentials.json`，权限为 `0600`。使用 `PIPELINE_TOKEN` 登录 Client / Server 与 Viewer。
 
 基础演示使用 `processing_mode=demo`，不会生成真实 LeRobot 数据。安装工具链后可运行：
 
@@ -354,7 +354,8 @@ Server 固定排除 Doctor 的 kinematics 检查，执行其余 11 项非运动�
 
 ## 7. Viewer
 
-Visualizer 由 Server 启动为单实例会话，并由 Viewer Gateway 代理：
+Visualizer 由 Server 随服务常驻启动（只启动一个 Next.js 进程，不绑定任何数据集），
+Viewer Gateway 负责代理页面并按数据集提供文件：
 
 ```bash
 uv run --locked python -m pipeline.cli viewer \
@@ -367,11 +368,18 @@ uv run --locked python -m pipeline.cli viewer \
 
 - `viewer_origin` 必须是操作者浏览器可访问的地址；
 - Bun 位于 `viewer_bun` 或服务 `PATH` 中；
-- `viewer_ui_port` 与 `viewer_data_port` 不被其他进程占用；
-- 只读会话默认 30 分钟过期；
-- Viewer 入口不鉴权，应限制在内网或受保护的反向代理后。
+- `viewer_ui_port` 不被其他进程占用（`viewer_data_port` 已不再使用，旧配置中保留无害）；
+- 预览链接默认 30 分钟过期（`viewer_ttl`），过期后文件与 Doctor 返回 404；
+- Viewer 入口与 Server 共用 `PIPELINE_TOKEN`：浏览器未登录时返回登录页，
+  `/_data/*`、Doctor 与视频 Range 未授权时返回 401；仍建议只绑定内网或 Tailscale 地址。
 
-Server 页面点击“打开数据预览”后会启动会话。未启动或会话过期时，Viewer 入口返回不可用状态，而不是登录页。
+Server 页面点击“预览数据”只会把该数据集登记到网关并打开
+`<viewer_origin>/bp/<job_id>/episode_0`，不会启动或停止任何进程，因此可以同时打开多个数据集。
+Visualizer 退出后 Server 会在约 30 秒内自动拉起；Visualizer 尚未就绪时网关显示等待页，
+链接过期或服务不可用时返回不可用状态，而不是登录页。
+
+首次启动会构建一次 Visualizer（数据源地址会编译进浏览器包），之后仅在源码补丁或
+`viewer_origin` 变化时才重新构建。
 
 ## 8. 网络与隧道
 
@@ -403,7 +411,7 @@ ssh -N -L 18082:127.0.0.1:8082 <server-host>
 | Server 数据集与任务 | `/api/collections*`、`/api/jobs*` |
 | Server 导入 | `/api/imports` |
 | Server 质检 | `/api/jobs/{id}/checks`、`/api/checks/*` |
-| Server Viewer | `/api/jobs/{id}/viewer`、`/api/viewer*` |
+| Server Viewer | `POST/DELETE /api/jobs/{id}/viewer`、`GET /api/viewer` |
 
 所有管理 API 使用 `PIPELINE_TOKEN` 登录后的 Cookie；设备 API 使用独立设备密钥；Bridge API 使用 `PIPELINE_BRIDGE_TOKEN` 且只允许 loopback。
 

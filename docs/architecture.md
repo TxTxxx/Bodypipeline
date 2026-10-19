@@ -177,7 +177,7 @@ sequenceDiagram
     D-->>J: 11 项质量报告
     J-->>S: CONVERTED / COMPLETED / QUARANTINED / FAILED
     U->>S: 打开预览
-    S->>V: 启动单实例只读会话
+    S->>V: 登记数据集（Visualizer 常驻，无需启动）
 ```
 
 批量转换要求所有 episodes 属于同一数据集、同一 Runtime、机器人类型和 Profile。任务记录保存 `lineage.json`，包括来源 upload、Manifest 摘要、instruction、`runtime_id`、Provider、Profile 摘要、目标格式和 synthetic 标记。相同输入、指令、Runtime、Profile 和工具版本会复用未失败任务，保证重试幂等。
@@ -293,7 +293,7 @@ Doctor 结果只作为报告和任务状态依据。`WARN` / `FAIL` 结果仍保
 - Cookie 使用 HttpOnly、SameSite=Strict；写请求检查 Origin。
 - Bridge 强制监听 `127.0.0.1` 或 `::1`。
 - 所有服务固定单 worker，避免同一状态目录并发写。
-- Viewer 入口不鉴权，必须放在受控网络或被反向代理保护。
+- Viewer 入口与 Server 共用 `PIPELINE_TOKEN`；仍建议只监听内网或 Tailscale 地址。
 - 当前没有 OIDC、RBAC、多租户隔离或分布式任务队列。
 
 ## 7. 文件状态与恢复
@@ -309,7 +309,7 @@ root/state/<kind>/<id>.json
 - 未完成上传可以按 offset 续传；
 - `RUNNING` 转换任务在重启后标为 `INTERRUPTED`，需显式重试；
 - 未完成封存会重新校验已保留数据；
-- 预览会话在 Server 重启后清理；
+- Server 启动时拉起常驻 Visualizer，重启时回收上一次遗留的进程；预览链接按 TTL 过期；
 - 每个数据根由 `flock` 限制为单写进程。
 
 文件持久化适合单机 MVP，不代表 NFS 并发一致性或异地备份已经解决。

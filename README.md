@@ -120,9 +120,9 @@ uv run --locked python scripts/demo.py
 | --- | --- | --- |
 | Client | <http://127.0.0.1:8080> | 相机预览、采集、保留与上传 |
 | Server | <http://127.0.0.1:8081> | 数据导入、批量转换、质检与预览 |
-| Viewer | <http://127.0.0.1:8082/> | 启动预览会话后直接打开，无需登录 |
+| Viewer | <http://127.0.0.1:8082/> | 常驻运行，通过“预览数据”打开数据集，使用 `PIPELINE_TOKEN` 登录 |
 
-首次启动会在 `.runtime/local-credentials.json` 生成三个权限为 `0600` 的随机密钥。使用其中的 `PIPELINE_TOKEN` 登录 Client 与 Server；设备密钥和 Bridge 密钥不能用于网页登录。
+首次启动会在 `.runtime/local-credentials.json` 生成三个权限为 `0600` 的随机密钥。使用其中的 `PIPELINE_TOKEN` 登录 Client、Server 与 Viewer；设备密钥和 Bridge 密钥不能用于网页登录。
 
 ### 3. 完成一次 Mock 采集
 
@@ -169,8 +169,8 @@ Server 页面分为三个侧边栏工作区：
 
 - 对已转换结果单独运行结构检查、deep validate 和 Doctor。
 - Doctor 固定执行 11 项非运动学检查。
-- 点击“打开数据预览”启动单实例只读 Visualizer，不需要登录。
-- 预览会话有 TTL；过期或未启动时会明确返回不可用状态。
+- Visualizer 随 Server 常驻运行；点击“预览数据”只登记数据集并在新标签页打开，不需要登录。
+- 可同时打开多个数据集，互不影响；预览链接有 TTL，过期后返回明确的不可用状态。
 
 ### 历史数据导入
 
@@ -346,7 +346,7 @@ deploy/                     # systemd 与容器示例
 agents/skills/              # 机器人适配与隔离部署 Skill
 tests/                      # 单元、API、恢复、转换、质检与预览测试
 docs/                       # 架构、部署、工作台、代码与机器人文档
-patches/                    # AgileX ALOHA recorder 修复补丁
+patches/                    # AgileX ALOHA recorder 修复补丁与 Visualizer 中文化补丁
 ```
 
 ## 当前边界
@@ -357,7 +357,7 @@ patches/                    # AgileX ALOHA recorder 修复补丁
 - 单服务器、单管理角色；没有多租户 RBAC、OIDC、分布式任务调度或数据库。
 - 相机预览使用低帧率 JPEG 轮询，不是 WebRTC；预览与原始录制相互独立。
 - 丢弃数据会被隔离到 `discarded/`，不会立即物理删除。上传成功后只清理已封存到 HDF5 的 `raw/episode0/` recorder 临时目录；`episode.hdf5` 与 Manifest 保留，失败上传不会触发清理。
-- Visualizer 为单实例只读会话，默认 30 分钟过期；无鉴权不等于可安全暴露到公网。
+- Visualizer 常驻且只读，预览链接默认 30 分钟过期，入口与 Server 共用 `PIPELINE_TOKEN`；仍不应暴露到公网。
 - Doctor 输出质量报告，不自动修复、裁剪或删除数据。
 - AgileX ALOHA 静态采集已通过 recorder 启停和流间隔回归，但真实遥操作动作有效性仍需按机器人任务验收。
 

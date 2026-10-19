@@ -5,9 +5,78 @@ import hmac
 import time
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from .core import DomainError
+
+VIEWER_LOGIN_PAGE = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录数据预览 · BodyPipeline</title>
+<style>
+:root { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  "PingFang SC", "Microsoft YaHei", sans-serif; color: #292e36; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+  background: #f7f8fa; padding: 24px; }
+main { width: min(420px, 100%); background: #fff; border: 1px solid #e0e3e8;
+  border-radius: 8px; padding: 30px 30px 26px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px;
+  font-size: 19px; font-weight: 700; letter-spacing: -.4px; }
+.mark { display: grid; place-items: center; width: 28px; height: 30px;
+  border-radius: 6px; background: #2455eb; color: #fff; font-size: 19px; }
+h1 { font-size: 20px; margin: 0 0 8px; letter-spacing: -.3px; }
+p.hint { margin: 0 0 20px; font-size: 12.5px; line-height: 1.75; color: #6b7280; }
+label { display: block; font-size: 12px; font-weight: 550; color: #47505f;
+  margin-bottom: 8px; }
+input { width: 100%; padding: 10px 11px; font: inherit; font-size: 13px;
+  color: #353e4d; background: #fff; border: 1px solid #d6dbe3; border-radius: 4px; }
+input:focus { outline: 2px solid #2455eb; outline-offset: -1px; }
+button { width: 100%; margin-top: 18px; padding: 11px 14px; font: inherit;
+  font-size: 13px; font-weight: 600; color: #fff; background: #2455eb;
+  border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+button:hover:not(:disabled) { background: #1742c6; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+#error { min-height: 18px; margin: 12px 0 0; font-size: 12px; color: #b4404c; }
+</style></head>
+<body><main>
+<div class="brand"><span class="mark">B</span> BodyPipeline</div>
+<h1>登录数据预览</h1>
+<p class="hint">预览服务与 Server 工作台使用同一个访问密钥（<code>PIPELINE_TOKEN</code>）。</p>
+<form id="login-form">
+  <label for="token">服务访问密钥</label>
+  <input id="token" type="password" required autocomplete="off"
+    placeholder="输入管理员配置的访问密钥" autofocus>
+  <button id="submit" type="submit">进入预览</button>
+  <p id="error" role="alert"></p>
+</form>
+</main>
+<script>
+const form = document.getElementById("login-form");
+const error = document.getElementById("error");
+const button = document.getElementById("submit");
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  error.textContent = "";
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: document.getElementById("token").value }),
+    });
+    if (!response.ok) {
+      let detail = "登录失败";
+      try { detail = (await response.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    location.reload();
+  } catch (err) {
+    error.textContent = err.message || String(err);
+    button.disabled = false;
+  }
+});
+</script></body></html>"""
 
 
 def install_security(app: FastAPI, settings, device_prefix: str | None = None):
@@ -31,45 +100,91 @@ def install_security(app: FastAPI, settings, device_prefix: str | None = None):
     async def domain_error(request, exc):
         return JSONResponse({"detail": exc.message}, status_code=exc.code)
 
+    def credentials(request: Request) -> tuple[bool, bool]:
+        """Return (authorised, cookie_only)."""
+
+        bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
+        is_device = bool(device_prefix and request.url.path.startswith(device_prefix))
+        key = settings.token
+        token_ok = (
+            bool(key and bearer and hmac.compare_digest(bearer, key))
+            if not is_device
+            else False
+        )
+        if is_device:
+            for device_key, identity in settings.device_registry():
+                if device_key and bearer and hmac.compare_digest(bearer, device_key):
+                    request.state.device = identity
+                    token_ok = True
+                    break
+        cookie_ok = not is_device and valid_cookie(request.cookies.get(cookie_name))
+        return token_ok or cookie_ok, cookie_ok and not token_ok
+
     @app.middleware("http")
     async def auth(request: Request, call_next):
         p = request.url.path
-        if (
-            p in ("/", "/healthz", "/api/login", "/assets/app.js", "/assets/style.css")
-            and settings.role != "viewer"
-            or p in ("/api/login", "/login")
-            and settings.role == "viewer"
-        ):
+        if settings.role == "viewer":
+            # The Visualizer gateway has no per-dataset authorisation of its own,
+            # so it shares the Server's admin token. Browsers get a login form;
+            # everything else (video ranges, Doctor JSON, data bridge) gets 401.
+            if p in ("/api/login", "/api/logout", "/healthz"):
+                response = await call_next(request)
+            else:
+                authorised, cookie_only = credentials(request)
+                if not authorised:
+                    wants_html = "text/html" in request.headers.get("accept", "")
+                    if request.method in ("GET", "HEAD") and (
+                        wants_html or p == "/login"
+                    ):
+                        return HTMLResponse(
+                            VIEWER_LOGIN_PAGE,
+                            status_code=200,
+                            headers={
+                                "Cache-Control": "no-store",
+                                "X-Content-Type-Options": "nosniff",
+                                "Referrer-Policy": "no-referrer",
+                            },
+                        )
+                    return JSONResponse(
+                        {"detail": "请先登录或提供有效凭据"}, status_code=401
+                    )
+                if (
+                    cookie_only
+                    and request.method not in ("GET", "HEAD", "OPTIONS")
+                    and request.url.path != "/api/logout"
+                ):
+                    origin = request.headers.get("origin")
+                    expected = f"{request.url.scheme}://{request.url.netloc}"
+                    if origin != expected:
+                        return JSONResponse(
+                            {"detail": "Origin 校验失败"}, status_code=403
+                        )
+                response = await call_next(request)
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        public = p in (
+            "/",
+            "/healthz",
+            "/api/login",
+            "/assets/app.js",
+            "/assets/style.css",
+            "/assets/report.js",
+            "/assets/report.css",
+        ) or (
+            settings.role == "server" and (p == "/report" or p.startswith("/report/"))
+        )
+        if public and settings.role != "viewer":
             response = await call_next(request)
         else:
-            bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
-            is_device = bool(device_prefix and p.startswith(device_prefix))
-            key = settings.token
-            token_ok = (
-                bool(key and bearer and hmac.compare_digest(bearer, key))
-                if not is_device
-                else False
-            )
-            if is_device:
-                for device_key, identity in settings.device_registry():
-                    if (
-                        device_key
-                        and bearer
-                        and hmac.compare_digest(bearer, device_key)
-                    ):
-                        request.state.device = identity
-                        token_ok = True
-                        break
-            cookie_ok = not is_device and valid_cookie(request.cookies.get(cookie_name))
-            if not (token_ok or cookie_ok):
+            authorised, cookie_only = credentials(request)
+            if not authorised:
                 return JSONResponse(
                     {"detail": "请先登录或提供有效凭据"}, status_code=401
                 )
-            if (
-                cookie_ok
-                and not token_ok
-                and request.method not in ("GET", "HEAD", "OPTIONS")
-            ):
+            if cookie_only and request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 expected = f"{request.url.scheme}://{request.url.netloc}"
                 if origin != expected:

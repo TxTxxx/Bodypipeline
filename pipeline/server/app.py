@@ -64,6 +64,9 @@ def create_app(settings, background=True):
                 pass
 
     async def viewer_loop():
+        # The Visualizer is a long-lived service: start it with the Server so a
+        # preview click only has to register a dataset.
+        await asyncio.to_thread(viewer.autostart)
         while not stopping.is_set():
             await asyncio.to_thread(viewer.poll)
             try:
@@ -99,7 +102,7 @@ def create_app(settings, background=True):
     app.state.checks = checks
     app.state.runtimes = runtimes
     install_security(app, settings, device_prefix="/device/")
-    mount_ui(app)
+    mount_ui(app, report=True)
 
     @app.get("/healthz")
     def live():
@@ -358,20 +361,16 @@ def create_app(settings, background=True):
 
     @app.post("/api/jobs/{jid}/viewer")
     def open_viewer(jid: str):
-        return viewer.start(ingest.store.get("job", jid))
+        return viewer.open(ingest.store.get("job", jid))
+
+    @app.delete("/api/jobs/{jid}/viewer")
+    def close_viewer(jid: str):
+        ingest.store.get("job", jid)
+        return viewer.close(jid)
 
     @app.get("/api/viewer")
     def viewer_status():
-        try:
-            return ingest.store.get("viewer", "active")
-        except DomainError as exc:
-            if exc.code != 404:
-                raise
-            return {"state": "STOPPED"}
-
-    @app.post("/api/viewer/stop")
-    def stop_viewer():
-        return viewer.stop()
+        return viewer.status()
 
     @app.get("/api/uploads/{uid}/manifest")
     def manifest(uid: str):

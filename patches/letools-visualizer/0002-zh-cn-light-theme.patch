@@ -1,0 +1,2629 @@
+diff --git a/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx b/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx
+index e17067e..21175fd 100644
+--- a/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx
++++ b/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx
+@@ -174,7 +174,7 @@ export default function EpisodeViewer({
+       .catch((err) => {
+         if (requestIdRef.current !== requestId) return;
+         const message = err instanceof Error ? err.message : String(err);
+-        setError(message || "Unknown error");
++        setError(message || "未知错误");
+         setData(null);
+       });
+   }, [org, dataset, episodeId]);
+@@ -183,7 +183,7 @@ export default function EpisodeViewer({
+     return (
+       <div className="flex h-screen items-center justify-center bg-[var(--bg)] text-red-300">
+         <div className="panel-raised max-w-xl p-6 border-red-500/40">
+-          <h2 className="text-xl font-medium mb-3">Something went wrong</h2>
++          <h2 className="text-xl font-medium mb-3">页面加载失败</h2>
+           <p className="text-sm font-mono whitespace-pre-wrap text-red-200/90">
+             {error}
+           </p>
+@@ -612,23 +612,23 @@ function EpisodeViewerInner({
+       <UrlTimeSync />
+       {/* Top tab bar */}
+       <div className="flex items-center border-b border-white/5 bg-[var(--surface-0)] shrink-0">
+-        {renderTab("episodes", "Episodes")}
++        {renderTab("episodes", "Episode")}
+         {renderTab(
+           "annotations",
+-          "Annotations",
+-          "Edit subtask / plan / memory / interjection / VQA atoms (lerobot v3.1 schema)",
++          "标注",
++          "编辑 subtask / plan / memory / interjection / VQA 标注（LeRobot v3.1 schema）",
+         )}
+         {hasURDFSupport(datasetInfo.robot_type) &&
+           datasetInfo.codebase_version >= "v3.0" &&
+-          renderTab("urdf", "3D Replay")}
+-        {renderTab("statistics", "Statistics")}
+-        {renderTab("filtering", "Filtering")}
+-        {renderTab("frames", "Frames")}
+-        {renderTab("insights", "Action Insights")}
++          renderTab("urdf", "3D 回放")}
++        {renderTab("statistics", "统计")}
++        {renderTab("filtering", "筛选")}
++        {renderTab("frames", "帧预览")}
++        {renderTab("insights", "动作分析")}
+         {renderTab(
+           "doctor",
+           "Doctor",
+-          "Dataset quality diagnostics (powered by lerobot-doctor)",
++          "数据集质量诊断（由 lerobot-doctor 提供）",
+         )}
+         <div className="ml-auto">
+           <HfAuthButton variant="tab" />
+@@ -714,7 +714,7 @@ function EpisodeViewerInner({
+               {task && (
+                 <div className="mb-6 panel p-4">
+                   <p className="text-[10px] uppercase tracking-wide text-slate-500">
+-                    Language Instruction
++                    语言指令
+                   </p>
+                   <div className="mt-1.5 space-y-0.5 text-sm text-slate-200">
+                     {task
+@@ -757,17 +757,15 @@ function EpisodeViewerInner({
+                 />
+               )}
+               <div className="grounding-intro">
+-                <span className="section-kicker">Grounded VQA</span>
++                <span className="section-kicker">视觉问答标注</span>
+                 <ul>
+                   <li>
+-                    Draw directly on the active video to create visual
+-                    questions. Drag for a bounding box, click for a point. The
+-                    camera is detected from the video you draw on.
++                    直接在视频上绘制即可创建视觉问题：拖拽画框表示边界框，单击表示关键点。
++                    系统会根据你绘制的视频自动识别相机。
+                   </li>
+                   <li>
+-                    Drag on any video to add a bbox question. Click any video to
+-                    add a keypoint question. Confirm the popup with <kbd>↵</kbd>
+-                    , or cancel with <kbd>Esc</kbd>.
++                    在任意视频上拖拽可添加边界框问题，单击可添加关键点问题。
++                    在弹窗中按 <kbd>↵</kbd> 确认，按 <kbd>Esc</kbd> 取消。
+                   </li>
+                 </ul>
+               </div>
+@@ -827,7 +825,7 @@ function EpisodeViewerInner({
+             <div className="flex flex-col h-full">
+               <div className="flex items-center justify-between px-1 pb-2 text-xs text-slate-400">
+                 <span>
+-                  Dataset quality diagnostics &mdash; powered by{" "}
++                  数据集质量诊断 &mdash; 由{" "}
+                   <a
+                     href="https://github.com/jashshah999/lerobot-doctor"
+                     target="_blank"
+@@ -843,13 +841,13 @@ function EpisodeViewerInner({
+                   rel="noopener noreferrer"
+                   className="underline hover:text-slate-200"
+                 >
+-                  Open in new tab
++                  在新标签页打开
+                 </a>
+               </div>
+               <iframe
+                 src={doctorUrl}
+                 title="lerobot-doctor"
+-                className="flex-1 w-full rounded border border-slate-700 bg-white"
++                className="flex-1 w-full rounded border border-slate-700 bg-[var(--surface-0)]"
+                 sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+               />
+             </div>
+diff --git a/src/app/[org]/[dataset]/[episode]/error.tsx b/src/app/[org]/[dataset]/[episode]/error.tsx
+index 6ebb601..0b816eb 100644
+--- a/src/app/[org]/[dataset]/[episode]/error.tsx
++++ b/src/app/[org]/[dataset]/[episode]/error.tsx
+@@ -10,9 +10,9 @@ export default function Error({
+   reset: () => void;
+ }) {
+   return (
+-    <div className="flex h-screen items-center justify-center bg-slate-950 text-red-400">
+-      <div className="max-w-xl p-8 rounded bg-slate-900 border border-red-500 shadow-lg">
+-        <h2 className="text-2xl font-bold mb-4">Something went wrong</h2>
++    <div className="flex h-screen items-center justify-center bg-[var(--bg)] text-red-400">
++      <div className="max-w-xl p-8 rounded bg-[var(--surface-0)] border border-red-500 shadow-lg">
++        <h2 className="text-2xl font-bold mb-4">页面加载失败</h2>
+         <p className="text-lg font-mono whitespace-pre-wrap mb-4">
+           {error.message}
+         </p>
+@@ -20,7 +20,7 @@ export default function Error({
+           className="mt-4 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+           onClick={() => reset()}
+         >
+-          Try Again
++          重试
+         </button>
+       </div>
+     </div>
+diff --git a/src/app/[org]/[dataset]/[episode]/fetch-data.ts b/src/app/[org]/[dataset]/[episode]/fetch-data.ts
+index d26dc02..6dddd51 100644
+--- a/src/app/[org]/[dataset]/[episode]/fetch-data.ts
++++ b/src/app/[org]/[dataset]/[episode]/fetch-data.ts
+@@ -331,7 +331,7 @@ export async function getEpisodeData(
+ 
+     if (info.video_path === null) {
+       throw new Error(
+-        "Only videos datasets are supported in this visualizer.\nPlease use Rerun visualizer for images datasets.",
++        "当前预览器只支持视频数据集。\n图像数据集请使用 Rerun visualizer。",
+       );
+     }
+ 
+@@ -2566,6 +2566,6 @@ export async function getEpisodeDataSafe(
+     return { data };
+   } catch (err: unknown) {
+     const message = err instanceof Error ? err.message : String(err);
+-    return { error: message || "Unknown error" };
++    return { error: message || "未知错误" };
+   }
+ }
+diff --git a/src/app/explore/explore-grid.tsx b/src/app/explore/explore-grid.tsx
+index cc33ed7..f53360e 100644
+--- a/src/app/explore/explore-grid.tsx
++++ b/src/app/explore/explore-grid.tsx
+@@ -30,7 +30,7 @@ export default function ExploreGrid({
+     <main className="px-8 py-10 max-w-7xl mx-auto">
+       <div className="flex items-center justify-between mb-6 gap-4">
+         <h1 className="text-xl font-medium tracking-tight text-slate-100">
+-          Explore LeRobot datasets
++          浏览 LeRobot 数据集
+         </h1>
+         <HfAuthButton />
+       </div>
+@@ -70,8 +70,8 @@ export default function ExploreGrid({
+                 }
+               }}
+             />
+-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent z-10 pointer-events-none" />
+-            <div className="relative z-20 w-full px-3 py-2 text-xs text-slate-200 truncate">
++            <div className="absolute inset-0 bg-gradient-to-t from-white/90 via-white/40 to-transparent z-10 pointer-events-none" />
++            <div className="relative z-20 w-full px-3 py-2 text-xs text-slate-100 font-medium truncate">
+               {ds.id}
+             </div>
+           </Link>
+@@ -87,7 +87,7 @@ export default function ExploreGrid({
+               window.location.search = params.toString();
+             }}
+           >
+-            ‹ Previous
++            ‹ 上一页
+           </button>
+         )}
+         {currentPage < totalPages && (
+@@ -99,7 +99,7 @@ export default function ExploreGrid({
+               window.location.search = params.toString();
+             }}
+           >
+-            Next ›
++            下一页 ›
+           </button>
+         )}
+       </div>
+diff --git a/src/app/explore/page.tsx b/src/app/explore/page.tsx
+index e4ce14e..9dac803 100644
+--- a/src/app/explore/page.tsx
++++ b/src/app/explore/page.tsx
+@@ -34,7 +34,7 @@ export default async function ExplorePage({
+     const endIdx = startIdx + perPage;
+     datasets = allDatasets.slice(startIdx, endIdx);
+   } catch {
+-    return <div className="p-8 text-red-600">Failed to load datasets.</div>;
++    return <div className="p-8 text-red-600">数据集加载失败。</div>;
+   }
+ 
+   // Fetch episode 0 data for each dataset
+diff --git a/src/app/globals.css b/src/app/globals.css
+index e808dae..8dc926f 100644
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -1,42 +1,86 @@
+ @import "tailwindcss";
+ 
+ /* ── Design tokens ────────────────────────────────────────────────
+-   Consolidated palette + surface scale. Use via Tailwind arbitrary
+-   values (bg-[var(--surface-1)]) or via the semantic helpers below. */
++   Light palette aligned with the BodyPipeline workbench: same surfaces,
++   ink colors, accent blue and radius so the embedded preview reads as
++   part of the host product. */
+ :root {
+   /* surface / depth scale */
+-  --bg: #0a0e17;
+-  --surface-0: #0d1220;
+-  --surface-1: #11172a;
+-  --surface-2: #151c33;
+-  --border-subtle: rgba(255, 255, 255, 0.05);
+-  --border-strong: rgba(255, 255, 255, 0.1);
++  --bg: #f7f8fa;
++  --surface-0: #ffffff;
++  --surface-1: #f8f9fb;
++  --surface-2: #f0f2f6;
++  --border-subtle: #e8ebf1;
++  --border-strong: #d6dbe3;
+ 
+   /* text scale */
+-  --text-primary: #e7ebf3;
+-  --text-muted: #9aa3b5;
+-  --text-faint: #5b6274;
++  --text-primary: #292e36;
++  --text-muted: #6b7280;
++  --text-faint: #9aa1ac;
+ 
+-  /* single accent (cyan). Orange is reserved for destructive. */
+-  --accent: #38bdf8;
+-  --accent-soft: rgba(56, 189, 248, 0.18);
+-  --accent-ring: rgba(56, 189, 248, 0.55);
++  /* single accent (blue). Orange is reserved for flagged episodes. */
++  --accent: #2455eb;
++  --accent-soft: rgba(36, 85, 235, 0.1);
++  --accent-ring: rgba(36, 85, 235, 0.4);
++  --on-accent: #ffffff;
+ 
+   --radius: 6px;
+ }
+ 
++/* Remap the stock Tailwind palette onto the light theme. Upstream components
++   lean on slate/white/cyan utilities; redefining the theme variables keeps all
++   of them consistent without rewriting every className. `--color-white` is the
++   ink color, so `bg-white/5` and `border-white/10` become subtle dark tints. */
++@theme {
++  --color-white: #292e36;
++  --color-slate-100: #292e36;
++  --color-slate-200: #3b434f;
++  --color-slate-300: #4f5866;
++  --color-slate-400: #6b7280;
++  --color-slate-500: #8a919d;
++  --color-slate-600: #a3aab4;
++  --color-slate-700: #d6dbe3;
++  --color-slate-800: #e4e8ee;
++  --color-slate-900: #eef1f6;
++  --color-slate-950: #f7f8fa;
++
++  --color-cyan-100: #dfe8ff;
++  --color-cyan-200: #8fa8ea;
++  --color-cyan-300: #2455eb;
++  --color-cyan-400: #2455eb;
++  --color-cyan-500: #1742c6;
++  --color-cyan-600: #1742c6;
++
++  --color-sky-300: #2455eb;
++  --color-blue-400: #2455eb;
++
++  --color-orange-300: #9a741b;
++  --color-orange-400: #9a741b;
++  --color-orange-500: #b8860b;
++
++  --color-red-300: #c04b59;
++  --color-red-400: #c04b59;
++  --color-red-500: #b4404c;
++  --color-red-600: #9e3b47;
++
++  --color-green-400: #258467;
++  --color-green-500: #258467;
++
++  --color-yellow-400: #9a741b;
++}
++
+ @theme inline {
+   --color-bg: var(--bg);
+   --color-surface-0: var(--surface-0);
+   --color-surface-1: var(--surface-1);
+   --color-surface-2: var(--surface-2);
+   --color-accent: var(--accent);
+-  --font-sans: var(--font-geist-sans);
++  --font-sans: var(--font-inter);
+   --font-mono: var(--font-geist-mono);
+ }
+ 
+ html {
+-  font-size: 18px;
++  font-size: 16px;
+ }
+ 
+ body {
+@@ -49,6 +93,18 @@ body {
+   text-rendering: optimizeLegibility;
+ }
+ 
++/* Match the BodyPipeline workbench typography, including CJK fallbacks. */
++.pipeline-font {
++  font-family:
++    var(--font-inter),
++    -apple-system,
++    BlinkMacSystemFont,
++    "Segoe UI",
++    "PingFang SC",
++    "Microsoft YaHei",
++    sans-serif;
++}
++
+ /* Numeric readouts always use tabular figures so rows don't jitter. */
+ .tabular,
+ [data-tabular] {
+@@ -72,13 +128,13 @@ body {
+   background: transparent;
+ }
+ *::-webkit-scrollbar-thumb {
+-  background: rgba(255, 255, 255, 0.06);
++  background: rgba(41, 46, 54, 0.14);
+   border-radius: 10px;
+   border: 2px solid transparent;
+   background-clip: padding-box;
+ }
+ *::-webkit-scrollbar-thumb:hover {
+-  background-color: rgba(255, 255, 255, 0.12);
++  background-color: rgba(41, 46, 54, 0.24);
+   background-clip: padding-box;
+ }
+ 
+diff --git a/src/app/layout.tsx b/src/app/layout.tsx
+index e8bd072..8f7a545 100644
+--- a/src/app/layout.tsx
++++ b/src/app/layout.tsx
+@@ -3,11 +3,11 @@ import { Inter } from "next/font/google";
+ import "./globals.css";
+ import { AuthProvider } from "@/context/auth-context";
+ 
+-const inter = Inter({ subsets: ["latin"] });
++const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+ 
+ export const metadata: Metadata = {
+-  title: "LeRobot Dataset Tool and Visualizer",
+-  description: "Tool and Visualizer for LeRobot Datasets",
++  title: "数据预览 · BodyPipeline",
++  description: "LeRobot 数据集预览与质量检查",
+ };
+ 
+ export default function RootLayout({
+@@ -16,8 +16,8 @@ export default function RootLayout({
+   children: React.ReactNode;
+ }) {
+   return (
+-    <html lang="en">
+-      <body className={inter.className}>
++    <html lang="zh-CN">
++      <body className={`${inter.variable} pipeline-font`}>
+         <AuthProvider>{children}</AuthProvider>
+       </body>
+     </html>
+diff --git a/src/app/page.tsx b/src/app/page.tsx
+index b0f5829..f1c560d 100644
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -153,35 +153,19 @@ function HomeInner() {
+ 
+   return (
+     <div className="relative h-screen w-screen overflow-hidden">
+-      {/* Video Background */}
+-      <div className="video-background">
+-        <video
+-          ref={videoRef}
+-          src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/level2.mp4"
+-          autoPlay
+-          muted
+-          loop
+-          playsInline
+-        />
+-      </div>
+-
+-      {/* Gradient overlay */}
+-      <div className="fixed inset-0 -z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.35)_0%,rgba(0,0,0,0.80)_100%)]" />
++      {/* Light hero backdrop, matching the workbench surfaces */}
++      <div className="fixed inset-0 -z-0 bg-[radial-gradient(ellipse_at_top,rgba(36,85,235,0.08)_0%,rgba(247,248,250,1)_60%)]" />
+ 
+       {/* Centered Content */}
+-      <div className="relative z-10 h-screen flex flex-col items-center justify-center text-white text-center animate-fade-in-up px-4">
++      <div className="relative z-10 h-screen flex flex-col items-center justify-center text-slate-100 text-center animate-fade-in-up px-4">
+         {/* Title */}
+         <h1 className="text-4xl md:text-5xl font-bold mb-2 drop-shadow-lg tracking-tight">
+-          LeRobot{" "}
+-          <span className="bg-gradient-to-r from-cyan-400 to-sky-300 bg-clip-text text-transparent">
+-            Dataset
+-          </span>{" "}
+-          Visualizer
++          数据预览
+         </h1>
+ 
+         {/* Subtitle */}
+-        <p className="text-white/55 text-base md:text-lg mb-8 max-w-md">
+-          Explore and visualize robot learning datasets from Hugging Face
++        <p className="text-slate-400 text-base md:text-lg mb-8 max-w-md">
++          浏览并可视化机器人学习数据集
+         </p>
+ 
+         {/* Search form */}
+@@ -189,7 +173,7 @@ function HomeInner() {
+           <div ref={containerRef} className="relative">
+             {/* Search icon */}
+             <svg
+-              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40 pointer-events-none"
++              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none"
+               xmlns="http://www.w3.org/2000/svg"
+               fill="none"
+               viewBox="0 0 24 24"
+@@ -209,8 +193,8 @@ function HomeInner() {
+               onChange={(e) => setQuery(e.target.value)}
+               onKeyDown={handleKeyDown}
+               onFocus={() => query.trim() && setShowSuggestions(true)}
+-              placeholder="Enter dataset id (e.g. lerobot/pusht)"
+-              className="pl-10 pr-4 py-2.5 rounded-md text-base text-white bg-white/10 backdrop-blur-sm border border-white/30 focus:outline-none focus:border-cyan-400 focus:bg-white/15 w-[380px] shadow-md placeholder:text-white/40 transition-colors"
++              placeholder="输入数据集 ID（例如 lerobot/pusht）"
++              className="pl-10 pr-4 py-2.5 rounded-md text-base text-slate-100 bg-[var(--surface-0)] border border-[var(--border-strong)] focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20 w-[380px] shadow-sm placeholder:text-slate-400 transition-colors"
+               autoComplete="off"
+             />
+ 
+@@ -218,7 +202,7 @@ function HomeInner() {
+             {showSuggestions && (
+               <ul className="absolute left-0 right-0 top-full mt-1 rounded-md bg-[var(--surface-1)]/95 backdrop-blur-sm border border-white/10 shadow-xl overflow-hidden z-50 max-h-64 overflow-y-auto">
+                 {isLoading ? (
+-                  <li className="flex items-center gap-2.5 px-4 py-3 text-sm text-white/50">
++                  <li className="flex items-center gap-2.5 px-4 py-3 text-sm text-slate-400">
+                     <svg
+                       className="animate-spin w-4 h-4 shrink-0"
+                       xmlns="http://www.w3.org/2000/svg"
+@@ -239,7 +223,7 @@ function HomeInner() {
+                         d="M4 12a8 8 0 018-8v8H4z"
+                       />
+                     </svg>
+-                    Searching…
++                    正在搜索…
+                   </li>
+                 ) : suggestions.length > 0 ? (
+                   suggestions.map((id, i) => (
+@@ -248,7 +232,7 @@ function HomeInner() {
+                         type="button"
+                         className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
+                           i === activeIndex
+-                            ? "bg-cyan-500 text-white"
++                            ? "bg-cyan-500 text-[var(--on-accent)]"
+                             : "text-slate-200 hover:bg-white/10"
+                         }`}
+                         onMouseDown={(e) => {
+@@ -263,8 +247,8 @@ function HomeInner() {
+                   ))
+                 ) : (
+                   hasFetched && (
+-                    <li className="px-4 py-3 text-sm text-white/40">
+-                      No datasets found
++                    <li className="px-4 py-3 text-sm text-slate-400">
++                      没有找到匹配的数据集
+                     </li>
+                   )
+                 )}
+@@ -274,9 +258,9 @@ function HomeInner() {
+ 
+           <button
+             type="submit"
+-            className="px-5 py-2.5 rounded-md bg-cyan-500 text-white font-semibold text-base hover:bg-cyan-400 active:scale-95 transition-all shadow-md flex items-center gap-2"
++            className="px-5 py-2.5 rounded-md bg-cyan-500 text-[var(--on-accent)] font-semibold text-base hover:bg-cyan-400 active:scale-95 transition-all shadow-sm flex items-center gap-2"
+           >
+-            Go
++            打开
+             <kbd className="text-xs font-mono bg-white/20 rounded px-1 py-0.5 leading-tight">
+               ↵
+             </kbd>
+@@ -289,15 +273,15 @@ function HomeInner() {
+ 
+         {/* Example Datasets */}
+         <div className="mt-8">
+-          <p className="text-white/40 text-xs uppercase tracking-widest mb-3 font-medium">
+-            Example Datasets
++          <p className="text-slate-400 text-xs tracking-widest mb-3 font-medium">
++            示例数据集
+           </p>
+           <div className="flex flex-row flex-wrap gap-2 justify-center max-w-xl">
+             {EXAMPLE_DATASETS.map((ds) => (
+               <button
+                 key={ds}
+                 type="button"
+-                className="px-3 py-1.5 rounded-full border border-white/20 text-sm text-cyan-200/80 hover:border-cyan-400 hover:text-white hover:bg-cyan-500/15 active:scale-95 transition-all backdrop-blur-sm"
++                className="px-3 py-1.5 rounded-full border border-[var(--border-strong)] text-sm text-cyan-300 hover:border-cyan-400 hover:text-slate-100 hover:bg-cyan-500/10 active:scale-95 transition-all"
+                 onClick={() => navigate(ds)}
+               >
+                 {ds}
+@@ -309,9 +293,9 @@ function HomeInner() {
+         {/* Explore CTA */}
+         <Link
+           href="/explore"
+-          className="inline-flex items-center gap-2 px-6 py-3 mt-8 rounded-md bg-cyan-500/90 backdrop-blur-sm text-white font-semibold text-lg shadow-lg hover:bg-cyan-400 active:scale-95 transition-all"
++          className="inline-flex items-center gap-2 px-6 py-3 mt-8 rounded-md bg-cyan-500 text-[var(--on-accent)] font-semibold text-lg shadow-sm hover:bg-cyan-400 active:scale-95 transition-all"
+         >
+-          Explore Open Datasets
++          浏览开放数据集
+           <svg
+             xmlns="http://www.w3.org/2000/svg"
+             className="w-5 h-5"
+diff --git a/src/components/action-insights-panel.tsx b/src/components/action-insights-panel.tsx
+index 234a844..05b1ee2 100644
+--- a/src/components/action-insights-panel.tsx
++++ b/src/components/action-insights-panel.tsx
+@@ -71,7 +71,7 @@ function FullscreenWrapper({ children }: { children: React.ReactNode }) {
+       <button
+         onClick={() => setFs((v) => !v)}
+         className="absolute top-3 right-3 z-10 p-1.5 rounded bg-white/5/60 hover:bg-white/5 text-slate-400 hover:text-slate-200 transition-colors backdrop-blur-sm"
+-        title={fs ? "Exit fullscreen" : "Fullscreen"}
++        title={fs ? "退出全屏" : "全屏"}
+       >
+         <svg
+           xmlns="http://www.w3.org/2000/svg"
+@@ -106,7 +106,7 @@ function FullscreenWrapper({ children }: { children: React.ReactNode }) {
+           <button
+             onClick={() => setFs(false)}
+             className="fixed top-4 right-4 z-50 p-2 rounded bg-white/5/80 hover:bg-white/5 text-slate-300 hover:text-white transition-colors"
+-            title="Exit fullscreen (Esc)"
++            title="退出全屏（Esc）"
+           >
+             <svg
+               xmlns="http://www.w3.org/2000/svg"
+@@ -144,7 +144,7 @@ function FlagBtn({ id }: { id: number }) {
+   return (
+     <button
+       onClick={() => toggle(id)}
+-      title={flagged ? "Unflag episode" : "Flag for review"}
++      title={flagged ? "取消标记" : "标记为待复查"}
+       className={`p-0.5 rounded transition-colors ${flagged ? "text-cyan-300" : "text-slate-600 hover:text-slate-400"}`}
+     >
+       <svg
+@@ -186,7 +186,7 @@ function FlagAllBtn({ ids, label }: { ids: number[]; label?: string }) {
+         <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+         <line x1="4" y1="22" x2="4" y2="15" />
+       </svg>
+-      {label ?? "Flag all"}
++      {label ?? "全部标记"}
+     </button>
+   );
+ }
+@@ -326,32 +326,29 @@ function AutocorrelationSection({
+   }, [chartData, shortKeys]);
+ 
+   if (shortKeys.length === 0)
+-    return <p className="text-slate-500 italic">No action columns found.</p>;
++    return <p className="text-slate-500 italic">没有找到动作列。</p>;
+ 
+   return (
+     <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10 space-y-4">
+       <div>
+         <div className="flex items-center gap-2">
+           <h3 className="text-sm font-semibold text-slate-200">
+-            Action Autocorrelation
++            动作自相关
+             <span className="text-xs text-slate-500 ml-2 font-normal">
+               {numEpisodesLabel}
+             </span>
+           </h3>
+           <InfoToggle>
+             <p className="text-xs text-slate-400">
+-              Shows how correlated each action dimension is with itself over
+-              increasing time lags. Where autocorrelation drops below 0.5
+-              suggests a{" "}
++              展示每个动作维度在不同时间滞后下与自身的相关性。自相关降到 0.5
++              以下的位置，通常对应一个{" "}
+               <span className="text-cyan-300 font-medium">
+-                natural action chunk boundary
++                自然的动作分块边界
+               </span>{" "}
+-              — actions beyond this lag are essentially independent, so
+-              executing them open-loop offers diminishing returns.
++              ——超过该滞后以后动作基本相互独立，继续开环执行的收益会迅速下降。
+               <br />
+               <span className="text-slate-500">
+-                Grounded in the theoretical result that chunk length should
+-                scale logarithmically with system stability constants (
++                这一判据来自“分块长度应随系统稳定常数对数增长”的理论结果（
+                 <a
+                   href="https://arxiv.org/abs/2507.09061"
+                   target="_blank"
+@@ -374,12 +371,10 @@ function AutocorrelationSection({
+           </span>
+           <div>
+             <p className="text-sm text-cyan-200 font-medium">
+-              Suggested chunk length: {suggestedChunk} steps (
+-              {(suggestedChunk / fps).toFixed(2)}s)
++              建议分块长度：{suggestedChunk} 步（{(suggestedChunk / fps).toFixed(2)} 秒）
+             </p>
+             <p className="text-xs text-slate-400">
+-              Median lag where autocorrelation drops below 0.5 across action
+-              dimensions
++              各动作维度自相关降到 0.5 以下的滞后中位数
+             </p>
+           </div>
+         </div>
+@@ -392,37 +387,37 @@ function AutocorrelationSection({
+             data={chartData}
+             margin={{ top: 8, right: 16, left: 0, bottom: 16 }}
+           >
+-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
++            <CartesianGrid strokeDasharray="3 3" stroke="#e4e8ee" />
+             <XAxis
+               dataKey="lag"
+-              stroke="#94a3b8"
++              stroke="#c3cad4"
+               label={{
+-                value: "Lag (steps)",
++                value: "滞后（步）",
+                 position: "insideBottom",
+                 offset: -8,
+-                fill: "#94a3b8",
++                fill: "#6b7280",
+                 fontSize: 13,
+               }}
+             />
+             <YAxis
+-              stroke="#94a3b8"
++              stroke="#c3cad4"
+               domain={yDomain}
+               tickFormatter={(v) => Number(v.toFixed(2)).toString()}
+             />
+             <Tooltip
+               contentStyle={{
+-                background: "#1e293b",
+-                border: "1px solid #475569",
++                background: "#ffffff",
++                border: "1px solid #d6dbe3",
+                 borderRadius: 6,
+               }}
+               labelFormatter={(v) =>
+-                `Lag ${v} (${(Number(v) / fps).toFixed(2)}s)`
++                `滞后 ${v}（${(Number(v) / fps).toFixed(2)} 秒）`
+               }
+               formatter={(v: number) => v.toFixed(3)}
+             />
+             <Line
+               dataKey={() => 0.5}
+-              stroke="#64748b"
++              stroke="#c3cad4"
+               strokeDasharray="6 4"
+               dot={false}
+               name="0.5 threshold"
+@@ -587,19 +582,19 @@ function ActionVelocitySection({
+     const lines: string[] = [];
+     if (smooth.length > 0)
+       lines.push(
+-        `${smooth.length} smooth (${smooth.map((s) => s.name).join(", ")})`,
++        `${smooth.length} 个平滑（${smooth.map((s) => s.name).join(", ")}）`,
+       );
+     if (moderate.length > 0)
+       lines.push(
+-        `${moderate.length} moderate (${moderate.map((s) => s.name).join(", ")})`,
++        `${moderate.length} 个中等（${moderate.map((s) => s.name).join(", ")}）`,
+       );
+     if (jerkyNonGripper.length > 0)
+       lines.push(
+-        `${jerkyNonGripper.length} jerky (${jerkyNonGripper.map((s) => s.name).join(", ")})`,
++        `${jerkyNonGripper.length} 个抖动（${jerkyNonGripper.map((s) => s.name).join(", ")}）`,
+       );
+     if (jerkyGripper.length > 0)
+       lines.push(
+-        `${jerkyGripper.length} gripper${jerkyGripper.length > 1 ? "s" : ""} jerky — expected for binary open/close`,
++        `${jerkyGripper.length} 个夹爪维度抖动——开合属于二值动作，属正常现象`,
+       );
+     if (excluded.length > 0) {
+       const discreteOnly = excluded.filter((s) => s.discrete);
+@@ -607,26 +602,26 @@ function ActionVelocitySection({
+       const parts: string[] = [];
+       if (discreteOnly.length > 0)
+         parts.push(
+-          `${discreteOnly.length} discrete (${discreteOnly.map((s) => s.name).join(", ")})`,
++          `${discreteOnly.length} 个离散维度（${discreteOnly.map((s) => s.name).join(", ")}）`,
+         );
+       if (inactiveOnly.length > 0)
+         parts.push(
+-          `${inactiveOnly.length} inactive (${inactiveOnly.map((s) => s.name).join(", ")})`,
++          `${inactiveOnly.length} 个静止维度（${inactiveOnly.map((s) => s.name).join(", ")}）`,
+         );
+-      lines.push(`${parts.join("; ")} — excluded from verdict`);
++      lines.push(`${parts.join("；")}——不参与结论`);
+     }
+ 
+     let tip: string;
+     if (verdict.label === "N/A")
+-      tip = "All motors are inactive or discrete — no motors to evaluate.";
++      tip = "所有电机都处于静止或离散状态，没有可评估的维度。";
+     else if (verdict.label === "Smooth")
+-      tip = "Actions are consistent — longer action chunks should work well.";
++      tip = "动作一致，适合使用更长的动作分块。";
+     else if (verdict.label === "Moderate")
+       tip =
+-        "Some dimensions show abrupt changes. Consider moderate chunk sizes.";
++        "部分维度变化较突兀，建议使用中等长度的分块。";
+     else
+       tip =
+-        "Many dimensions are jerky. Use shorter action chunks and consider filtering outlier episodes.";
++        "多数维度抖动明显。建议缩短动作分块，并考虑筛除异常 Episode。";
+ 
+     return { verdict, lines, tip };
+   }, [stats, maxStd]);
+@@ -634,7 +629,7 @@ function ActionVelocitySection({
+   if (stats.length === 0)
+     return (
+       <p className="text-slate-500 italic">
+-        No action data for velocity analysis.
++        没有可用于速度分析的动作数据。
+       </p>
+     );
+ 
+@@ -643,29 +638,26 @@ function ActionVelocitySection({
+       <div>
+         <div className="flex items-center gap-2">
+           <h3 className="text-sm font-semibold text-slate-200">
+-            Action Velocity (Δa) — Smoothness Proxy
++            动作速度（Δa）——平滑度参考
+             <span className="text-xs text-slate-500 ml-2 font-normal">
+               {isAgg
+-                ? `(${numEpisodes} episodes sampled)`
+-                : "(current episode)"}
++                ? `（采样 ${numEpisodes} 个 Episode）`
++                : "（当前 Episode）"}
+             </span>
+           </h3>
+           <InfoToggle>
+             <p className="text-xs text-slate-400">
+-              Shows the distribution of frame-to-frame action changes (Δa = a
+-              <sub>t+1</sub> − a<sub>t</sub>) for each dimension. A{" "}
++              展示每个维度相邻帧的动作变化量（Δa = a<sub>t+1</sub> − a<sub>t</sub>）
++              分布。{" "}
+               <span className="text-green-400">
+-                tight distribution around zero
++                集中在 0 附近的紧密分布
+               </span>{" "}
+-              means smooth, predictable control — the system is likely stable
+-              and benefits from longer action chunks.
++              说明控制平滑可预测，系统较稳定，适合使用更长的动作分块。
+               <span className="text-red-400"> Fat tails or high std</span>{" "}
+-              indicate jerky demonstrations, suggesting shorter chunks and
+-              potentially beneficial noise injection.
++              则意味着示教抖动明显，应缩短分块长度，并可以考虑加入噪声。
+               <br />
+               <span className="text-slate-500">
+-                Relates to the Lipschitz constant L<sub>π</sub> and smoothness C
+-                <sub>π</sub> in{" "}
++                对应 {" "}
+                 <a
+                   href="https://arxiv.org/abs/2507.09061"
+                   target="_blank"
+@@ -674,7 +666,8 @@ function ActionVelocitySection({
+                 >
+                   Zhang et al. (2025)
+                 </a>
+-                , which govern compounding error bounds (Assumptions 3.1, 4.1).
++                中的 Lipschitz 常数 L<sub>π</sub> 与平滑度 C<sub>π</sub>，
++                它们决定了复合误差上界（假设 3.1、4.1）。
+               </span>
+             </p>
+           </InfoToggle>
+@@ -691,11 +684,11 @@ function ActionVelocitySection({
+           const dimmed = !!s.inactive || !!s.discrete;
+           const tag =
+             s.inactive && s.discrete
+-              ? "inactive & discrete"
++              ? "静止且离散"
+               : s.discrete
+-                ? "discrete"
++                ? "离散"
+                 : s.inactive
+-                  ? "inactive"
++                  ? "静止"
+                   : null;
+           return (
+             <div
+@@ -726,7 +719,7 @@ function ActionVelocitySection({
+                 viewBox={`0 0 ${s.bins.length} ${barH}`}
+                 preserveAspectRatio="none"
+                 className="h-7 rounded"
+-                aria-label={`Δa distribution for ${s.name}`}
++                aria-label={`${s.name} 的 Δa 分布`}
+               >
+                 {[...s.bins].map((count, bi) => {
+                   const h = maxBinCount > 0 ? (count / maxBinCount) * barH : 0;
+@@ -737,7 +730,7 @@ function ActionVelocitySection({
+                       y={barH - h}
+                       width={0.85}
+                       height={h}
+-                      fill={dimmed ? "#475569" : COLORS[si % COLORS.length]}
++                      fill={dimmed ? "#c3cad4" : COLORS[si % COLORS.length]}
+                       opacity={dimmed ? 0.4 : 0.7}
+                     />
+                   );
+@@ -749,7 +742,7 @@ function ActionVelocitySection({
+                   style={{
+                     width: `${Math.min(100, (s.std / maxStd) * 100)}%`,
+                     background: dimmed
+-                      ? "#475569"
++                      ? "#c3cad4"
+                       : s.std / maxStd < 0.4
+                         ? "#22c55e"
+                         : s.std / maxStd < 0.7
+@@ -766,7 +759,7 @@ function ActionVelocitySection({
+       {insight && (
+         <div className="bg-[var(--surface-0)]/60 rounded-md px-4 py-3 border border-white/10/60 space-y-1.5">
+           <p className="text-sm font-medium text-slate-200">
+-            Overall:{" "}
++            总体结论：{" "}
+             <span className={insight.verdict.color}>
+               {insight.verdict.label}
+             </span>
+@@ -795,9 +788,9 @@ function JerkyEpisodesList({ episodes }: { episodes: JerkyEpisode[] }) {
+     <div className="bg-[var(--surface-0)]/60 rounded-md px-4 py-3 border border-white/10/60 space-y-2">
+       <div className="flex items-center justify-between">
+         <p className="text-sm font-medium text-slate-200">
+-          Most Jerky Episodes{" "}
++          抖动最明显的 Episode{" "}
+           <span className="text-xs text-slate-500 font-normal">
+-            sorted by mean |Δa|
++            按平均 |Δa| 排序
+           </span>
+         </p>
+         <div className="flex items-center gap-3">
+@@ -807,7 +800,7 @@ function JerkyEpisodesList({ episodes }: { episodes: JerkyEpisode[] }) {
+               onClick={() => setShowAll((v) => !v)}
+               className="text-xs text-slate-400 hover:text-slate-200 transition-colors"
+             >
+-              {showAll ? "Show top 15" : `Show all ${episodes.length}`}
++              {showAll ? "只看前 15 个" : `显示全部 ${episodes.length} 个`}
+             </button>
+           )}
+         </div>
+@@ -818,7 +811,7 @@ function JerkyEpisodesList({ episodes }: { episodes: JerkyEpisode[] }) {
+             <tr className="text-slate-500 border-b border-white/10">
+               <th className="w-5 py-1" />
+               <th className="text-left py-1 pr-3">Episode</th>
+-              <th className="text-right py-1">Mean |Δa|</th>
++              <th className="text-right py-1">平均 |Δa|</th>
+             </tr>
+           </thead>
+           <tbody>
+@@ -830,7 +823,7 @@ function JerkyEpisodesList({ episodes }: { episodes: JerkyEpisode[] }) {
+                 <td className="py-1">
+                   <FlagBtn id={e.episodeIndex} />
+                 </td>
+-                <td className="py-1 pr-3">ep {e.episodeIndex}</td>
++                <td className="py-1 pr-3">Episode {e.episodeIndex}</td>
+                 <td className="py-1 text-right tabular-nums">
+                   {e.meanAbsDelta.toFixed(4)}
+                 </td>
+@@ -858,7 +851,7 @@ function VarianceHeatmap({
+     return (
+       <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10">
+         <h3 className="text-sm font-semibold text-slate-200 mb-2">
+-          Cross-Episode Action Variance
++          跨 Episode 动作方差
+         </h3>
+         <div className="flex items-center gap-2 text-slate-400 text-sm py-8 justify-center">
+           <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+@@ -876,7 +869,7 @@ function VarianceHeatmap({
+               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+             />
+           </svg>
+-          Loading cross-episode data (sampled up to 500 episodes)…
++          正在加载跨 Episode 数据（最多采样 500 个 Episode）…
+         </div>
+       </div>
+     );
+@@ -886,10 +879,10 @@ function VarianceHeatmap({
+     return (
+       <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10">
+         <h3 className="text-sm font-semibold text-slate-200 mb-2">
+-          Cross-Episode Action Variance
++          跨 Episode 动作方差
+         </h3>
+         <p className="text-slate-500 italic text-sm">
+-          Not enough episodes or no action data to compute variance.
++          Episode 数量不足或缺少动作数据，无法计算方差。
+         </p>
+       </div>
+     );
+@@ -928,24 +921,22 @@ function VarianceHeatmap({
+       <div>
+         <div className="flex items-center gap-2">
+           <h3 className="text-sm font-semibold text-slate-200">
+-            Cross-Episode Action Variance
++            跨 Episode 动作方差
+             <span className="text-xs text-slate-500 ml-2 font-normal">
+-              ({numEpisodes} episodes sampled)
++              （采样 {numEpisodes} 个 Episode）
+             </span>
+           </h3>
+           <InfoToggle>
+             <p className="text-xs text-slate-400">
+-              Shows how much each action dimension varies across episodes at
+-              each point in time (normalized 0–100%).
++              展示每个动作维度在时间轴上各点跨 Episode 的变化幅度（归一化到 0–100%）。
+               <span className="text-cyan-300"> High-variance regions</span>{" "}
+-              indicate multi-modal or inconsistent demonstrations — generative
+-              policies (diffusion, flow-matching) and action chunking help here
+-              by modeling multiple modes.
++              表示示教存在多模态或不一致，适合用生成式策略（diffusion、flow-matching）
++              与动作分块来建模多种模式。
+               <span className="text-blue-400"> Low-variance regions</span>{" "}
+-              indicate consistent behavior across demonstrations.
++              表示各次示教的行为比较一致。
+               <br />
+               <span className="text-slate-500">
+-                Relates to the &quot;coverage&quot; discussion in{" "}
++                对应 {" "}
+                 <a
+                   href="https://arxiv.org/abs/2507.09061"
+                   target="_blank"
+@@ -954,8 +945,7 @@ function VarianceHeatmap({
+                 >
+                   Zhang et al. (2025)
+                 </a>{" "}
+-                — regions with low variance may lack the exploratory coverage
+-                needed to prevent compounding errors (Section 4).
++                中关于“覆盖度”的讨论——低方差区域可能缺少防止复合误差所需的探索覆盖（第 4 节）。
+               </span>
+             </p>
+           </InfoToggle>
+@@ -1020,7 +1010,7 @@ function VarianceHeatmap({
+             className="fill-slate-500"
+             fontSize={10}
+           >
+-            Episode progress
++            Episode 进度
+           </text>
+ 
+           {/* Color bar */}
+@@ -1046,7 +1036,7 @@ function VarianceHeatmap({
+             fontSize={8}
+             dominantBaseline="central"
+           >
+-            high
++            高
+           </text>
+           <text
+             x={labelW + numBins * cellW + 34}
+@@ -1055,7 +1045,7 @@ function VarianceHeatmap({
+             fontSize={8}
+             dominantBaseline="central"
+           >
+-            low
++            低
+           </text>
+         </svg>
+       </div>
+@@ -1095,21 +1085,21 @@ function SpeedVarianceSection({
+       let v: { label: string; color: string; tip: string };
+       if (c < 0.2)
+         v = {
+-          label: "Consistent",
++          label: "一致",
+           color: "text-green-400",
+-          tip: "Demonstrators execute at similar speeds — no velocity normalization needed.",
++          tip: "各次示教速度接近，不需要额外做速度归一化。",
+         };
+       else if (c < 0.4)
+         v = {
+-          label: "Moderate variance",
++          label: "中等差异",
+           color: "text-yellow-400",
+-          tip: "Some speed variation across demonstrators. Consider velocity normalization for best results.",
++          tip: "不同示教之间存在一定速度差异，建议做速度归一化以获得最佳效果。",
+         };
+       else
+         v = {
+-          label: "High variance",
++          label: "差异较大",
+           color: "text-red-400",
+-          tip: "Large speed differences between demonstrations. Velocity normalization before training is strongly recommended.",
++          tip: "示教之间速度差异明显，训练前强烈建议先做速度归一化。",
+         };
+ 
+       return {
+@@ -1136,25 +1126,21 @@ function SpeedVarianceSection({
+       <div>
+         <div className="flex items-center gap-2">
+           <h3 className="text-sm font-semibold text-slate-200">
+-            Demonstrator Speed Variance
++            示教速度差异
+             <span className="text-xs text-slate-500 ml-2 font-normal">
+-              ({numEpisodes} episodes)
++              （{numEpisodes} 个 Episode）
+             </span>
+           </h3>
+           <InfoToggle>
+             <p className="text-xs text-slate-400">
+-              Distribution of average execution speed (mean ‖Δa<sub>t</sub>‖ per
+-              frame) across all episodes. Different human demonstrators often
+-              execute at <span className="text-cyan-300">different speeds</span>
+-              , creating artificial multimodality in the action distribution
+-              that confuses the policy. A coefficient of variation (CV) above
+-              0.3 strongly suggests normalizing trajectory speed before
+-              training.
++              所有 Episode 平均执行速度（每帧 ‖Δa<sub>t</sub>‖ 的均值）的分布。
++              不同操作者往往以<span className="text-cyan-300">不同速度</span>示教，
++              这会在动作分布中制造人为的多模态，干扰策略学习。变异系数（CV）
++              高于 0.3 时，强烈建议在训练前对轨迹速度做归一化。
+               <br />
+               <span className="text-slate-500">
+-                Based on &quot;Is Diversity All You Need&quot; (AGI-Bot, 2025)
+-                which shows velocity normalization dramatically improves
+-                fine-tuning success rate.
++                参考“Is Diversity All You Need”（AGI-Bot, 2025）：速度归一化能显著
++                提升微调成功率。
+               </span>
+             </p>
+           </InfoToggle>
+@@ -1205,19 +1191,19 @@ function SpeedVarianceSection({
+         </div>
+         <div className="flex flex-col gap-2 text-xs shrink-0 min-w-[120px]">
+           <div>
+-            <span className="text-slate-500">Mean</span>{" "}
++            <span className="text-slate-500">均值</span>{" "}
+             <span className="text-slate-200 tabular-nums ml-1">
+               {mean.toFixed(4)}
+             </span>
+           </div>
+           <div>
+-            <span className="text-slate-500">Median</span>{" "}
++            <span className="text-slate-500">中位数</span>{" "}
+             <span className="text-slate-200 tabular-nums ml-1">
+               {median.toFixed(4)}
+             </span>
+           </div>
+           <div>
+-            <span className="text-slate-500">Std</span>{" "}
++            <span className="text-slate-500">标准差</span>{" "}
+             <span className="text-slate-200 tabular-nums ml-1">
+               {std.toFixed(4)}
+             </span>
+@@ -1233,7 +1219,7 @@ function SpeedVarianceSection({
+ 
+       <div className="bg-[var(--surface-0)]/60 rounded-md px-4 py-3 border border-white/10/60 space-y-1.5">
+         <p className="text-sm font-medium text-slate-200">
+-          Verdict: <span className={verdict.color}>{verdict.label}</span>
++          结论：<span className={verdict.color}>{verdict.label}</span>
+         </p>
+         <p className="text-xs text-slate-400">{verdict.tip}</p>
+       </div>
+@@ -1395,33 +1381,31 @@ function StateActionAlignmentSection({
+     fromAgg,
+   } = result;
+   const scopeLabel = fromAgg
+-    ? `${numEpisodes} episodes sampled`
+-    : "current episode";
++    ? `采样 ${numEpisodes} 个 Episode`
++    : "当前 Episode";
+ 
+   return (
+     <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10 space-y-4">
+       <div>
+         <div className="flex items-center gap-2">
+           <h3 className="text-sm font-semibold text-slate-200">
+-            State–Action Temporal Alignment
++            状态–动作时间对齐
+             <span className="text-xs text-slate-500 ml-2 font-normal">
+-              ({scopeLabel}, {numPairs} matched pair{numPairs !== 1 ? "s" : ""})
++              （{scopeLabel}，{numPairs} 组匹配）
+             </span>
+           </h3>
+           <InfoToggle>
+             <p className="text-xs text-slate-400">
+-              Per-dimension cross-correlation between Δaction<sub>d</sub>(t) and
+-              Δstate<sub>d</sub>(t+lag), aggregated as
+-              <span className="text-cyan-300"> max</span>,{" "}
+-              <span className="text-slate-200">mean</span>, and
+-              <span className="text-blue-400"> min</span> across all matched
+-              action–state pairs. The{" "}
+-              <span className="text-cyan-300">peak lag</span> reveals the
+-              effective control delay — the time between when an action is
+-              commanded and when the corresponding state changes.
++              逐维度计算 Δaction<sub>d</sub>(t) 与 Δstate<sub>d</sub>(t+lag) 的互相关，
++              并汇总为
++              <span className="text-cyan-300">最大值</span>、
++              <span className="text-slate-200">均值</span> 和
++              <span className="text-blue-400">最小值</span>。
++              <span className="text-cyan-300">峰值滞后</span>反映实际控制延迟，
++              即从下发动作到对应状态发生变化之间的时间。
+               <br />
+               <span className="text-slate-500">
+-                Central to ACT (
++                这与 ACT（
+                 <a
+                   href="https://arxiv.org/abs/2304.13705"
+                   target="_blank"
+@@ -1430,8 +1414,7 @@ function StateActionAlignmentSection({
+                 >
+                   Zhao et al., 2023
+                 </a>{" "}
+-                — action chunking compensates for delay), Real-Time Chunking
+-                (RTC,{" "}
++                ——动作分块用于补偿延迟）、Real-Time Chunking（RTC，{" "}
+                 <a
+                   href="https://arxiv.org/abs/2506.07339"
+                   target="_blank"
+@@ -1440,7 +1423,7 @@ function StateActionAlignmentSection({
+                 >
+                   Black et al., 2025
+                 </a>
+-                ), and Training-Time RTC (
++                ）以及 Training-Time RTC（
+                 <a
+                   href="https://arxiv.org/abs/2512.05964"
+                   target="_blank"
+@@ -1449,8 +1432,7 @@ function StateActionAlignmentSection({
+                 >
+                   Black et al., 2025
+                 </a>
+-                ) — all address the timing mismatch between commanded actions
+-                and observed state changes.
++                ）直接相关，它们都在处理指令动作与观测状态变化之间的时序错位。
+               </span>
+             </p>
+           </InfoToggle>
+@@ -1464,16 +1446,14 @@ function StateActionAlignmentSection({
+           </span>
+           <div>
+             <p className="text-sm text-cyan-200 font-medium">
+-              Mean control delay: {meanPeakLag} step
+-              {Math.abs(meanPeakLag) !== 1 ? "s" : ""} (
+-              {(meanPeakLag / fps).toFixed(3)}s)
++              平均控制延迟：{meanPeakLag} 步（{(meanPeakLag / fps).toFixed(3)} 秒）
+             </p>
+             <p className="text-xs text-slate-400">
+               {meanPeakLag > 0
+-                ? `State changes lag behind actions by ~${meanPeakLag} frames on average. Consider aligning action[t] with state[t+${meanPeakLag}].`
+-                : `Actions lag behind state changes by ~${-meanPeakLag} frames on average (predictive actions).`}
++                ? `状态变化平均比动作滞后约 ${meanPeakLag} 帧。可以考虑把 action[t] 与 state[t+${meanPeakLag}] 对齐。`
++                : `动作平均比状态变化超前约 ${-meanPeakLag} 帧（属于预测性动作）。`}
+               {lagRangeMin !== lagRangeMax &&
+-                ` Individual dimension peaks range from ${lagRangeMin} to ${lagRangeMax} steps.`}
++                ` 各维度的峰值滞后分布在 ${lagRangeMin} 到 ${lagRangeMax} 步之间。`}
+             </p>
+           </div>
+         </div>
+@@ -1485,27 +1465,27 @@ function StateActionAlignmentSection({
+             data={ccData}
+             margin={{ top: 8, right: 16, left: 0, bottom: 16 }}
+           >
+-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
++            <CartesianGrid strokeDasharray="3 3" stroke="#e4e8ee" />
+             <XAxis
+               dataKey="lag"
+-              stroke="#94a3b8"
++              stroke="#c3cad4"
+               label={{
+-                value: "Lag (steps)",
++                value: "滞后（步）",
+                 position: "insideBottom",
+                 offset: -8,
+-                fill: "#94a3b8",
++                fill: "#6b7280",
+                 fontSize: 13,
+               }}
+             />
+             <YAxis
+-              stroke="#94a3b8"
++              stroke="#c3cad4"
+               domain={[-0.5, 1]}
+               tickFormatter={(v) => Number(v.toFixed(2)).toString()}
+             />
+             <Tooltip
+               contentStyle={{
+-                background: "#1e293b",
+-                border: "1px solid #475569",
++                background: "#ffffff",
++                border: "1px solid #d6dbe3",
+                 borderRadius: 6,
+               }}
+               labelFormatter={(v) =>
+@@ -1523,7 +1503,7 @@ function StateActionAlignmentSection({
+             />
+             <Line
+               dataKey="mean"
+-              stroke="#94a3b8"
++              stroke="#c3cad4"
+               dot={false}
+               strokeWidth={2}
+               isAnimationActive={false}
+@@ -1539,7 +1519,7 @@ function StateActionAlignmentSection({
+             />
+             <Line
+               dataKey={() => 0}
+-              stroke="#64748b"
++              stroke="#c3cad4"
+               strokeDasharray="6 4"
+               dot={false}
+               name="zero"
+@@ -1554,27 +1534,27 @@ function StateActionAlignmentSection({
+         <div className="flex items-center gap-1.5">
+           <span className="w-3 h-[3px] rounded-full shrink-0 bg-cyan-500" />
+           <span className="text-xs text-slate-400">
+-            max (peak: lag {maxPeakLag}, r={maxPeakCorr.toFixed(3)})
++            最大值（峰值滞后 {maxPeakLag}，r={maxPeakCorr.toFixed(3)}）
+           </span>
+         </div>
+         <div className="flex items-center gap-1.5">
+           <span className="w-3 h-[3px] rounded-full shrink-0 bg-slate-400" />
+           <span className="text-xs text-slate-400">
+-            mean (peak: lag {meanPeakLag}, r={meanPeakCorr.toFixed(3)})
++            均值（峰值滞后 {meanPeakLag}，r={meanPeakCorr.toFixed(3)}）
+           </span>
+         </div>
+         <div className="flex items-center gap-1.5">
+           <span className="w-3 h-[3px] rounded-full shrink-0 bg-blue-500" />
+           <span className="text-xs text-slate-400">
+-            min (peak: lag {minPeakLag}, r={minPeakCorr.toFixed(3)})
++            最小值（峰值滞后 {minPeakLag}，r={minPeakCorr.toFixed(3)}）
+           </span>
+         </div>
+       </div>
+ 
+       {meanPeakLag === 0 && (
+         <p className="text-xs text-green-400">
+-          Mean peak correlation at lag 0 (r={meanPeakCorr.toFixed(3)}) — actions
+-          and state changes are well-aligned in this episode.
++          峰值出现在滞后 0（r={meanPeakCorr.toFixed(3)}），说明该 Episode 的动作与
++          状态变化对齐良好。
+         </p>
+       )}
+     </div>
+@@ -1603,24 +1583,23 @@ function ActionInsightsPanel({
+     <div className="max-w-5xl mx-auto py-6 space-y-8">
+       <div className="flex items-center justify-between flex-wrap gap-4">
+         <div>
+-          <h2 className="text-xl font-bold text-slate-100">Action Insights</h2>
++          <h2 className="text-xl font-bold text-slate-100">动作分析</h2>
+           <p className="text-sm text-slate-400 mt-1">
+-            Data-driven analysis to guide action chunking, data quality
+-            assessment, and training configuration.
++            基于数据的分析，用于指导动作分块、数据质量评估与训练配置。
+           </p>
+         </div>
+         <div className="flex items-center gap-3 shrink-0">
+           <span
+             className={`text-sm ${mode === "episode" ? "text-slate-100 font-medium" : "text-slate-500"}`}
+           >
+-            Current Episode
++            当前 Episode
+           </span>
+           <button
+             onClick={() =>
+               setMode((m) => (m === "episode" ? "dataset" : "episode"))
+             }
+             className={`relative inline-flex items-center w-9 h-5 rounded-full transition-colors shrink-0 ${mode === "dataset" ? "bg-cyan-500" : "bg-white/10"}`}
+-            aria-label="Toggle episode/dataset scope"
++            aria-label="切换当前 Episode 与全部 Episode"
+           >
+             <span
+               className={`inline-block w-3.5 h-3.5 bg-white rounded-full transition-transform ${mode === "dataset" ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+@@ -1629,7 +1608,7 @@ function ActionInsightsPanel({
+           <span
+             className={`text-sm ${mode === "dataset" ? "text-slate-100 font-medium" : "text-slate-500"}`}
+           >
+-            All Episodes
++            全部 Episode
+             {crossEpisodeData ? ` (${crossEpisodeData.numEpisodes})` : ""}
+           </span>
+         </div>
+diff --git a/src/components/annotations-panel.tsx b/src/components/annotations-panel.tsx
+index 04f5bfc..7e984fc 100644
+--- a/src/components/annotations-panel.tsx
++++ b/src/components/annotations-panel.tsx
+@@ -95,12 +95,12 @@ interface QuickAddDef {
+ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   {
+     kind: "task_aug",
+-    label: "task augmentation",
++    label: "任务描述增强",
+     atEpisodeStart: true,
+     fields: [
+       {
+         name: "label",
+-        placeholder: "pick up the blue cube and place it in the green box",
++        placeholder: "拿起蓝色方块放进绿色盒子",
+         grow: true,
+       },
+     ],
+@@ -121,11 +121,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "subtask",
+-    label: "subtask",
++    label: "子任务",
+     fields: [
+       {
+         name: "label",
+-        placeholder: "grasp the handle of the sponge",
++        placeholder: "抓住海绵的把手",
+         grow: true,
+       },
+     ],
+@@ -146,11 +146,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "plan",
+-    label: "plan",
++    label: "计划",
+     fields: [
+       {
+         name: "label",
+-        placeholder: "1. grab sponge / 2. wipe / 3. tidy",
++        placeholder: "1. 拿海绵 / 2. 擦拭 / 3. 归位",
+         grow: true,
+       },
+     ],
+@@ -171,11 +171,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "memory",
+-    label: "memory",
++    label: "记忆",
+     fields: [
+       {
+         name: "label",
+-        placeholder: "sponge picked up; counter still dirty",
++        placeholder: "海绵已拿起；台面还没擦干净",
+         grow: true,
+       },
+     ],
+@@ -196,11 +196,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "interjection",
+-    label: "interjection (user)",
++    label: "插话（用户）",
+     fields: [
+       {
+         name: "label",
+-        placeholder: "user: actually skip the wipe…",
++        placeholder: "用户：这次跳过擦拭……",
+         grow: true,
+       },
+     ],
+@@ -221,11 +221,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "speech",
+-    label: "speech (robot say)",
++    label: "语音（机器人 say）",
+     fields: [
+       {
+         name: "label",
+-        placeholder: "robot say: Got it, skipping the wipe.",
++        placeholder: "机器人 say：好的，跳过擦拭。",
+         grow: true,
+       },
+     ],
+@@ -237,10 +237,10 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "count",
+-    label: "vqa: count",
++    label: "VQA：计数",
+     fields: [
+-      { name: "label", placeholder: "object label (e.g. cup)", grow: true },
+-      { name: "count", placeholder: "count", type: "number", width: "80px" },
++      { name: "label", placeholder: "物体标签（如 cup）", grow: true },
++      { name: "count", placeholder: "数量", type: "number", width: "80px" },
+     ],
+     build: ({ label, count }, { ts, vqaCamera }) => {
+       const text = label.trim();
+@@ -267,11 +267,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "attribute",
+-    label: "vqa: attribute",
++    label: "VQA：属性",
+     fields: [
+-      { name: "label", placeholder: "label", width: "120px" },
+-      { name: "attribute", placeholder: "attribute (color)", width: "120px" },
+-      { name: "value", placeholder: "value (red)", grow: true },
++      { name: "label", placeholder: "标签", width: "120px" },
++      { name: "attribute", placeholder: "属性（颜色）", width: "120px" },
++      { name: "value", placeholder: "取值（red）", grow: true },
+     ],
+     build: ({ label, attribute, value }, { ts, vqaCamera }) => {
+       const text = label.trim();
+@@ -298,11 +298,11 @@ const QUICK_ADD_DEFS: QuickAddDef[] = [
+   },
+   {
+     kind: "spatial",
+-    label: "vqa: spatial relation",
++    label: "VQA：空间关系",
+     fields: [
+-      { name: "subject", placeholder: "subject", width: "100px" },
+-      { name: "relation", placeholder: "relation (right_of)", width: "130px" },
+-      { name: "object", placeholder: "object", grow: true },
++      { name: "subject", placeholder: "主体", width: "100px" },
++      { name: "relation", placeholder: "关系（right_of）", width: "130px" },
++      { name: "object", placeholder: "客体", grow: true },
+     ],
+     build: ({ subject, relation, object }, { ts, vqaCamera }) => {
+       if (!subject || !relation || !object) return null;
+@@ -561,18 +561,17 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+       <div className="annotation-actionbar">
+         <div>
+           <h3>
+-            Language annotations
+-            {dirty && <span className="dirty-pill">unsaved</span>}
++            语言标注
++            {dirty && <span className="dirty-pill">未保存</span>}
+           </h3>
+           <p>
+-            Select an atom from the timeline or list, then edit it in the
+-            inspector.
++            在时间轴或列表中选择一条标注，然后在右侧检查器中编辑。
+           </p>
+         </div>
+         <div className="actionbar-actions">
+           {!backendEnabled && (
+             <span className="backend-offline">
+-              backend offline — edits saved to sessionStorage only
++              后端未启用 —— 修改只保存在当前浏览器的 sessionStorage 中
+             </span>
+           )}
+           <button
+@@ -580,14 +579,14 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+             onClick={handleSave}
+             className="text-xs h-7 px-3 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40"
+           >
+-            {saving ? "Saving…" : "Save episode"}
++            {saving ? "正在保存…" : "保存 Episode"}
+           </button>
+           <button
+             disabled={!backendEnabled}
+             onClick={handleSaveDataset}
+             className="text-xs h-7 px-3 rounded border border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"
+           >
+-            Save dataset
++            保存数据集
+           </button>
+         </div>
+       </div>
+@@ -596,10 +595,10 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+ 
+       <section className="annotation-composer">
+         <div className="composer-copy">
+-          <span className="section-kicker">Add text annotation</span>
++          <span className="section-kicker">添加文本标注</span>
+           <p>
+-            Adds task phrasing, subtask, plan, memory, speech, or non-spatial
+-            VQA atoms. Task phrasings are saved at episode start.
++            添加任务描述、subtask、plan、memory、语音或非空间 VQA 标注。
++            任务描述统一保存在 Episode 起始帧。
+           </p>
+         </div>
+         <div className="quick-add">
+@@ -638,7 +637,7 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+             />
+           ))}
+           <button className="add-btn" onClick={handleQuickAdd}>
+-            + Add at frame
++            + 添加到当前帧
+           </button>
+         </div>
+       </section>
+@@ -647,16 +646,16 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+         <div className="rail annotation-list">
+           <div className="list-head">
+             <div>
+-              <span className="section-kicker">Annotations</span>
+-              <p>{atoms.length} atoms in this episode</p>
++              <span className="section-kicker">标注列表</span>
++              <p>本 Episode 共 {atoms.length} 条标注</p>
+             </div>
+             <span className="ts-pill">{fmtTime(currentTime)}</span>
+           </div>
+           {atoms.length === 0 && (
+             <div className="rail-empty">
+-              No annotations yet.
++              还没有标注。
+               <br />
+-              Add text above or draw on the active video.
++              可以在上方添加文本，或直接在视频上绘制。
+             </div>
+           )}
+           {(["persistent", "events"] as const).map((column) => {
+@@ -670,12 +669,12 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+               <div className="rail-column" key={column}>
+                 <div className={`rail-column-head ${column}`}>
+                   <span className="rail-column-title">
+-                    {column === "persistent" ? "Persistent" : "Events"}
++                    {column === "persistent" ? "持久标注" : "事件"}
+                   </span>
+                   <span className="rail-column-sub">
+                     {column === "persistent"
+-                      ? "language_persistent · broadcast across every frame"
+-                      : "language_events · fire on a single frame"}
++                      ? "language_persistent · 作用于所有帧"
++                      : "language_events · 作用于单帧"}
+                   </span>
+                 </div>
+                 {colGroups.map(({ def, entries }) => (
+@@ -695,10 +694,10 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
+         <div className="editor inspector">
+           {selectedAtom == null ? (
+             <div className="editor-empty">
+-              <span className="section-kicker">Inspector</span>
++              <span className="section-kicker">检查器</span>
+               <p>
+-                Select an annotation from the list or timeline, or draw a new
+-                bbox/keypoint on the video.
++                从列表或时间轴中选择一条标注，或者在视频上绘制新的
++                边界框 / 关键点。
+               </p>
+             </div>
+           ) : (
+@@ -816,14 +815,14 @@ const AtomEditor: React.FC<{
+         <div className="right">
+           <button
+             className="icon-btn"
+-            title="Jump to this atom's frame"
++            title="跳到该标注所在帧"
+             onClick={() => jump(atom.timestamp)}
+           >
+             ▶
+           </button>
+           <button
+             className="icon-btn danger"
+-            title="Delete this atom"
++            title="删除该标注"
+             onClick={onDelete}
+           >
+             ×
+@@ -832,7 +831,7 @@ const AtomEditor: React.FC<{
+       </div>
+ 
+       <div className="field">
+-        <label className="field-label">Timestamp (s)</label>
++        <label className="field-label">时间戳（秒）</label>
+         <div className="ts-row">
+           <input
+             type="text"
+@@ -859,7 +858,7 @@ const AtomEditor: React.FC<{
+               }
+             }}
+           >
+-            snap to frame
++            吸附到帧
+           </button>
+         </div>
+       </div>
+@@ -873,14 +872,14 @@ const AtomEditor: React.FC<{
+         <div className="field">
+           <label className="field-label">
+             {atom.style === "subtask"
+-              ? "Subtask"
++              ? "子任务（Subtask）"
+               : atom.style === "task_aug"
+-                ? "Task augmentation"
++                ? "任务描述增强"
+                 : atom.style === "plan"
+-                  ? "Plan"
++                  ? "计划（Plan）"
+                   : atom.style === "memory"
+-                    ? "Memory"
+-                    : "Interjection"}
++                    ? "记忆（Memory）"
++                    : "插话（Interjection）"}
+           </label>
+           {atom.style === "task_aug" ||
+           atom.style === "subtask" ||
+@@ -902,7 +901,7 @@ const AtomEditor: React.FC<{
+ 
+       {isSpeech && atom.tool_calls && (
+         <div className="field">
+-          <label className="field-label">Robot speech (say tool call)</label>
++          <label className="field-label">机器人语音（say 工具调用）</label>
+           <input
+             type="text"
+             value={speechText(atom) || ""}
+@@ -954,14 +953,14 @@ const CameraField: React.FC<{
+   const value = atom.camera ?? "";
+   return (
+     <div className="field">
+-      <label className="field-label">Camera</label>
++      <label className="field-label">相机</label>
+       <select
+         value={value}
+         onChange={(e) =>
+           onChange({ camera: e.target.value === "" ? null : e.target.value })
+         }
+       >
+-        <option value="">(any — renders on every camera)</option>
++        <option value="">（任意 —— 在所有相机上显示）</option>
+         {cameraKeys.map((k) => (
+           <option key={k} value={k}>
+             {k}
+@@ -982,7 +981,7 @@ const VqaEditorFields: React.FC<{
+   if (atom.role === "user") {
+     return (
+       <div className="field">
+-        <label className="field-label">Question</label>
++        <label className="field-label">问题</label>
+         <input
+           type="text"
+           value={atom.content || ""}
+@@ -995,7 +994,7 @@ const VqaEditorFields: React.FC<{
+   // Assistant atom — answer JSON (raw + structured viewer)
+   return (
+     <div className="field">
+-      <label className="field-label">Answer ({kind || "unknown"})</label>
++      <label className="field-label">答案（{kind || "未知"}）</label>
+       <textarea
+         rows={5}
+         style={{
+diff --git a/src/components/annotations-skin.css b/src/components/annotations-skin.css
+index e0de908..1dc6c63 100644
+--- a/src/components/annotations-skin.css
++++ b/src/components/annotations-skin.css
+@@ -11,21 +11,21 @@
+   /* Brand accents (kept bright; visible on dark) */
+   --hf-yellow: #ffd21e;
+   --hf-orange: #ff9d00;
+-  --hf-blue: #5b8cff;
+-  --hf-cyan: #38bdf8;
+-  --hf-red: #ef5350;
+-  --hf-green: #34d399;
+-  --hf-purple: #b78bff;
++  --hf-blue: #2455eb;
++  --hf-cyan: #2455eb;
++  --hf-red: #c04b59;
++  --hf-green: #258467;
++  --hf-purple: #6b3fbf;
+ 
+-  /* Dark surface scale */
+-  --surface-0: rgba(255, 255, 255, 0.02);
+-  --surface-1: rgba(255, 255, 255, 0.06);
+-  --surface-2: rgba(255, 255, 255, 0.1);
+-  --border-1: rgba(255, 255, 255, 0.12);
+-  --border-2: rgba(255, 255, 255, 0.2);
+-  --fg-1: #f1f5f9;
+-  --fg-2: #cbd5e1;
+-  --fg-3: #94a3b8;
++  /* Light surface scale, aligned with the workbench */
++  --surface-0: #ffffff;
++  --surface-1: #f8f9fb;
++  --surface-2: #f0f2f6;
++  --border-1: #e3e7ee;
++  --border-2: #d6dbe3;
++  --fg-1: #292e36;
++  --fg-2: #4f5866;
++  --fg-3: #8a919d;
+ 
+   --radius-xs: 4px;
+   --radius-sm: 6px;
+@@ -214,7 +214,7 @@
+ }
+ .annotations-skin .jump:hover {
+   background: var(--hf-blue);
+-  color: #0b0e14;
++  color: #ffffff;
+   border-color: var(--hf-blue);
+ }
+ 
+@@ -296,7 +296,7 @@
+   border: 1px solid rgba(251, 146, 60, 0.35);
+   border-radius: 999px;
+   background: rgba(251, 146, 60, 0.12);
+-  color: #fdba74;
++  color: #9a741b;
+   font-size: 10px;
+   font-weight: 700;
+   letter-spacing: 0.04em;
+@@ -404,7 +404,7 @@
+ .annotations-skin .tl-seg.task_aug {
+   background: rgba(56, 189, 248, 0.18);
+   border: 1px solid #38bdf8;
+-  color: #bae6fd;
++  color: #1f4bc4;
+ }
+ .annotations-skin .tl-seg.subtask {
+   background: rgba(255, 210, 30, 0.25);
+@@ -414,12 +414,12 @@
+ .annotations-skin .tl-seg.plan {
+   background: rgba(91, 140, 255, 0.25);
+   border: 1px solid var(--hf-blue);
+-  color: #c7d6ff;
++  color: #2455eb;
+ }
+ .annotations-skin .tl-seg.memory {
+   background: rgba(183, 139, 255, 0.25);
+   border: 1px solid var(--hf-purple);
+-  color: #e3d4ff;
++  color: #6b3fbf;
+ }
+ .annotations-skin .tl-tick {
+   position: absolute;
+@@ -774,7 +774,7 @@
+ }
+ .annotations-skin .quick-add .add-btn {
+   background: var(--hf-blue);
+-  color: #0b0e14;
++  color: #ffffff;
+   border: 1px solid var(--hf-blue);
+   border-radius: var(--radius-sm);
+   padding: 6px 14px;
+diff --git a/src/components/annotations-timeline.tsx b/src/components/annotations-timeline.tsx
+index 8135e30..6cb2659 100644
+--- a/src/components/annotations-timeline.tsx
++++ b/src/components/annotations-timeline.tsx
+@@ -51,7 +51,7 @@ const DRAG_THRESHOLD_PX = 4;
+ const TRACK_GROUPS = [
+   {
+     column: "persistent",
+-    title: "Persistent",
++    title: "持久标注",
+     sub: "language_persistent · broadcast across every frame",
+     tracks: [
+       // task_aug applies to the whole episode (it's a rephrasing of the task,
+@@ -77,7 +77,7 @@ const TRACK_GROUPS = [
+   },
+   {
+     column: "events",
+-    title: "Events",
++    title: "事件",
+     sub: "language_events · fire on a single frame",
+     tracks: [
+       {
+@@ -470,7 +470,7 @@ export const AnnotationsTimeline: React.FC<Props> = ({ duration }) => {
+   return (
+     <div className="tl">
+       <div className="tl-head">
+-        <span>Annotations timeline</span>
++        <span>标注时间轴</span>
+         <span className="ts-display">
+           {currentTime.toFixed(2)}s / {duration.toFixed(2)}s
+         </span>
+@@ -737,7 +737,7 @@ export const AnnotationsTimeline: React.FC<Props> = ({ duration }) => {
+               className="tl-playhead-handle"
+               style={{ left: playheadLeft, top: -6 }}
+               onPointerDown={onPlayheadDown}
+-              title="Drag to scrub"
++              title="拖动定位"
+             />
+           </div>
+         );
+@@ -770,7 +770,7 @@ export const AnnotationsTimeline: React.FC<Props> = ({ duration }) => {
+           </div>
+           <input
+             type="text"
+-            placeholder="label (e.g. grasp the sponge)"
++            placeholder="标签（如 grasp the sponge）"
+             autoFocus
+             value={createLabel}
+             onChange={(e) => setCreateLabel(e.target.value)}
+diff --git a/src/components/data-recharts.tsx b/src/components/data-recharts.tsx
+index 06e37f7..194f4cf 100644
+--- a/src/components/data-recharts.tsx
++++ b/src/components/data-recharts.tsx
+@@ -120,7 +120,7 @@ export const DataRecharts = React.memo(
+                   </>
+                 )}
+               </svg>
+-              {expanded ? "Split charts" : "Combine all"}
++              {expanded ? "分图显示" : "合并显示"}
+             </button>
+           </div>
+         )}
+@@ -431,7 +431,7 @@ const SingleDataGraph = React.memo(
+             >
+               <CartesianGrid
+                 strokeDasharray="3 3"
+-                stroke="#334155"
++                stroke="#e4e8ee"
+                 strokeOpacity={0.6}
+               />
+               <XAxis
+@@ -441,15 +441,15 @@ const SingleDataGraph = React.memo(
+                   chartData.at(-1)?.timestamp ?? 0,
+                 ]}
+                 tickFormatter={(v: number) => `${v.toFixed(1)}s`}
+-                stroke="#64748b"
+-                tick={{ fontSize: 12, fill: "#94a3b8" }}
++                stroke="#c3cad4"
++                tick={{ fontSize: 12, fill: "#6b7280" }}
+                 minTickGap={30}
+                 allowDataOverflow={true}
+               />
+               <YAxis
+                 domain={["auto", "auto"]}
+-                stroke="#64748b"
+-                tick={{ fontSize: 12, fill: "#94a3b8" }}
++                stroke="#c3cad4"
++                tick={{ fontSize: 12, fill: "#6b7280" }}
+                 width={55}
+                 allowDataOverflow={true}
+                 tickFormatter={(v: number) => {
+diff --git a/src/components/filtering-panel.tsx b/src/components/filtering-panel.tsx
+index ad6259b..f68bf64 100644
+--- a/src/components/filtering-panel.tsx
++++ b/src/components/filtering-panel.tsx
+@@ -21,7 +21,7 @@ function FlagBtn({ id }: { id: number }) {
+   return (
+     <button
+       onClick={() => toggle(id)}
+-      title={flagged ? "Unflag episode" : "Flag for review"}
++      title={flagged ? "取消标记" : "标记为待复查"}
+       className={`p-0.5 rounded transition-colors ${flagged ? "text-cyan-300" : "text-slate-600 hover:text-slate-400"}`}
+     >
+       <svg
+@@ -63,7 +63,7 @@ function FlagAllBtn({ ids, label }: { ids: number[]; label?: string }) {
+         <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+         <line x1="4" y1="22" x2="4" y2="15" />
+       </svg>
+-      {label ?? "Flag all"}
++      {label ?? "全部标记"}
+     </button>
+   );
+ }
+@@ -78,14 +78,13 @@ function LowMovementSection({ episodes }: { episodes: LowMovementEpisode[] }) {
+     <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10 space-y-3">
+       <div className="flex items-center justify-between">
+         <h3 className="text-sm font-semibold text-slate-200">
+-          Lowest-Movement Episodes
++          运动量最低的 Episode
+         </h3>
+         <FlagAllBtn ids={episodes.map((e) => e.episodeIndex)} />
+       </div>
+       <p className="text-xs text-slate-400">
+-        Episodes with the lowest average action change per frame. Very low
+-        values may indicate the robot was standing still or the episode was
+-        recorded incorrectly.
++        这里列出每帧动作变化平均值最低的 Episode。数值过低通常意味着机器人
++        几乎没有运动，或者这一段录制存在问题。
+       </p>
+       <div
+         className="grid gap-2"
+@@ -98,7 +97,7 @@ function LowMovementSection({ episodes }: { episodes: LowMovementEpisode[] }) {
+           >
+             <FlagBtn id={ep.episodeIndex} />
+             <span className="text-xs text-slate-300 font-medium shrink-0">
+-              ep {ep.episodeIndex}
++              Episode {ep.episodeIndex}
+             </span>
+             <div className="flex-1 min-w-0">
+               <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+@@ -159,7 +158,7 @@ function EpisodeLengthFilter({ episodes }: { episodes: EpisodeLengthInfo[] }) {
+   return (
+     <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10 space-y-4">
+       <h3 className="text-sm font-semibold text-slate-200">
+-        Episode Length Filter
++        Episode 时长筛选
+       </h3>
+ 
+       <div className="space-y-2">
+@@ -204,15 +203,14 @@ function EpisodeLengthFilter({ episodes }: { episodes: EpisodeLengthInfo[] }) {
+       {rangeChanged && (
+         <div className="flex items-center justify-between">
+           <span className="text-xs text-slate-400">
+-            {outsideIds.length} episode{outsideIds.length !== 1 ? "s" : ""}{" "}
+-            outside range
++            {outsideIds.length} 个 Episode 超出范围
+           </span>
+           {outsideIds.length > 0 && (
+             <button
+               onClick={() => addMany(outsideIds)}
+               className="text-xs bg-cyan-400/15 text-cyan-300 border border-cyan-400/40 rounded px-2 py-1 hover:bg-cyan-400/20 transition-colors"
+             >
+-              Flag {outsideIds.length} outside range
++              标记 {outsideIds.length} 个超范围 Episode
+             </button>
+           )}
+         </div>
+@@ -257,7 +255,7 @@ function FlaggedIdsCopyBar({
+     <div className="bg-[var(--surface-1)]/60 rounded-lg p-4 border border-cyan-400/30 space-y-3">
+       <div className="flex items-center justify-between">
+         <h3 className="text-sm font-semibold text-cyan-300">
+-          Flagged Episodes
++          已标记的 Episode
+           <span className="text-xs text-slate-500 ml-2 font-normal">
+             ({count})
+           </span>
+@@ -266,7 +264,7 @@ function FlaggedIdsCopyBar({
+           <button
+             onClick={handleCopy}
+             className="text-xs text-slate-400 hover:text-slate-200 transition-colors flex items-center gap-1"
+-            title="Copy IDs"
++            title="复制 Episode 编号"
+           >
+             {copied ? (
+               <svg
+@@ -295,13 +293,13 @@ function FlaggedIdsCopyBar({
+                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+               </svg>
+             )}
+-            Copy
++            复制
+           </button>
+           <button
+             onClick={clear}
+             className="text-xs text-slate-500 hover:text-red-400 transition-colors"
+           >
+-            Clear
++            清空
+           </button>
+         </div>
+       </div>
+@@ -327,7 +325,7 @@ function FlaggedIdsCopyBar({
+             <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+             <line x1="4" y1="22" x2="4" y2="15" />
+           </svg>
+-          View flagged episodes
++          查看已标记的 Episode
+         </button>
+       )}
+       <div className="bg-[var(--surface-0)]/60 rounded-md px-3 py-2 border border-white/10/60 space-y-2.5">
+@@ -340,10 +338,10 @@ function FlaggedIdsCopyBar({
+           >
+             LeRobot CLI
+           </a>{" "}
+-          — delete flagged episodes:
++          — 删除已标记的 Episode：
+         </p>
+-        <pre className="text-xs text-slate-300 bg-[var(--bg)]/50 rounded px-2 py-1.5 overflow-x-auto select-all">{`# Delete episodes (modifies original dataset)\nlerobot-edit-dataset \\\n    --repo_id ${repoId} \\\n    --operation.type delete_episodes \\\n    --operation.episode_indices "[${ids.join(", ")}]"`}</pre>
+-        <pre className="text-xs text-slate-300 bg-[var(--bg)]/50 rounded px-2 py-1.5 overflow-x-auto select-all">{`# Delete episodes and save to a new dataset (preserves original)\nlerobot-edit-dataset \\\n    --repo_id ${repoId} \\\n    --new_repo_id ${repoId}_filtered \\\n    --operation.type delete_episodes \\\n    --operation.episode_indices "[${ids.join(", ")}]"`}</pre>
++        <pre className="text-xs text-slate-300 bg-[var(--bg)]/50 rounded px-2 py-1.5 overflow-x-auto select-all">{`# 删除 Episode（会修改原始数据集）\nlerobot-edit-dataset \\\n    --repo_id ${repoId} \\\n    --operation.type delete_episodes \\\n    --operation.episode_indices "[${ids.join(", ")}]"`}</pre>
++        <pre className="text-xs text-slate-300 bg-[var(--bg)]/50 rounded px-2 py-1.5 overflow-x-auto select-all">{`# 删除 Episode 并另存为新数据集（保留原始数据）\nlerobot-edit-dataset \\\n    --repo_id ${repoId} \\\n    --new_repo_id ${repoId}_filtered \\\n    --operation.type delete_episodes \\\n    --operation.episode_indices "[${ids.join(", ")}]"`}</pre>
+       </div>
+     </div>
+   );
+@@ -360,10 +358,10 @@ function FilteringPanel({
+   return (
+     <div className="max-w-5xl mx-auto py-6 space-y-8">
+       <div>
+-        <h2 className="text-xl font-bold text-slate-100">Filtering</h2>
++        <h2 className="text-xl font-bold text-slate-100">筛选与标记</h2>
+         <p className="text-sm text-slate-400 mt-1">
+-          Identify and flag problematic episodes for removal. Flagged episodes
+-          appear in the sidebar and can be exported as a CLI command.
++          找出可能有问题的 Episode 并标记待复查。被标记的 Episode 会出现在左侧
++          列表中，也可以导出成 LeRobot CLI 命令。
+         </p>
+       </div>
+ 
+@@ -398,7 +396,7 @@ function FilteringPanel({
+                 d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+               />
+             </svg>
+-            Loading cross-episode data…
++            正在加载跨 Episode 数据…
+           </div>
+         </div>
+       )}
+diff --git a/src/components/hf-auth-button.tsx b/src/components/hf-auth-button.tsx
+index b80316d..98864f3 100644
+--- a/src/components/hf-auth-button.tsx
++++ b/src/components/hf-auth-button.tsx
+@@ -63,11 +63,11 @@ export default function HfAuthButton({ variant = "badge" }: HfAuthButtonProps) {
+     return (
+       <button
+         onClick={signIn}
+-        title="Sign in to access your private datasets"
++        title="登录后可访问私有数据集"
+         className="cursor-pointer inline-flex items-center h-7 gap-1.5 text-sm tracking-wide text-cyan-300/85 hover:text-cyan-200 transition-colors rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60"
+       >
+         <span aria-hidden>🤗</span>
+-        <span>Sign in for private datasets</span>
++        <span>登录以访问私有数据集</span>
+         <span aria-hidden className="opacity-60">
+           →
+         </span>
+@@ -79,11 +79,11 @@ export default function HfAuthButton({ variant = "badge" }: HfAuthButtonProps) {
+     return (
+       <button
+         onClick={signIn}
+-        title="Sign in to access your private datasets"
++        title="登录后可访问私有数据集"
+         className="cursor-pointer inline-flex items-center h-10 gap-1.5 px-5 text-[11px] font-medium tracking-wide uppercase text-slate-400 hover:text-cyan-300 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60"
+       >
+         <span aria-hidden>🤗</span>
+-        <span>Sign in</span>
++        <span>登录</span>
+       </button>
+     );
+   }
+@@ -91,14 +91,14 @@ export default function HfAuthButton({ variant = "badge" }: HfAuthButtonProps) {
+   return (
+     <button
+       onClick={signIn}
+-      title="Sign in with Hugging Face to access your private datasets"
+-      aria-label="Sign in with Hugging Face to access your private datasets"
++      title="使用 Hugging Face 登录以访问私有数据集"
++      aria-label="使用 Hugging Face 登录以访问私有数据集"
+       className="cursor-pointer inline-flex items-center h-8 rounded-md transition-all duration-150 hover:opacity-90 motion-safe:hover:-translate-y-px focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60"
+     >
+       {/* eslint-disable-next-line @next/next/no-img-element */}
+       <img
+         src={SIGNIN_BADGE_URL}
+-        alt="Sign in with Hugging Face"
++        alt="使用 Hugging Face 登录"
+         height={32}
+         className="h-8 w-auto"
+       />
+diff --git a/src/components/loading-component.tsx b/src/components/loading-component.tsx
+index 18d31d4..2b5842e 100644
+--- a/src/components/loading-component.tsx
++++ b/src/components/loading-component.tsx
+@@ -31,9 +31,9 @@ export default function Loading() {
+         />
+       </svg>
+       <h1 className="text-sm font-medium tracking-wide uppercase text-slate-300">
+-        Loading
++        正在加载
+       </h1>
+-      <p className="text-xs text-slate-500 mt-1">preparing data &amp; videos</p>
++      <p className="text-xs text-slate-500 mt-1">正在准备数据与视频</p>
+     </div>
+   );
+ }
+diff --git a/src/components/overview-panel.tsx b/src/components/overview-panel.tsx
+index 02b1197..a2b7c3d 100644
+--- a/src/components/overview-panel.tsx
++++ b/src/components/overview-panel.tsx
+@@ -81,7 +81,7 @@ function FrameThumbnail({
+               ? "opacity-100 text-cyan-300"
+               : "opacity-0 group-hover:opacity-100 text-slate-400 hover:text-cyan-300"
+           }`}
+-          title={isFlagged ? "Unflag episode" : "Flag episode"}
++          title={isFlagged ? "取消标记该 Episode" : "标记该 Episode"}
+         >
+           <svg
+             xmlns="http://www.w3.org/2000/svg"
+@@ -102,7 +102,7 @@ function FrameThumbnail({
+       <p
+         className={`text-xs mt-1 tabular-nums ${isFlagged ? "text-cyan-300" : "text-slate-400"}`}
+       >
+-        ep {info.episodeIndex}
++        Episode {info.episodeIndex}
+         {isFlagged ? " ⚑" : ""}
+       </p>
+     </div>
+@@ -160,7 +160,7 @@ export default function OverviewPanel({
+             d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+           />
+         </svg>
+-        Loading episode frames…
++        正在加载 Episode 帧…
+       </div>
+     );
+   }
+@@ -175,15 +175,15 @@ export default function OverviewPanel({
+       <div className="text-center py-8 space-y-2">
+         <p className="text-slate-500 italic">
+           {flaggedOnly
+-            ? "No flagged episodes to show."
+-            : "No episode frames available."}
++            ? "没有已标记的 Episode。"
++            : "暂无可用的 Episode 帧。"}
+         </p>
+         {flaggedOnly && onFlaggedOnlyChange && (
+           <button
+             onClick={() => onFlaggedOnlyChange(false)}
+             className="text-xs text-cyan-300 hover:text-cyan-200 underline"
+           >
+-            Show all episodes
++            显示全部 Episode
+           </button>
+         )}
+       </div>
+@@ -196,9 +196,7 @@ export default function OverviewPanel({
+   return (
+     <div className="max-w-7xl mx-auto py-6 space-y-5">
+       <p className="text-sm text-slate-500">
+-        Use first/last frame views to spot episodes with bad end states or other
+-        anomalies. Hover over a thumbnail and click the flag icon to mark
+-        episodes with wrong outcomes for review.
++        用首帧 / 末帧视图快速发现结束状态异常或其他问题的 Episode。将鼠标悬停在缩略图上，点击旗标即可标记需要复查的 Episode。
+       </p>
+ 
+       {/* Controls row */}
+@@ -246,7 +244,7 @@ export default function OverviewPanel({
+                 <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+                 <line x1="4" y1="22" x2="4" y2="15" />
+               </svg>
+-              Flagged only ({flagCount})
++              仅看已标记（{flagCount}）
+             </button>
+           )}
+ 
+@@ -255,12 +253,12 @@ export default function OverviewPanel({
+             <span
+               className={`text-sm ${!showLast ? "text-slate-100 font-medium" : "text-slate-500"}`}
+             >
+-              First Frame
++              首帧
+             </span>
+             <button
+               onClick={() => setShowLast((v) => !v)}
+               className={`relative inline-flex items-center w-9 h-5 rounded-full transition-colors shrink-0 ${showLast ? "bg-cyan-500" : "bg-white/10"}`}
+-              aria-label="Toggle first/last frame"
++              aria-label="切换首帧与末帧"
+             >
+               <span
+                 className={`inline-block w-3.5 h-3.5 bg-white rounded-full transition-transform ${showLast ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+@@ -269,7 +267,7 @@ export default function OverviewPanel({
+             <span
+               className={`text-sm ${showLast ? "text-slate-100 font-medium" : "text-slate-500"}`}
+             >
+-              Last Frame
++              末帧
+             </span>
+           </div>
+         </div>
+@@ -282,7 +280,7 @@ export default function OverviewPanel({
+               onClick={() => setPage((p) => p - 1)}
+               className="px-2 py-1 rounded bg-[var(--surface-1)] hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed"
+             >
+-              ← Prev
++              ← 上一页
+             </button>
+             <span className="tabular-nums">
+               {page + 1} / {totalPages}
+@@ -292,7 +290,7 @@ export default function OverviewPanel({
+               onClick={() => setPage((p) => p + 1)}
+               className="px-2 py-1 rounded bg-[var(--surface-1)] hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed"
+             >
+-              Next →
++              下一页 →
+             </button>
+           </div>
+         )}
+diff --git a/src/components/playback-bar.tsx b/src/components/playback-bar.tsx
+index 1bffd57..bf9bb3a 100644
+--- a/src/components/playback-bar.tsx
++++ b/src/components/playback-bar.tsx
+@@ -52,7 +52,7 @@ const PlaybackBar: React.FC = () => {
+   return (
+     <div className="sticky bottom-0 mt-auto w-full max-w-4xl mx-auto flex items-center gap-3 panel-raised bg-[var(--surface-0)]/90 backdrop-blur px-3 py-2">
+       <button
+-        title="Jump backward 5 seconds"
++        title="后退 5 秒"
+         onClick={() => seek(Math.max(0, currentTime - 5))}
+         className="hidden md:flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:text-slate-100 hover:bg-white/5 transition-colors"
+       >
+@@ -61,21 +61,21 @@ const PlaybackBar: React.FC = () => {
+       <button
+         className="flex h-9 w-9 items-center justify-center rounded-md bg-cyan-400/10 border border-cyan-400/30 text-cyan-300 hover:bg-cyan-400/15 transition-colors"
+         title={
+-          isPlaying ? "Pause. Toggle with Space" : "Play. Toggle with Space"
++          isPlaying ? "暂停（空格键切换）" : "播放（空格键切换）"
+         }
+         onClick={() => setIsPlaying(!isPlaying)}
+       >
+         {isPlaying ? <FaPause size={14} /> : <FaPlay size={14} />}
+       </button>
+       <button
+-        title="Jump forward 5 seconds"
++        title="前进 5 秒"
+         onClick={() => seek(Math.min(duration, currentTime + 5))}
+         className="hidden md:flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:text-slate-100 hover:bg-white/5 transition-colors"
+       >
+         <FaForward size={14} />
+       </button>
+       <button
+-        title="Rewind from start"
++        title="回到开头"
+         onClick={() => seek(0)}
+         className="hidden md:flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:text-slate-100 hover:bg-white/5 transition-colors"
+       >
+@@ -93,7 +93,7 @@ const PlaybackBar: React.FC = () => {
+         onTouchStart={handleSliderMouseDown}
+         onTouchEnd={handleSliderMouseUp}
+         className="flex-1 mx-1 h-1 accent-cyan-400 cursor-pointer focus:outline-none focus:ring-0"
+-        aria-label="Seek video"
++        aria-label="定位视频"
+       />
+       <span className="w-16 text-right tabular text-[11px] text-slate-400 shrink-0">
+         {Math.floor(sliderValue)} / {Math.floor(duration)}
+@@ -104,14 +104,14 @@ const PlaybackBar: React.FC = () => {
+           <kbd className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-slate-300 text-[10px]">
+             Space
+           </kbd>
+-          <span>pause/unpause</span>
++          <span>播放 / 暂停</span>
+         </p>
+         <p className="inline-flex items-center gap-1.5">
+           <span className="inline-flex items-center gap-0.5 text-slate-300">
+             <FaArrowUp size={10} />
+             <FaArrowDown size={10} />
+           </span>
+-          <span>prev/next episode</span>
++          <span>上一个 / 下一个 Episode</span>
+         </p>
+       </div>
+     </div>
+diff --git a/src/components/side-nav.tsx b/src/components/side-nav.tsx
+index a20e724..1e27d6a 100644
+--- a/src/components/side-nav.tsx
++++ b/src/components/side-nav.tsx
+@@ -45,17 +45,17 @@ const Sidebar: React.FC<SidebarProps> = ({
+         className={`shrink-0 overflow-y-auto bg-[var(--surface-0)] border-r border-white/5 p-4 break-words w-60 ${
+           mobileVisible ? "block" : "hidden"
+         } md:block`}
+-        aria-label="Sidebar navigation"
++        aria-label="数据集导航"
+       >
+         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-slate-400 tabular">
+           <dt className="uppercase tracking-wide text-[10px] text-slate-500">
+-            Frames
++            帧数
+           </dt>
+           <dd className="text-slate-200">
+             {datasetInfo.total_frames.toLocaleString()}
+           </dd>
+           <dt className="uppercase tracking-wide text-[10px] text-slate-500">
+-            Episodes
++            Episode 数
+           </dt>
+           <dd className="text-slate-200">
+             {datasetInfo.total_episodes.toLocaleString()}
+@@ -68,7 +68,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+ 
+         <div className="mt-5 flex items-center justify-between">
+           <p className="text-[10px] uppercase tracking-wide text-slate-500">
+-            Episodes
++            Episode 列表
+           </p>
+           {count > 0 && (
+             <button
+@@ -79,7 +79,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+                   : "text-slate-500 hover:text-slate-300 border border-white/10"
+               }`}
+             >
+-              Flagged · {count}
++              已标记 · {count}
+             </button>
+           )}
+         </div>
+@@ -109,7 +109,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+                           ? "text-orange-400 hover:text-orange-300"
+                           : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
+                       }`}
+-                      title={flagged.has(episode) ? "Unflag" : "Flag"}
++                      title={flagged.has(episode) ? "取消标记" : "标记"}
+                     >
+                       ⚑
+                     </button>
+@@ -129,7 +129,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+                           ? "text-orange-400 hover:text-orange-300"
+                           : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
+                       }`}
+-                      title={flagged.has(episode) ? "Unflag" : "Flag"}
++                      title={flagged.has(episode) ? "取消标记" : "标记"}
+                     >
+                       ⚑
+                     </button>
+@@ -149,7 +149,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+               }`}
+               disabled={currentPage === 1}
+             >
+-              ‹ Prev
++              ‹ 上一页
+             </button>
+             <span className="tabular text-slate-500">
+               {currentPage} / {totalPages}
+@@ -163,7 +163,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+               }`}
+               disabled={currentPage === totalPages}
+             >
+-              Next ›
++              下一页 ›
+             </button>
+           </div>
+         )}
+@@ -172,7 +172,7 @@ const Sidebar: React.FC<SidebarProps> = ({
+       <button
+         className="mx-1 flex items-center opacity-50 hover:opacity-100 focus:outline-none focus:ring-0 md:hidden"
+         onClick={() => setMobileVisible((prev) => !prev)}
+-        title="Toggle sidebar"
++        title="展开或收起侧边栏"
+       >
+         <div className="h-10 w-1 rounded-full bg-white/20" />
+       </button>
+diff --git a/src/components/simple-videos-player.tsx b/src/components/simple-videos-player.tsx
+index b23956d..43396cd 100644
+--- a/src/components/simple-videos-player.tsx
++++ b/src/components/simple-videos-player.tsx
+@@ -316,12 +316,12 @@ export const SimpleVideosPlayer = ({
+             className="inline-flex items-center gap-2 h-8 rounded-md panel px-3 text-xs text-slate-300 hover:text-slate-100 hover:bg-white/5 transition-colors"
+             onClick={() => setShowHiddenMenu(!showHiddenMenu)}
+           >
+-            <FaEye size={11} /> Show hidden · {hiddenVideos.length}
++            <FaEye size={11} /> 显示已隐藏 · {hiddenVideos.length}
+           </button>
+           {showHiddenMenu && (
+             <div className="absolute left-0 mt-1.5 w-max panel-raised bg-[var(--surface-1)] shadow-xl p-1.5 z-50">
+               <div className="mb-1 px-2 text-[10px] uppercase tracking-wide text-slate-500">
+-                Restore hidden videos
++                恢复隐藏的视频
+               </div>
+               {hiddenVideos.map((filename) => (
+                 <button
+@@ -361,7 +361,7 @@ export const SimpleVideosPlayer = ({
+                 <span className="truncate">{info.filename}</span>
+                 <span className="flex gap-0.5 shrink-0">
+                   <button
+-                    title={isEnlarged ? "Minimize" : "Enlarge"}
++                    title={isEnlarged ? "还原" : "放大"}
+                     className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+                     onClick={() =>
+                       setEnlargedVideo(isEnlarged ? null : info.filename)
+@@ -374,7 +374,7 @@ export const SimpleVideosPlayer = ({
+                     )}
+                   </button>
+                   <button
+-                    title="Hide Video"
++                    title="隐藏视频"
+                     className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                     onClick={() => {
+                       setHiddenVideos((prev) => [...prev, info.filename]);
+@@ -407,7 +407,7 @@ export const SimpleVideosPlayer = ({
+                   crossOrigin="anonymous"
+                 >
+                   <source src={proxyHfUrl(info.url)} type="video/mp4" />
+-                  Your browser does not support the video tag.
++                  当前浏览器不支持视频播放。
+                 </video>
+                 {/* Grayscale feeds: the hidden <video> above still decodes and
+                     drives timing; this canvas paints its frames recolored with
+diff --git a/src/components/stats-panel.tsx b/src/components/stats-panel.tsx
+index 7a56f54..a01cdee 100644
+--- a/src/components/stats-panel.tsx
++++ b/src/components/stats-panel.tsx
+@@ -48,7 +48,7 @@ function EpisodeLengthHistogram({
+         width={svgWidth}
+         height={topPad + chartHeight + labelHeight}
+         className="block"
+-        aria-label="Episode length distribution histogram"
++        aria-label="Episode 时长分布直方图"
+       >
+         {data.map((bin, i) => {
+           const barH = Math.max(1, (bin.count / maxCount) * chartHeight);
+@@ -56,7 +56,7 @@ function EpisodeLengthHistogram({
+           const y = topPad + chartHeight - barH;
+           return (
+             <g key={i}>
+-              <title>{`${bin.binLabel}: ${bin.count} episode${bin.count !== 1 ? "s" : ""}`}</title>
++              <title>{`${bin.binLabel}: ${bin.count} 个 Episode`}</title>
+               <rect
+                 x={x}
+                 y={y}
+@@ -122,7 +122,7 @@ function StatsPanel({
+     <div className="max-w-4xl mx-auto py-6 space-y-8">
+       <div>
+         <h2 className="text-xl text-slate-100">
+-          <span className="font-bold">Dataset Statistics:</span>{" "}
++          <span className="font-bold">数据集统计：</span>{" "}
+           <span className="font-normal text-slate-400">
+             {datasetInfo.repoId}
+           </span>
+@@ -131,23 +131,23 @@ function StatsPanel({
+ 
+       {/* Overview cards */}
+       <div className="grid grid-cols-3 gap-4">
+-        <Card label="Robot Type" value={datasetInfo.robot_type ?? "unknown"} />
+-        <Card label="Dataset Version" value={datasetInfo.codebase_version} />
+-        <Card label="Tasks" value={datasetInfo.total_tasks} />
++        <Card label="机器人类型" value={datasetInfo.robot_type ?? "unknown"} />
++        <Card label="数据集版本" value={datasetInfo.codebase_version} />
++        <Card label="任务数" value={datasetInfo.total_tasks} />
+       </div>
+ 
+       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+         <Card
+-          label="Total Frames"
++          label="总帧数"
+           value={datasetInfo.total_frames.toLocaleString()}
+         />
+         <Card
+-          label="Total Episodes"
++          label="Episode 总数"
+           value={datasetInfo.total_episodes.toLocaleString()}
+         />
+-        <Card label="FPS" value={datasetInfo.fps} />
++        <Card label="帧率" value={datasetInfo.fps} />
+         <Card
+-          label="Total Recording Time"
++          label="总时长"
+           value={formatTotalTime(datasetInfo.total_frames, datasetInfo.fps)}
+         />
+       </div>
+@@ -156,7 +156,7 @@ function StatsPanel({
+       {datasetInfo.cameras.length > 0 && (
+         <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10">
+           <h3 className="text-sm font-semibold text-slate-200 mb-3">
+-            Camera Resolutions
++            相机分辨率
+           </h3>
+           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+             {datasetInfo.cameras.map((cam: CameraInfo) => (
+@@ -197,7 +197,7 @@ function StatsPanel({
+               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+             />
+           </svg>
+-          Computing episode statistics…
++          正在计算 Episode 统计…
+         </div>
+       )}
+ 
+@@ -206,27 +206,27 @@ function StatsPanel({
+         <>
+           <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10">
+             <h3 className="text-sm font-semibold text-slate-200 mb-4">
+-              Episode Lengths
++              Episode 时长
+             </h3>
+             <div className="grid grid-cols-3 md:grid-cols-5 gap-4 mb-4">
+               <Card
+-                label="Shortest"
++                label="最短"
+                 value={`${els.shortestEpisodes[0]?.lengthSeconds ?? "–"}s`}
+               />
+               <Card
+-                label="Longest"
++                label="最长"
+                 value={`${els.longestEpisodes[els.longestEpisodes.length - 1]?.lengthSeconds ?? "–"}s`}
+               />
+-              <Card label="Mean" value={`${els.meanEpisodeLength}s`} />
+-              <Card label="Median" value={`${els.medianEpisodeLength}s`} />
+-              <Card label="Std Dev" value={`${els.stdEpisodeLength}s`} />
++              <Card label="平均" value={`${els.meanEpisodeLength}s`} />
++              <Card label="中位数" value={`${els.medianEpisodeLength}s`} />
++              <Card label="标准差" value={`${els.stdEpisodeLength}s`} />
+             </div>
+           </div>
+ 
+           {els.episodeLengthHistogram.length > 0 && (
+             <div className="bg-[var(--surface-1)]/60 rounded-lg p-5 border border-white/10">
+               <h3 className="text-sm font-semibold text-slate-200 mb-4">
+-                Episode Length Distribution
++                Episode 时长分布
+                 <span className="text-xs text-slate-500 ml-2 font-normal">
+                   {els.episodeLengthHistogram.length} bin
+                   {els.episodeLengthHistogram.length !== 1 ? "s" : ""}
+diff --git a/src/components/urdf-viewer.tsx b/src/components/urdf-viewer.tsx
+index fe2dace..3f8da58 100644
+--- a/src/components/urdf-viewer.tsx
++++ b/src/components/urdf-viewer.tsx
+@@ -630,7 +630,7 @@ function RobotScene({
+   if (error)
+     return (
+       <Html center>
+-        <span className="text-red-400">Failed to load URDF</span>
++        <span className="text-red-400">URDF 模型加载失败</span>
+       </Html>
+     );
+   return null;
+@@ -919,7 +919,7 @@ export default function URDFViewer({
+   if (data.flatChartData.length === 0) {
+     return (
+       <div className="text-slate-400 p-8 text-center">
+-        No trajectory data available.
++        没有可用的轨迹数据。
+       </div>
+     );
+   }
+@@ -930,10 +930,10 @@ export default function URDFViewer({
+       <div className="flex-1 min-h-0 bg-[var(--surface-0)] rounded-lg overflow-hidden border border-white/10 relative">
+         {(episodeLoading || urdfLoading) && (
+           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)]/80">
+-            <span className="text-white text-lg animate-pulse">
++            <span className="text-slate-100 text-lg animate-pulse">
+               {urdfLoading
+-                ? "Loading 3D model…"
+-                : `Loading episode ${selectedEpisode}…`}
++                ? "正在加载 3D 模型…"
++                : `正在加载 Episode ${selectedEpisode}…`}
+             </span>
+           </div>
+         )}
+@@ -1053,14 +1053,14 @@ export default function URDFViewer({
+           Joint Mapping
+           <span className="text-slate-600">
+             ({Object.keys(mapping).filter((k) => mapping[k]).length}/
+-            {displayJointNames.length} mapped)
++            {displayJointNames.length} 个已映射）
+           </span>
+         </button>
+ 
+         {showMapping && (
+           <div className="flex gap-4 items-start">
+             <div className="space-y-1 shrink-0">
+-              <label className="text-xs text-slate-400">Data source</label>
++              <label className="text-xs text-slate-400">数据来源</label>
+               <div className="flex gap-1 flex-wrap">
+                 {groupNames.map((name) => (
+                   <button
+@@ -1068,7 +1068,7 @@ export default function URDFViewer({
+                     onClick={() => setSelectedGroup(name)}
+                     className={`px-2 py-1 text-xs rounded transition-colors ${
+                       selectedGroup === name
+-                        ? "bg-cyan-500 text-white"
++                        ? "bg-cyan-500 text-[var(--on-accent)]"
+                         : "bg-white/5 text-slate-300 hover:bg-white/5"
+                     }`}
+                   >
+@@ -1082,12 +1082,12 @@ export default function URDFViewer({
+               <table className="w-full text-xs">
+                 <thead className="sticky top-0 bg-[var(--surface-1)]">
+                   <tr className="text-slate-500">
+-                    <th className="text-left font-normal px-1">URDF Joint</th>
++                    <th className="text-left font-normal px-1">URDF 关节</th>
+                     <th className="text-left font-normal px-1">→</th>
+                     <th className="text-left font-normal px-1">
+-                      Dataset Column
++                      数据集列
+                     </th>
+-                    <th className="text-right font-normal px-1">Value</th>
++                    <th className="text-right font-normal px-1">取值</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+diff --git a/src/components/video-overlay-canvas.tsx b/src/components/video-overlay-canvas.tsx
+index 49cfdea..fb12f52 100644
+--- a/src/components/video-overlay-canvas.tsx
++++ b/src/components/video-overlay-canvas.tsx
+@@ -765,15 +765,15 @@ const QuickLabelPopup: React.FC<{
+           }
+           style={{ marginLeft: "auto" }}
+         >
+-          <option value="detect">where is …?</option>
+-          <option value="point">point to …</option>
++          <option value="detect">…… 在哪里？</option>
++          <option value="point">指向 ……</option>
+         </select>
+       </div>
+       <input
+         ref={inputRef}
+         type="text"
+         placeholder={
+-          kind === "bbox" ? "label (e.g. carrot)" : "label (e.g. handle)"
++          kind === "bbox" ? "标签（如 carrot）" : "标签（如 handle）"
+         }
+         value={label}
+         onChange={(e) => onLabelChange(e.target.value)}
+@@ -784,14 +784,14 @@ const QuickLabelPopup: React.FC<{
+       />
+       <div className="quick-popup-actions">
+         <button onClick={onCancel} className="popup-btn">
+-          cancel
++          取消
+         </button>
+         <button
+           onClick={onSubmit}
+           disabled={!label.trim()}
+           className="popup-btn primary"
+         >
+-          add ↵
++          添加 ↵
+         </button>
+       </div>
+     </div>
+diff --git a/src/utils/versionUtils.ts b/src/utils/versionUtils.ts
+index a39c7d3..0e24388 100644
+--- a/src/utils/versionUtils.ts
++++ b/src/utils/versionUtils.ts
+@@ -97,7 +97,7 @@ export async function getDatasetInfo(repoId: string): Promise<DatasetInfo> {
+ 
+     if (!data.features) {
+       throw new Error(
+-        "Dataset info.json does not have the expected features structure",
++        "数据集 info.json 的 features 结构不符合预期",
+       );
+     }
+ 
+@@ -113,7 +113,7 @@ export async function getDatasetInfo(repoId: string): Promise<DatasetInfo> {
+     }
+     throw new Error(
+       `Dataset ${repoId} is not compatible with this visualizer. ` +
+-        "Failed to read dataset information from the main revision.",
++        "无法从 main 分支读取数据集信息。",
+     );
+   }
+ }
+@@ -171,13 +171,12 @@ export async function getDatasetVersionAndInfo(
+   const info = await getDatasetInfo(repoId);
+   const version = info.codebase_version;
+   if (!version) {
+-    throw new Error("Dataset info.json does not contain codebase_version");
++    throw new Error("数据集 info.json 缺少 codebase_version");
+   }
+   if (!SUPPORTED_VERSIONS.includes(version)) {
+     throw new Error(
+       `Dataset ${repoId} has codebase version ${version}, which is not supported. ` +
+-        "This tool only works with dataset versions 3.0, 2.1, or 2.0. " +
+-        "Please use a compatible dataset version.",
++        "当前工具只支持 3.0、2.1 或 2.0 版本的数据集，请使用兼容版本。",
+     );
+   }
+   return { version, info };

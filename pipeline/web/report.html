@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>数据质检报告 · BodyPipeline</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+    <link rel="stylesheet" href="/assets/report.css" />
+    <script src="/assets/report.js" defer></script>
+  </head>
+  <body class="report-page">
+    <header class="topbar">
+      <div class="topbar-left">
+        <a class="brand" href="/" aria-label="BodyPipeline 首页"
+          ><span class="brand-icon">B</span> BodyPipeline</a
+        >
+        <span class="product-label">数据质检报告</span>
+      </div>
+      <div class="header-right">
+        <a class="text-button" href="/">返回工作台</a>
+        <button id="logout" class="text-button" type="button">退出登录</button>
+      </div>
+    </header>
+
+    <main class="report-main">
+      <section id="login-view" class="panel report-login" hidden>
+        <h1>查看质检报告</h1>
+        <p class="muted small">报告页与工作台使用同一个服务访问密钥，通过 HttpOnly Cookie 鉴权。</p>
+        <form id="login-form">
+          <label for="token">服务访问密钥</label>
+          <input
+            id="token"
+            type="password"
+            required
+            autocomplete="off"
+            placeholder="输入管理员配置的访问密钥"
+          />
+          <button class="primary" type="submit">登录并查看报告</button>
+        </form>
+        <p id="login-error" role="alert"></p>
+      </section>
+
+      <div id="report-view" hidden>
+        <div class="page-title report-title">
+          <div>
+            <p class="eyebrow">LEROBOT DOCTOR · QUALITY REPORT</p>
+            <h1 id="report-heading">数据质检报告</h1>
+            <p class="muted" id="report-subtitle">读取 Server 上保存的 Doctor 报告，不修改数据集。</p>
+          </div>
+          <div class="action-row">
+            <button class="secondary" id="refresh" type="button">刷新</button>
+            <button class="secondary" id="export" type="button">导出 JSON</button>
+          </div>
+        </div>
+
+        <div id="notice" role="status" hidden></div>
+
+        <section id="job-picker" class="panel" hidden>
+          <div class="panel-heading">
+            <h2>选择要查看的转换任务</h2>
+            <span class="step">CONVERTED DATASETS</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>数据集 / 任务</th>
+                  <th>机器人类型</th>
+                  <th>目标格式</th>
+                  <th>质检结论</th>
+                  <th>任务状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="job-picker-list"></tbody>
+            </table>
+          </div>
+          <p class="panel-note small muted" id="job-picker-empty" hidden>
+            当前没有转换任务。请先在 Server 工作台完成一次批量转换。
+          </p>
+        </section>
+
+        <div id="report-content"></div>
+      </div>
+    </main>
+  </body>
+</html>

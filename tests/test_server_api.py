@@ -110,3 +110,33 @@ def test_symlink_file_prefix_and_quota(settings_factory, tmp_path):
     (i.root(r) / "data/episode0").symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(DomainError):
         i.chunk(r["id"], 0, 0, hashlib.sha256(data).hexdigest(), data)
+
+
+def test_report_page_is_public_but_data_requires_login(settings_factory):
+    s = settings_factory("server")
+    with TestClient(create_app(s, background=False)) as http:
+        for path in ("/report", "/report/some-job-id"):
+            page = http.get(path)
+            assert page.status_code == 200
+            assert "数据质检报告" in page.text
+        assert http.get("/assets/report.js").status_code == 200
+        assert http.get("/assets/report.css").status_code == 200
+        assert http.get("/api/jobs").status_code == 401
+        assert (
+            http.get("/api/jobs", headers={"Authorization": "Bearer " + s.token})
+        ).status_code == 200
+
+
+def test_report_page_is_server_only():
+    from fastapi import FastAPI
+
+    from pipeline.shared.core import DomainError
+    from pipeline.shared.web import mount_ui
+
+    app = FastAPI()
+    mount_ui(app)
+    with TestClient(app) as http:
+        assert http.get("/report").status_code == 404
+        with pytest.raises(DomainError):
+            http.get("/assets/report.js")
+        assert http.get("/assets/app.js").status_code == 200

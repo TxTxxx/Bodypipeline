@@ -142,18 +142,18 @@ WARN / FAIL 不会删除结果目录，仍可在 Server 中预览和查看报告
 
 ### 3.5 Visualizer
 
-Server 启动：
+BodyPipeline 不再为每个数据集执行 `letools visualizer serve`（它把应用绑定到单个数据集，
+导致同一时间只能预览一个）。Server 改为：
 
 ```bash
-<letools_bin> visualizer serve <dataset> \
-  --host 127.0.0.1 \
-  --port 3100 \
-  --data-port 8765 \
-  --public-data-url <viewer_origin>/_data \
-  --no-annotations \
-  --production \
-  --cache-dir <server_root>/viewer-cache
+<letools_bin> visualizer setup --cache-dir <server_root>/viewer-cache   # 准备固定版本源码并应用补丁
+bun run build   # DATASET_URL=<viewer_origin>/_data，仅在输入变化时构建
+bun run start --hostname 127.0.0.1 --port <viewer_ui_port>
 ```
+
+Visualizer 由 `pipeline/server/viewer_bootstrap.py` 启动并常驻；网关用
+`<viewer_origin>/_data/bp/<job_id>/resolve/main/...` 这一与 Hugging Face 相同的 URL 形态
+按数据集提供文件，并在 `/_data/doctor/?dataset=bp/<job_id>` 提供 Doctor 报告。
 
 要求：
 
@@ -161,9 +161,50 @@ Server 启动：
 - UI 和数据桥只监听 loopback；
 - Viewer Gateway 代理 UI、数据 API 和视频 Range；
 - 只读、关闭 annotation 后端；
-- 每次只允许一个活动数据集；
-- 默认 30 分钟过期；
-- Viewer 入口不鉴权，部署时必须限制网络访问。
+- 可同时登记多个数据集，各自独立；
+- 预览链接默认 30 分钟过期；
+- Viewer 入口与 Server 共用 `PIPELINE_TOKEN`，未登录返回登录页；仍应只监听内网或 Tailscale 地址。
+
+### 3.6 中文界面与浅色主题补丁
+
+上游 Visualizer 是英文深色界面。BodyPipeline 通过 letools 的集成补丁机制，在准备 Visualizer
+源码时叠加一个中文化与主题补丁，不修改上游子模块：
+
+```text
+patches/letools-visualizer/0002-zh-cn-light-theme.patch
+```
+
+安装（在已执行过 `scripts/install_letools.sh` 的机器上）：
+
+```bash
+bash scripts/install_visualizer_zh_patch.sh
+```
+
+脚本会用 letools 自身的解析逻辑找到补丁目录，并把补丁复制进去，因此同时支持
+`git` checkout 与打包安装两种 letools 布局。补丁集合会进入 Visualizer 源码指纹，
+下一次打开预览时会自动重建缓存并重新 `bun install`。
+
+补丁内容：
+
+| 范围 | 变化 |
+| --- | --- |
+| 文案 | 标签页、侧边栏、统计、动作分析、筛选、帧预览、标注、Doctor、错误与提示全部中文 |
+| 主题 | 深色改为 BodyPipeline 浅色：`#f7f8fa` 背景、白色面板、`#2455eb` 主色、相同圆角与字体 |
+| 调色板 | 通过 `@theme` 重映射 slate / cyan / 红绿黄，避免逐个组件改写 className |
+| 图表 | Recharts 网格、坐标轴、Tooltip 改为浅色，原有数据配色保留 |
+| 标注 | `annotations-skin.css` 表面与前景色改为浅色 |
+| 首页 | 去掉全屏视频背景，改为与工作台一致的浅色封面 |
+| Doctor | letools 渲染的 Doctor HTML 由 Viewer Gateway 注入浅色覆盖样式 |
+
+边界：
+
+- 这是展示层补丁，不改变 Doctor 检查项、数据读取、转换或任何质量判定；
+- 上游业务逻辑与组件结构不变，升级 letools 时需要重新核对补丁是否仍能干净应用；
+- 报告中 Doctor 的逐条明细仍保留英文原文，便于与上游工具对照；
+- `--no-annotations` 仍然生效，标注页只做本地会话内编辑，不写回数据集；
+- Doctor 标签页里的报告由 letools 以硬编码深色样式渲染，因此宿主在
+  `pipeline/server/viewer.py` 的 Viewer Gateway 中给 `/_data/doctor` 注入一份浅色覆盖样式，
+  不 fork 固定版本工具链。该路由只在 Viewer 进程内生效，改动后需重启 `bodypipeline-viewer`。
 
 ## 4. 与上游协作
 
@@ -193,6 +234,7 @@ Server 启动：
 - 重新运行 v2.1 / v3.0 转换、deep validate、Doctor 和 Visualizer；
 - 比较 Doctor schema 和必需检查项；
 - 用至少一个 AgileX 原始 episode 做完整回归；
-- 记录未兼容的旧数据集和报告。
+- 记录未兼容的旧数据集和报告；
+- 重新应用 `patches/letools-visualizer/0002-zh-cn-light-theme.patch`，确认它仍能干净应用。
 
 不要在运行中的任务上替换工具环境；先排空任务、停止 Server，再同步依赖。

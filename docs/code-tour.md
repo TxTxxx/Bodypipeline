@@ -202,7 +202,9 @@ pipeline/server/
 | `datasets.py` | 从任务记录解析可预览数据集和格式 |
 | `checks.py` | 独立质检任务、deep validate / Doctor 编排 |
 | `quality.py` | Profile 阻断项、11 项 Doctor schema 与安全策略 |
-| `viewer.py` | 单实例 Visualizer 生命周期和只读网关 |
+| `viewer.py` | 常驻 Visualizer 生命周期、预览登记与只读网关 |
+| `viewer_data.py` | 按数据集提供 `resolve/main` 文件（Range、路径约束）与预览登记表 |
+| `viewer_bootstrap.py` | 准备固定版本 Visualizer 源码、按数据源地址构建并启动 |
 
 ### 4.1 上传接收
 
@@ -329,13 +331,20 @@ Viewer Gateway 不安装登录鉴权。无活动会话时返回 503，不会重�
 pipeline/web/
 ├── index.html
 ├── app.js
-└── style.css
+├── style.css
+├── report.html               # Server 独立质检报告页
+├── report.js
+└── report.css
 ```
 
 页面由 Client / Server 共用，根据 `/api/config` 的 `role` 切换布局：
 
 - Client：相机预览、数据集、存储根、远端目标、采集按钮和上传状态；
 - Server：原始数据、数据转化、预览与质检三个侧边栏工作区。
+
+Server 额外挂载 `/report` 与 `/report/<job_id>` 独立报告页（`pipeline/shared/web.py` 的
+`mount_ui(app, report=True)`），只读消费 `/api/jobs`、`/api/jobs/{id}/checks` 和日志接口。
+Client 不挂载该页面。
 
 页面不需要接口文档，也不保存管理密钥到 localStorage。请求通过 HttpOnly Cookie 进行管理鉴权。
 
