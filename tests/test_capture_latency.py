@@ -79,6 +79,10 @@ def test_sealing_recovers_and_corruption_never_uploads(settings_factory):
     assert invalid["state"] == "REVIEW"
     assert invalid["upload_state"] == "NONE"
     assert invalid["error"]
+    # A seal failure must latch the fault: no re-keep, only discard.
+    assert invalid["capture_failed"] is True
+    with pytest.raises(DomainError):
+        restarted.request_keep(second["id"])
 
 
 def test_http_start_keep_status_and_preview(settings_factory):

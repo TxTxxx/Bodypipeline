@@ -136,6 +136,9 @@ summary { cursor: pointer; }
 pre { font: 11px/1.7 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid #e8ebf1; background: #f8f9fb; padding: 16px; border-radius: 5px; max-height: 440px; overflow: auto; }
 #notice { font-size: 12px; border: 1px solid #d9e5ff; background: #edf3ff; color: #41618f; border-radius: 5px; padding: 12px 16px; margin-bottom: 18px; overflow-wrap: anywhere; }
 #notice.error { background: #fff0f0; color: #b4404c; border-color: #f4d9dc; }
+.preview-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }
+.preview-list li { display: flex; align-items: center; gap: 10px; }
+.preview-list li span { color: #3b434f; }
 #login-error, .job-error { color: #bd4955; font-size: 12px; overflow-wrap: anywhere; }
 footer { display: flex; justify-content: space-between; gap: 16px; color: #9aa2ae; font-size: 10px; padding: 4px 0 18px; }
 /* Client workspace shares the same visual language. */

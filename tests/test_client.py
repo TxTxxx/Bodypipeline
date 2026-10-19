@@ -134,3 +134,36 @@ def test_health_fault_cannot_be_sealed_after_stop(settings_factory):
         service.keep(row["id"])
     # A subsequent ordinary stop does not erase the latched failure.
     assert service.stop(row["id"])["capture_failed"]
+
+
+def test_recover_latches_legacy_seal_failure(settings_factory):
+    settings = settings_factory()
+    service = CaptureService(settings)
+    legacy = service.create(request())
+    # Shape written by older builds: seal ran and failed, no fault flag set.
+    legacy.update(
+        state="REVIEW",
+        error="采集流为空",
+        seal_requested_at=time.time(),
+        seal_started_at=time.time(),
+        seal_duration_ms=12.0,
+    )
+    service.save(legacy)
+    recorder_error = service.create(request("test-key-002"))
+    recorder_error.update(state="REVIEW", error="recorder 报告错误")
+    service.save(recorder_error)
+
+    restarted = CaptureService(settings)
+    restarted.recover()
+    failed = restarted.store.get("capture", legacy["id"])
+    assert failed["capture_failed"] is True
+    assert failed["seal_failed"] is True
+    assert not restarted.store.get("capture", recorder_error["id"]).get(
+        "capture_failed"
+    )
+    with pytest.raises(DomainError):
+        restarted.request_keep(legacy["id"])
+    # Re-running recovery is idempotent and keeps the original error text.
+    restarted.recover()
+    again = restarted.store.get("capture", legacy["id"])
+    assert again["seal_failed"] is True and again["error"] == "采集流为空"

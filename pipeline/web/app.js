@@ -8,6 +8,7 @@ const esc = (v) =>
         x
       ],
   );
+const sessionCaptures = new Set();
 let config = null,
   captures = [],
   timer = null,
@@ -83,13 +84,27 @@ const bytes = (n) =>
 const badge = (s) =>
   `<span class="badge ${["FAILED", "FAIL", "RECOVERY_REQUIRED"].includes(s) ? "error" : ["RUNNING", "RECORDING", "UPLOADING", "STARTING", "STOPPING"].includes(s) ? "busy" : ["BLOCKED", "QUARANTINED", "RETRY", "REVIEW", "INTERRUPTED", "WARN", "CONVERTED"].includes(s) ? "warn" : ""}">${esc(names[s] || s)}</span>`;
 function notice(message, error = false) {
-  $("notice").hidden = false;
-  $("notice").textContent = message;
-  $("notice").className = error ? "error" : "";
+  const box = $("notice");
+  box.hidden = false;
+  box.className = error ? "error" : "";
+  box.textContent = message;
 }
-async function api(path, method = "GET", body) {
-  const controller = new AbortController();
-  const timeout = method === "GET" ? setTimeout(() => controller.abort(), 12000) : null;
+function noticeWithLink(prefix, label, href) {
+  const box = $("notice");
+  box.hidden = false;
+  box.className = "";
+  box.textContent = prefix + " ";
+  const link = document.createElement("a");
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = label;
+  box.append(link);
+}
+async function api(path, method = "GET", body) {  const controller = new AbortController();
+  // Writes get a longer budget, but never unbounded: a hung request must not
+  // leave the page's busy flag stuck and swallow every later click.
+  const timeout = setTimeout(() => controller.abort(), method === "GET" ? 12000 : 30000);
   try {
   const r = await fetch(path, {
     signal: controller.signal,
@@ -107,7 +122,7 @@ async function api(path, method = "GET", body) {
     );
   }
   return data;
-  } finally { if (timeout) clearTimeout(timeout); }
+  } finally { clearTimeout(timeout); }
 }
 function showLogin() {
   clearTimeout(timer);
@@ -124,7 +139,10 @@ function showLogin() {
   setSidebarOpen(false);
 }
 async function action(fn) {
-  if (busy) return;
+  if (busy) {
+    notice("上一个操作仍在处理中，请稍候再试。");
+    return;
+  }
   busy = true;
   const client = config?.role === "client";
   if (client) {
@@ -322,7 +340,12 @@ function acceptCaptures(rows) {
   renderClientCaptures();
 }
 function currentCapture() {
-  return captures.find((c) => ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(c.state)) || captures.find((c) => c.state === "REVIEW");
+  return (
+    captures.find((c) =>
+      ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(c.state),
+    ) ||
+    captures.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id))
+  );
 }
 function updateCaptureClock() {
   const current = currentCapture();
@@ -361,13 +384,18 @@ function renderClientDatasets() {
   }).join("") : '<tr><td colspan="4" class="empty">填写数据集名称，开始第一段采集。</td></tr>';
   updateClientDatasetSummary();
 }
+function captureBadge(c) {
+  return c.capture_failed
+    ? '<span class="badge error">采集失败</span>'
+    : badge(c.state);
+}
 function controls(c) {
   const buttons = [];
   if (["RECORDING", "RECOVERY_REQUIRED"].includes(c.state))
     buttons.push(
       `<button class="secondary" data-capture="${c.id}" data-op="stop">结束录制</button>`,
     );
-  if (["DRAFT", "RECORDING", "REVIEW", "RECOVERY_REQUIRED"].includes(c.state))
+  if (["RECORDING", "REVIEW", "RECOVERY_REQUIRED"].includes(c.state))
     buttons.push(
       `<button class="danger" data-capture="${c.id}" data-op="discard">丢弃</button>`,
     );
@@ -400,6 +428,7 @@ $("capture-form").onsubmit = (e) => {
     notice("正在请求开始采集，等待机器人确认…");
     const c = await api("/api/captures/start", "POST", data);
     acceptCaptures([c]);
+    sessionCaptures.add(c.id);
     requestKey = null;
     if (c.state !== "RECORDING")
       throw Error(c.error || "启动未确认，请查看会话状态，勿重复启动");
@@ -461,25 +490,39 @@ document.addEventListener("click", (e) => {
     setServerTab("results");
     action(showJob);
   }
+  const closePreview = e.target.closest("[data-close-preview]");
+  if (closePreview)
+    action(async () => {
+      await api(`/api/jobs/${closePreview.dataset.closePreview}/viewer`, "DELETE");
+      notice("已关闭该数据集的预览链接。");
+    });
+  const reportPage = e.target.closest("[data-report-page]");
+  if (reportPage) {
+    window.location.assign("/report/" + encodeURIComponent(reportPage.dataset.reportPage));
+    return;
+  }
   const v = e.target.closest("[data-viewer]");
   if (v) {
-    // Open synchronously so browser popup blocking is not triggered by the API await.
+    // Open the tab inside the click so the popup blocker allows it; it shows a
+    // waiting page until the always-on Visualizer serves the dataset.
     const popup = window.open("about:blank", "_blank");
     if (popup) {
       popup.opener = null;
-      popup.document.title = "正在启动数据预览";
+      popup.document.title = "正在打开数据预览";
       popup.document.body.innerHTML =
-        '<main style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;color:#202124;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在启动数据预览</h1><p style="margin:0">Visualizer 就绪后会自动跳转到当前数据集。</p></main>';
+        '<main style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;color:#202124;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在打开数据预览</h1><p style="margin:0">Visualizer 就绪后会自动显示所选数据集。</p></main>';
     }
     action(async () => {
       try {
         const preview = await api(`/api/jobs/${v.dataset.viewer}/viewer`, "POST");
         selectJob(v.dataset.viewer);
         setServerTab("results");
-        const target = preview.url || config.viewer_url;
-        if (popup && !popup.closed) popup.location.replace(target);
-        else window.location.assign(target);
-        notice("已打开无鉴权数据预览；首次启动可能较慢，等待页面会自动刷新。");
+        if (popup && !popup.closed) {
+          popup.location.replace(preview.url);
+          notice("已打开数据预览。同时可以打开多个数据集，各自独立。");
+        } else {
+          noticeWithLink("浏览器拦截了新标签页，点击打开：", "打开数据预览 ↗", preview.url);
+        }
       } catch (error) {
         if (popup && !popup.closed) popup.close();
         throw error;
@@ -521,14 +564,30 @@ function renderClientCaptures() {
       c.state,
     ),
   );
-  const current = active || rows.find((c) => c.state === "REVIEW");
+  for (const row of rows)
+    if (
+      ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(
+        row.state,
+      )
+    )
+      sessionCaptures.add(row.id);
+  // A stale REVIEW capture from an earlier visit must not hijack the panel:
+  // only show it here when this page session actually recorded it. Anything
+  // else stays in the list below, where keep/discard still work.
+  const current =
+    active ||
+    rows.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id));
   $("start-button").disabled = !!active || busy;
   $("health-label").textContent = active
     ? "● " + (names[active.state] || active.state)
     : clientHealth?.ready
       ? "● 采集适配器就绪"
       : clientHealth ? "○ 适配器尚未就绪" : "○ 健康检查待更新";
-  $("capture-state").textContent = current ? names[current.state] : "就绪";
+  $("capture-state").textContent = !current
+    ? "就绪"
+    : current.capture_failed
+      ? "采集失败，只能丢弃"
+      : names[current.state];
   updateCaptureClock();
   $("session-actions").innerHTML = current
     ? `<span class="small muted">当前会话 ${esc(current.id.slice(0, 8))}</span>${controls(current)}`
@@ -542,7 +601,7 @@ function renderClientCaptures() {
                 Math.round((100 * (c.uploaded_bytes || 0)) / c.total_bytes),
               )
             : 0;
-          return `<tr><td><strong class="task-name">${esc(c.dataset_name || c.instruction)}</strong><span class="sub">${esc(c.id.slice(0, 8))} · ${new Date(c.created_at * 1000).toLocaleString("zh-CN")}</span>${c.error ? `<span class="sub job-error">${esc(c.error)}</span>` : ""}</td><td>${badge(c.state)}</td><td>${esc(c.remote_target)}<span class="sub">${esc(c.remote_prefix || "/")}</span></td><td>${badge(c.upload_state)} ${c.total_bytes ? `<span class="small">${percent}% · ${bytes(c.total_bytes)}</span><div class="progress"><span data-width="${percent}"></span></div>` : ""}${c.upload_error ? `<span class="sub job-error">${esc(c.upload_error)}</span>` : ""}</td><td>${controls(c)}</td></tr>`;
+          return `<tr><td><strong class="task-name">${esc(c.dataset_name || c.instruction)}</strong><span class="sub">${esc(c.id.slice(0, 8))} · ${new Date(c.created_at * 1000).toLocaleString("zh-CN")}</span>${c.error ? `<span class="sub job-error">${esc(c.error)}</span>` : ""}</td><td>${captureBadge(c)}</td><td>${esc(c.remote_target)}<span class="sub">${esc(c.remote_prefix || "/")}</span></td><td>${badge(c.upload_state)} ${c.total_bytes ? `<span class="small">${percent}% · ${bytes(c.total_bytes)}</span><div class="progress"><span data-width="${percent}"></span></div>` : ""}${c.upload_error ? `<span class="sub job-error">${esc(c.upload_error)}</span>` : ""}</td><td>${controls(c)}</td></tr>`;
         })
         .join("")
     : '<tr><td colspan="5" class="empty">还没有采集记录。填写任务描述，开始第一段示教。</td></tr>';
@@ -567,14 +626,7 @@ async function refresh() {
       serverUploads = uploads.flatMap((c) => c.uploads);
       serverJobs = jobs;
       renderServer(serverUploads, jobs);
-      $("viewer-status").innerHTML =
-        badge(v.state) +
-        (v.state === "READY"
-          ? ` <a href="${esc(v.url || config.viewer_url)}" target="_blank" rel="noopener">直接打开预览 ↗</a>`
-          : "") +
-        (v.job_id ? `<span class="sub small muted">任务 ${esc(v.job_id.slice(0, 12))}</span>` : "") +
-        (v.error ? `<p class="job-error">${esc(v.error)}</p>` : "");
-      $("viewer-stop").disabled = !["READY", "STARTING"].includes(v.state);
+      renderViewerStatus(v);
       if (selectedJob) await showJob();
     }
   } catch (e) {
@@ -790,7 +842,7 @@ function renderServer(uploads, jobs) {
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
   const available = jobs.filter((j) => j.dataset_available);
   $("result-list").innerHTML = available.length ? available.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行 Doctor</button><button class="secondary" data-detail="${esc(j.id)}">查看报告</button></div></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行 Doctor</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型已转换的数据集。受阻任务的原因可在“数据转换”查看。</td></tr>';
 }
 function datasetLocation(job) {
@@ -828,7 +880,7 @@ async function showJob() {
     ${datasetLocation(j)}
     ${j.dataset_available ? "" : `<p class="small muted">${esc(j.dataset_unavailable_reason)}</p>`}
     ${j.work_path ? `<p class="path-hint">任务工作目录：${esc(j.work_path)}</p>` : ""}
-    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行 Doctor</button>` : ""}<button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button></div>
+    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行 Doctor</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button><button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button></div>
     <h3 class="section-label">LeRobot Doctor 质量报告</h3>
     <p class="small muted">Doctor 报告只用于展示数据质量，不会修改或删除已转换的数据集。模拟数据始终保留模拟标识。</p>
     <div class="action-row"><button class="secondary" data-report="automatic">转换时的报告</button>${checks.map((c) => `<button class="secondary" data-report="${esc(c.id)}">${esc(new Date(c.created_at * 1000).toLocaleTimeString("zh-CN"))} · ${esc(names[c.state] || c.state)}${c.severity ? " · " + esc(c.severity) : ""}</button>`).join("")}</div>
@@ -841,10 +893,22 @@ $("close-detail").onclick = () => {
   selectedJob = null;
   $("job-detail-panel").hidden = true;
 };
-$("viewer-stop").onclick = () =>
-  action(async () => {
-    await api("/api/viewer/stop", "POST");
-  });
+function renderViewerStatus(v) {
+  const previews = v.previews || [];
+  const label = { READY: "运行中", STARTING: "启动中", FAILED: "已退出", UNAVAILABLE: "不可用", STOPPED: "未启动", INTERRUPTED: "已中断" }[v.state] || v.state;
+  const cls = v.state === "READY" ? "" : ["FAILED", "UNAVAILABLE"].includes(v.state) ? "error" : "busy";
+  const rows = previews
+    .map((p) => {
+      const job = serverJobs.find((j) => j.id === p.job_id);
+      const name = job?.dataset_name || job?.instruction || p.job_id.slice(0, 12);
+      return `<li><span>${esc(name)}</span> <a href="${esc(p.url)}" target="_blank" rel="noopener">打开 ↗</a> <button type="button" class="text-button" data-close-preview="${esc(p.job_id)}">关闭</button></li>`;
+    })
+    .join("");
+  $("viewer-status").innerHTML =
+    `<span class="badge ${cls}">${esc(label)}</span>` +
+    (previews.length ? `<ul class="preview-list">${rows}</ul>` : '<span class="sub small muted">尚无打开的预览</span>') +
+    (v.error ? `<p class="job-error">${esc(v.error)}</p>` : "");
+}
 async function poll() {
   if (!config) return;
   await refresh();

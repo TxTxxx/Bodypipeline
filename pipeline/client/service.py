@@ -63,6 +63,25 @@ class CaptureService:
             if row["state"] == "SEALING":
                 row.update(error="封存被中断，后台将重新校验已保留的数据")
                 self.save(row)
+            if self._seal_failed(row) and not row.get("capture_failed"):
+                # Older builds left a failed seal as a plain REVIEW row, which
+                # kept offering "keep" for data that can never be packaged.
+                row.update(capture_failed=True, seal_failed=True)
+                self.save(row)
+
+    @staticmethod
+    def _seal_failed(row):
+        """A REVIEW row whose seal attempt failed and produced no package."""
+
+        if row.get("state") != "REVIEW" or not row.get("error"):
+            return False
+        if row.get("manifest_hash") or row.get("package_path"):
+            return False
+        return bool(
+            row.get("seal_requested_at")
+            or row.get("seal_started_at")
+            or row.get("seal_duration_ms") is not None
+        )
 
     def save(self, row):
         row["updated_at"] = now()
@@ -333,7 +352,15 @@ class CaptureService:
                     sealed_at=now(),
                 )
             except Exception as exc:
-                row.update(state="REVIEW", error=str(exc))
+                # A seal failure means the raw data cannot be packaged; latch it
+                # as a fault so the UI only offers discard and re-keep is refused,
+                # instead of looping a "保留并上传" that keeps failing.
+                row.update(
+                    state="REVIEW",
+                    capture_failed=True,
+                    seal_failed=True,
+                    error=str(exc),
+                )
             row["seal_duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
             with self.lock:
                 return self.save(row)
