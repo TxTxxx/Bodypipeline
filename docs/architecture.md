@@ -61,16 +61,18 @@ flowchart TB
 
 ### 3.1 进程与职责
 
-Client 是单个 FastAPI 进程，内部由四部分组成：
+Client 是单个 FastAPI 进程，内部由以下模块组成：
 
 | 模块 | 职责 |
 | --- | --- |
 | `CaptureService` | 采集会话状态机、数据目录、封存、保留 / 丢弃、健康检查 |
-| `CaptureAdapter` | 统一机器人控制与预览接口 |
+| `CaptureAdapter` | 统一采集服务与预览接口 |
+| `ReplayService` | 通用回放状态、进程、进度、停止、采集互斥 |
+| `ReplayProvider` | 按本机 Profile 绑定的机器人轨迹格式、语义映射与执行接口 |
 | `UploadAgent` | 上传队列、断点续传、重试、回执持久化 |
 | Web UI | 相机预览、存储选择、采集操作、上传进度 |
 
-Client 不启动机器人驱动，也不直接控制机械臂。`Ros2Adapter` 通过本机 HTTP 调用 Bridge；Bridge 再调用机器人现有的 ROS2 CaptureService 并订阅状态与图像 topic。
+Client 不启动机器人驱动。采集路径不发送运动指令；用户启动回放后，由独立 `ReplayProvider` 调用该机器人的既有执行工具。`Ros2Adapter` 通过本机 HTTP 调用 Bridge；Bridge 再调用机器人现有的 ROS2 CaptureService 并订阅状态与图像 topic。
 
 ### 3.2 采集状态机
 
