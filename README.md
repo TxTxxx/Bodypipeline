@@ -182,6 +182,7 @@ Server 页面分为三个侧边栏工作区：
 | `manifest.json` + `episode.hdf5` | 当前原始采集，直接进入 HDF5 对齐和批量转换 |
 | `manifest.json` + `data/episode0` | 旧 Client 原始目录，保留兼容转换 |
 | `manifest.json` + `raw/episode0` | 更早 Client 目录，保留兼容转换 |
+| 目录内 `*.hdf5`（上游日志，无 Manifest） | 每个文件一个 episode，按 Profile 字段翻译后批量转换 |
 | `meta/info.json` 的 LeRobot v2.1 / v3.0 | 直接进入预览和 Doctor |
 
 导入规则：
@@ -192,6 +193,7 @@ Server 页面分为三个侧边栏工作区：
 - 原地登记，不复制、不移动、不改写源目录。
 - 同一路径重复导入是幂等的。
 - 机器人类型优先读取 Manifest / LeRobot 元数据；显式覆盖发生冲突时拒绝导入。
+- 无 Manifest 的 HDF5 episode 目录没有类型声明，导入时必须显式指定机器人类型。
 
 Server 当前白名单示例：
 
@@ -290,6 +292,7 @@ Skill 包含[操作与动作语义核查](agents/skills/adapt-robot/references/c
 | 通用 Server | [`configs/server.json`](configs/server.json) |
 | 未审批 Profile 模板 | [`configs/agilex-aloha.json`](configs/agilex-aloha.json) |
 | AgileX ALOHA 已核实 Profile | [`configs/agilex-aloha-v2.json`](configs/agilex-aloha-v2.json) |
+| ARX X5 上游 HDF5 Profile | [`configs/arx-x5-hdf5-v1.json`](configs/arx-x5-hdf5-v1.json) |
 | systemd 示例 | [`deploy/pipeline-client.service.example`](deploy/pipeline-client.service.example) |
 | 演示容器 | [`deploy/compose.yaml`](deploy/compose.yaml) |
 

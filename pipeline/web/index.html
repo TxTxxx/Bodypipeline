@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>BodyPipeline · 具身数据工作台</title>
     <link rel="stylesheet" href="/assets/style.css" />
+    <script src="/assets/clipboard.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -195,11 +196,12 @@
                     <label for="import-robot-type">机器人类型覆盖（可选）</label>
                     <input id="import-robot-type" list="import-robot-types" maxlength="64" autocomplete="off" placeholder="自动读取；缺失时再填写" />
                     <datalist id="import-robot-types"></datalist>
-                    <p class="small muted">目录声明了机器人类型时以声明为准；显式填写且不一致会拒绝导入。</p>
+                    <p class="small muted">目录声明了机器人类型时以声明为准；HDF5 episode 目录不声明类型，导入时必须填写。</p>
                   </div>
                 </div>
                 <div class="import-capabilities">
                   <span><strong>原始采集</strong> manifest.json + data/episode0 → 批量转换</span>
+                  <span><strong>HDF5 episodes</strong> 目录内 episode_*.hdf5 → 批量转换</span>
                   <span><strong>LeRobot</strong> meta/info.json (v2.1 / v3.0) → 预览 + Doctor</span>
                 </div>
                 <p id="import-roots" class="small muted">正在读取允许导入的目录…</p>

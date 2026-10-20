@@ -538,9 +538,13 @@ class JobRunner:
                             "上传 Profile 与服务器批准版本不同；请审核后将兼容摘要加入该 Runtime"
                         )
                     raw = Path(upload["raw_path"])
+                    # An imported upstream episode registers the HDF5 file
+                    # itself as the capture, so hashes resolve against its
+                    # parent directory.
+                    raw_root = raw if raw.is_dir() else raw.parent
                     source_work = work / "sources" / str(index)
                     for f in manifest["files"]:
-                        if file_hash(confined(raw, f["path"])) != f["sha256"]:
+                        if file_hash(confined(raw_root, f["path"])) != f["sha256"]:
                             raise DomainError(f"原始文件摘要变化：{f['path']}")
                     prepared = provider.prepare(raw, source_work / "aligned", profile)
                     aligned_path = Path(

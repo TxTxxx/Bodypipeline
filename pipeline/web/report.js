@@ -853,14 +853,10 @@ document.addEventListener("click", async (event) => {
   }
   const copy = event.target.closest("[data-copy]");
   if (copy) {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard
-        .writeText(copy.dataset.copy)
-        .then(() => notice("已复制服务器数据集路径。"))
-        .catch(() => notice("无法自动复制，请手动选中路径。", true));
-    } else {
-      notice("当前浏览器不支持自动复制，请手动选中路径。", true);
-    }
+    copyText(copy.dataset.copy).then((copied) =>
+      copied
+        ? notice("已复制服务器数据集路径。")
+        : notice("无法自动复制，请手动选中路径。", true));
     return;
   }
   const analysis = event.target.closest("[data-analysis]");

@@ -7,8 +7,8 @@ import threading
 from pathlib import Path
 
 from pipeline.shared.collections import dataset_name
-from pipeline.shared.core import DomainError, confined, digest, now
-from pipeline.shared.hdf5 import AGILEX_HDF5_FORMAT
+from pipeline.shared.core import DomainError, confined, digest, file_hash, now
+from pipeline.shared.hdf5 import AGILEX_HDF5_FORMAT, ALOHA_HDF5_FORMAT, is_hdf5_path
 
 from .providers import RuntimeCatalog
 from .storage import robot_type
@@ -89,9 +89,21 @@ class ImportService:
         runtime = self.runtimes.get(runtime_id) if runtime_id else None
         if (path / "meta/info.json").is_file():
             return self._import_lerobot(path, override, runtime)
+        if not (path / "manifest.json").is_file() and self._episode_files(path):
+            return self._import_hdf5_episodes(path, override, runtime)
         if runtime is not None:
             runtime = self.runtimes.get(runtime.id)
         return self._import_raw(path, override, runtime)
+
+    @staticmethod
+    def _episode_files(path: Path) -> list[Path]:
+        """Upstream ALOHA-style captures: one HDF5 file per episode, no manifest."""
+
+        return sorted(
+            item
+            for item in path.iterdir()
+            if item.is_file() and not item.is_symlink() and is_hdf5_path(item)
+        )
 
     def _known_runtime(self, robot_type_value: str | None):
         if not robot_type_value or robot_type_value == "unknown":
@@ -206,6 +218,83 @@ class ImportService:
             "dataset_path": row["dataset_path"],
         }
 
+    def _import_hdf5_episodes(self, path: Path, override: str | None, runtime=None):
+        """Register a directory of upstream HDF5 episodes, one upload per file.
+
+        These captures carry no manifest, so the import synthesizes one per
+        episode from the trusted Runtime profile. The source directory is only
+        read: the manifest lives in the Server store, not beside the data.
+        """
+
+        if runtime is None:
+            runtime = self._known_runtime(override) if override else None
+        if runtime is None:
+            raise DomainError(
+                "该目录是 HDF5 episode 集合，未声明机器人类型；"
+                "请填写机器人类型或指定 Runtime 后重新导入",
+                400,
+            )
+        provider = self.runtimes.provider(runtime)
+        if ALOHA_HDF5_FORMAT not in runtime.raw_formats:
+            raise DomainError(
+                f"Runtime {runtime.id!r} 不接受 {ALOHA_HDF5_FORMAT} 原始格式", 400
+            )
+        inspect = getattr(provider, "episode_metadata", None)
+        if inspect is None:
+            raise DomainError(
+                f"Provider {runtime.provider!r} 不支持导入 HDF5 episode", 503
+            )
+        files = self._episode_files(path)
+        if len(files) > self.settings.max_files:
+            raise DomainError("HDF5 episode 数量超过 Server 限制", 413)
+        dataset = dataset_name(path.name)
+        rows, total = [], 0
+        for episode in files:
+            try:
+                inspect(episode, runtime.profile)
+            except DomainError as exc:
+                raise DomainError(
+                    f"{episode.name} 不符合 {runtime.id} 的 HDF5 布局：{exc}", 422
+                ) from exc
+            size = episode.stat().st_size
+            manifest = {
+                "manifest_version": 1,
+                "complete": True,
+                "session_id": "imp-" + digest(str(episode))[:16],
+                "robot_id": self.settings.robot_id,
+                "project_id": self.settings.project_id,
+                "control_mode": "teleoperation",
+                "capture_mode": "ros2",
+                "instruction": dataset,
+                "dataset_name": dataset,
+                "profile": runtime.profile,
+                "profile_hash": runtime.profile_hash,
+                "raw_format": ALOHA_HDF5_FORMAT,
+                "files": [
+                    {
+                        "path": episode.name,
+                        "size_bytes": size,
+                        "sha256": file_hash(episode),
+                    }
+                ],
+            }
+            rows.append(
+                self.ingest.register_import(
+                    manifest, episode, episode, runtime=runtime, inline=True
+                )
+            )
+            total += size
+        return {
+            "kind": "hdf5",
+            "collection_id": rows[0]["collection_id"],
+            "dataset_name": dataset,
+            "robot_type": runtime.robot_type,
+            "runtime_id": runtime.id,
+            "provider": runtime.provider,
+            "episode_count": len(rows),
+            "total_bytes": total,
+        }
+
     def _import_raw(self, path: Path, override: str | None, runtime=None):
         manifest_path = path / "manifest.json"
         raw_path = path
@@ -214,8 +303,9 @@ class ImportService:
             raw_path = path
         if not manifest_path.is_file():
             raise DomainError(
-                "无法识别导入目录：需要包含 meta/info.json 的 LeRobot 数据集，"
-                "或包含 manifest.json 的原始采集目录",
+                "无法识别导入目录：需要包含 meta/info.json 的 LeRobot 数据集、"
+                "包含 manifest.json 的原始采集目录，"
+                "或包含 episode HDF5 文件的目录",
                 400,
             )
         if manifest_path.is_symlink():

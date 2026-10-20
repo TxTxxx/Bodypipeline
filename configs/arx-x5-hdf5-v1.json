@@ -1,0 +1,70 @@
+{
+  "id": "arx_x5_aloha_hdf5_v1",
+  "version": 1,
+  "control_mode": "teleoperation",
+  "robot_type": "ARX_X5",
+  "semantics_approved": true,
+  "joint_names": [
+    "left_joint_1",
+    "left_joint_2",
+    "left_joint_3",
+    "left_joint_4",
+    "left_joint_5",
+    "left_joint_6",
+    "left_gripper",
+    "right_joint_1",
+    "right_joint_2",
+    "right_joint_3",
+    "right_joint_4",
+    "right_joint_5",
+    "right_joint_6",
+    "right_gripper"
+  ],
+  "joint_units": [
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "m",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "m"
+  ],
+  "clock_verified": true,
+  "output_fps": 30,
+  "minimum_frames": 1,
+  "cameras": [
+    {
+      "id": "head",
+      "label": "头部相机",
+      "source_key": "observations/images/head",
+      "mounting": "scene"
+    },
+    {
+      "id": "left_wrist",
+      "label": "左腕相机",
+      "source_key": "observations/images/left_wrist",
+      "mounting": "wrist_left"
+    },
+    {
+      "id": "right_wrist",
+      "label": "右腕相机",
+      "source_key": "observations/images/right_wrist",
+      "mounting": "wrist_right"
+    }
+  ],
+  "state_key": "observations/qpos",
+  "action_key": "action",
+  "notes": [
+    "上游日志按固定帧率写入单个 HDF5，state/qpos 与 action 共用同一个帧下标，因此没有需要重采样的时间戳流。",
+    "action 与 qpos 同为 14 维、顺序一致（左臂 6 关节 + 左夹爪 + 右臂 6 关节 + 右夹爪），由文件形状与上游转换脚本共同确认。",
+    "相机为 JPEG 字节数组，分辨率从首帧解码得到；Profile 只声明字段名，不重新编码原始帧。",
+    "output_fps 取上游录制约定值；该格式不携带 fps 元数据，改变帧率会改变动作的时间尺度。"
+  ]
+}

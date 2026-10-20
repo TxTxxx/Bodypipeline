@@ -6,9 +6,13 @@ from pipeline.shared.core import DomainError
 from pipeline.shared.runtime import RobotRuntime
 
 from .agilex import AgileXProvider
+from .aloha_hdf5 import AlohaHDF5Provider
 from .base import RobotProvider
 
-_PROVIDERS: dict[str, RobotProvider] = {"agilex": AgileXProvider()}
+_PROVIDERS: dict[str, RobotProvider] = {
+    "agilex": AgileXProvider(),
+    "aloha_hdf5": AlohaHDF5Provider(),
+}
 
 
 def register_provider(provider: RobotProvider, *, replace: bool = False) -> None:

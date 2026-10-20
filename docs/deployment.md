@@ -151,6 +151,11 @@ PIPELINE_BRIDGE_TOKEN
       "provider": "agilex",
       "raw_formats": ["agilex_joint_camera_hdf5_v1", "agilex_timestamped_directory_v1"],
       "accepted_capture_profile_hashes": []
+    },
+    "arx_hdf5": {
+      "profile_path": "/opt/bodypipeline/configs/arx-x5-hdf5-v1.json",
+      "provider": "aloha_hdf5",
+      "raw_formats": ["aloha_hdf5_episodes_v1"]
     }
   },
   "default_profile": "agilex_aloha",
@@ -175,6 +180,8 @@ PIPELINE_BRIDGE_TOKEN
 | `viewer_bun` | Bun 可执行文件，留空时从 `PATH` 查找 |
 
 旧版单 Profile 配置仍兼容：未提供 `profiles` 时，`profile_path` 会生成 Runtime `default`。新部署应使用显式 `profiles`，这样后续新增机器人只需注册新 Runtime，不需要替换所有机器人共用的 Profile。
+
+内置 Provider：`agilex`（AgileX 时间戳流与 HDF5 采集包）与 `aloha_hdf5`（上游 ALOHA 风格逐 episode HDF5，按 Profile 声明的字段做 schema 翻译）。`provider` 必须是这些已注册的 ID；未注册的取值会在启动时直接报错。
 
 `import_roots` 也会被加入数据集预览的允许根。不要配置 `/` 或包含敏感数据的父目录。
 

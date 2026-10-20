@@ -20,6 +20,7 @@ from pipeline.shared.hdf5 import (
 
 from ..alignment import prepare_agilex, prepare_agilex_hdf5
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
+from .hdf5_preset import write_hdf5_preset
 
 AGILEX_JOINT_DIMENSIONS = 14
 AGILEX_RAW_FORMATS = (AGILEX_HDF5_FORMAT, LEGACY_AGILEX_RAW_FORMAT)
@@ -176,51 +177,9 @@ class AgileXProvider:
     def _write_hdf5_preset(
         self, source: Path, profile: dict, job: dict, episode: Path
     ) -> Path:
-        import h5py
-
-        cameras = []
-        with h5py.File(episode, "r") as handle:
-            for camera in profile["cameras"]:
-                key = f"observation.images.{camera['id']}"
-                dataset = handle[key]
-                cameras.append(
-                    {
-                        "source_key": key,
-                        "target_key": key,
-                        "width": int(dataset.attrs["width"]),
-                        "height": int(dataset.attrs["height"]),
-                        "encoded_format": "jpeg",
-                    }
-                )
-        preset = {
-            "schema_version": 1,
-            "name": "bodypipeline_agilex",
-            "description": "Generated from the trusted AgileX Runtime profile",
-            "mapping": {
-                "fps": profile["output_fps"],
-                "episode_glob": "*.hdf5",
-                "robot_type": profile["robot_type"],
-                "task_key": None,
-                "default_task": job["instruction"],
-                "numeric_fields": [
-                    {
-                        "source_key": key,
-                        "target_key": key,
-                        "dtype": "float32",
-                        "names": (
-                            list(profile["joint_names"])
-                            if isinstance(profile.get("joint_names"), list)
-                            else None
-                        ),
-                    }
-                    for key in ("action", "observation.state")
-                ],
-                "video_fields": cameras,
-            },
-        }
-        path = source.parent / "letools-hdf5-preset.json"
-        atomic_json(path, preset)
-        return path
+        return write_hdf5_preset(
+            source, profile, job, episode, name="bodypipeline_agilex"
+        )
 
     def patch_dataset_info(
         self,

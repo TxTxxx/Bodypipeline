@@ -20,7 +20,12 @@ from pipeline.shared.core import (
     now,
     safe_relative,
 )
-from pipeline.shared.hdf5 import AGILEX_HDF5_FILENAME, AGILEX_HDF5_FORMAT
+from pipeline.shared.hdf5 import (
+    AGILEX_HDF5_FILENAME,
+    AGILEX_HDF5_FORMAT,
+    ALOHA_HDF5_FORMAT,
+    is_hdf5_path,
+)
 
 from .providers import RobotRuntime, RuntimeCatalog
 from .storage import ROBOT_LAYOUT, prepare_storage, robot_type, storage_path
@@ -86,7 +91,8 @@ class IngestService:
             raise DomainError("无效文件清单", 400)
         names, total = set(), 0
         hdf5_capture = m.get("raw_format") == AGILEX_HDF5_FORMAT
-        if hdf5_capture and len(files) != 1:
+        aloha_hdf5 = m.get("raw_format") == ALOHA_HDF5_FORMAT
+        if (hdf5_capture or aloha_hdf5) and len(files) != 1:
             raise DomainError("HDF5 采集包必须且只能包含一个文件", 400)
         for f in files:
             if not isinstance(f, dict) or set(f) != {"path", "size_bytes", "sha256"}:
@@ -97,13 +103,18 @@ class IngestService:
                     raise DomainError(
                         f"HDF5 采集包文件必须为 {AGILEX_HDF5_FILENAME}", 400
                     )
+            elif aloha_hdf5:
+                # An imported upstream episode keeps its own file name; the
+                # file itself is the whole capture.
+                if not is_hdf5_path(Path(path)) or path in names:
+                    raise DomainError("HDF5 episode 文件必须是 .hdf5 或 .h5", 400)
             elif not path.startswith("episode0/") or path in names:
                 raise DomainError("文件必须位于 episode0 且不能重复", 400)
             names.add(path)
             if (
                 type(f["size_bytes"]) is not int
                 or f["size_bytes"] < 0
-                or (hdf5_capture and f["size_bytes"] == 0)
+                or ((hdf5_capture or aloha_hdf5) and f["size_bytes"] == 0)
                 or not re.fullmatch(r"[0-9a-f]{64}", str(f["sha256"]))
             ):
                 raise DomainError("无效文件大小或摘要", 400)
@@ -198,8 +209,15 @@ class IngestService:
             self.store.put("upload", key, row)
             return row
 
-    def register_import(self, manifest, manifest_path, raw_path, runtime=None):
-        """Register an existing on-disk capture without copying or rewriting it."""
+    def register_import(
+        self, manifest, manifest_path, raw_path, runtime=None, *, inline=False
+    ):
+        """Register an existing on-disk capture without copying or rewriting it.
+
+        ``inline`` keeps the manifest in the store instead of reading it from the
+        source tree. An upstream HDF5 episode has no manifest on disk, and the
+        import must not write anything into the imported directory.
+        """
         total = self.validate_manifest(
             manifest, enforce_identity=False, runtime=runtime
         )
@@ -239,6 +257,7 @@ class IngestService:
                 "imported": True,
                 "manifest_hash": manifest_hash,
                 "manifest_path": str(Path(manifest_path).resolve()),
+                "manifest_inline": manifest if inline else None,
                 "raw_path": str(Path(raw_path).resolve()),
                 "import_path": str(Path(raw_path).resolve()),
                 "session_id": manifest["session_id"],
@@ -275,11 +294,17 @@ class IngestService:
         key = row["manifest_hash"]
         if not fresh and key in self._manifest_cache:
             return self._manifest_cache[key]
-        manifest_path = row.get("manifest_path")
-        source = (
-            Path(manifest_path) if manifest_path else self.root(row) / "manifest.json"
-        )
-        data = json.loads(source.read_text())
+        inline = row.get("manifest_inline")
+        if isinstance(inline, dict):
+            data = inline
+        else:
+            manifest_path = row.get("manifest_path")
+            source = (
+                Path(manifest_path)
+                if manifest_path
+                else self.root(row) / "manifest.json"
+            )
+            data = json.loads(source.read_text())
         if digest(data) != key:
             raise DomainError("Manifest 摘要不匹配", 422)
         if len(self._manifest_cache) >= 4:

@@ -25,6 +25,10 @@ AGILEX_HDF5_SCHEMA = "bodypipeline.agilex.raw_hdf5.v1"
 AGILEX_ALIGNED_SCHEMA = "bodypipeline.agilex.aligned_hdf5.v1"
 AGILEX_HDF5_FILENAME = "episode.hdf5"
 LEGACY_AGILEX_RAW_FORMAT = "agilex_timestamped_directory_v1"
+# Upstream ALOHA-style loggers write one uniformly sampled HDF5 per episode
+# (observations/qpos, action, observations/images/<camera>). There are no
+# stream timestamps to align, so importing one is a schema translation.
+ALOHA_HDF5_FORMAT = "aloha_hdf5_episodes_v1"
 
 _CAMERA_GROUP = "streams/camera"
 _JOINT_GROUP = "streams/arm/jointState"
@@ -265,6 +269,7 @@ __all__ = [
     "AGILEX_HDF5_FILENAME",
     "AGILEX_HDF5_FORMAT",
     "AGILEX_HDF5_SCHEMA",
+    "ALOHA_HDF5_FORMAT",
     "LEGACY_AGILEX_RAW_FORMAT",
     "find_hdf5_capture",
     "is_hdf5_path",

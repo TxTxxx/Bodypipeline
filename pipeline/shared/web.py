@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 
 ASSETS = Path(__file__).resolve().parents[1] / "web"
-BASE_ASSETS = {"app.js", "style.css"}
+BASE_ASSETS = {"app.js", "clipboard.js", "style.css"}
 REPORT_ASSETS = {"report.js", "report.css"}
 
 

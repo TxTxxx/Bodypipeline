@@ -438,9 +438,10 @@ $("capture-form").onsubmit = (e) => {
 document.addEventListener("click", (e) => {
   const copy = e.target.closest("[data-copy-path]");
   if (copy) {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(copy.dataset.copyPath).then(() => notice("已复制服务器数据集路径。")).catch(() => notice("无法自动复制，请选中显示的路径手动复制。", true));
-    } else notice("请选中显示的路径手动复制（当前浏览器不支持自动复制）。");
+    copyText(copy.dataset.copyPath).then((copied) =>
+      copied
+        ? notice("已复制服务器数据集路径。")
+        : notice("无法自动复制，请选中显示的路径手动复制。", true));
   }
   const dataset = e.target.closest("[data-use-dataset]");
   if (dataset) {
@@ -775,6 +776,9 @@ $("import-form").onsubmit = (event) => {
       if (row.kind === "raw") {
         setServerTab("convert");
         notice(`已导入原始数据集「${row.dataset_name}」：${row.file_count} 个文件，${bytes(row.total_bytes)}。请选择该数据集并提交批量转换。`);
+      } else if (row.kind === "hdf5") {
+        setServerTab("convert");
+        notice(`已导入 HDF5 数据集「${row.dataset_name}」：${row.episode_count} 个 episodes，${bytes(row.total_bytes)}。请选择该数据集并提交批量转换。`);
       } else {
         setServerTab("results");
         notice(`已导入 LeRobot ${row.target_format} 数据集「${row.dataset_name}」：${row.episode_count} 个 episodes。现在可以直接预览或运行 Doctor。`);

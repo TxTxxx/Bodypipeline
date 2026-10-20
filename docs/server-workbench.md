@@ -54,6 +54,7 @@ Server 页面用于管理原始数据、提交批量转换、运行质检和打�
 | `manifest.json` + `episode.hdf5` | 登记为当前 HDF5 原始采集 |
 | `manifest.json` + `data/episode0` | 登记为旧原始采集 |
 | `manifest.json` + `raw/episode0` | 登记为更早原始采集，兼容旧 Client |
+| 目录内 `*.hdf5`（无 Manifest） | 登记为上游 ALOHA 风格 HDF5 episode 集合，每个文件一个 episode |
 | `meta/info.json` 且版本为 v2.1 / v3.0 | 登记为已有 LeRobot 数据集 |
 
 导入要求：
@@ -61,11 +62,31 @@ Server 页面用于管理原始数据、提交批量转换、运行质检和打�
 - 路径在 `import_roots` 或 `data_root` 白名单内；
 - 路径是普通目录，不是符号链接；
 - 机器人类型可从 Manifest / LeRobot 元数据读取，或在页面显式指定；
+- HDF5 episode 目录不声明机器人类型，导入时必须显式指定（或由 API 传 `runtime_id`）；
 - 显式类型与文件声明冲突时拒绝；
 - 同一路径重复导入是幂等的；
 - 源数据不被复制、移动或改写。
 
 原始采集导入后可以进入批量转换；LeRobot 导入后可以直接预览和运行 Doctor。
+
+#### 上游 HDF5 episode 集合
+
+这类目录由上游日志器直接写出，没有 `manifest.json`，每个 episode 一个 HDF5 文件：
+
+```text
+<dataset>/
+├── episode_0.hdf5      # observations/qpos、action、observations/images/<camera>
+├── episode_1.hdf5
+└── ...
+```
+
+导入按 Runtime 绑定的 Profile 读取字段；字段名、关节维度和相机集合都来自 Profile，
+不会从文件内容猜测。Server 为每个文件生成一条上传记录，Manifest 只保存在 Server 状态里，
+**不会在数据目录写入任何文件**。导入后与普通采集一样进入批量转换。
+
+已适配的布局见 [`configs/arx-x5-hdf5-v1.json`](../configs/arx-x5-hdf5-v1.json)：ARX X5，
+14 维 `observations/qpos` / `action`，头部与左右腕三路 JPEG 相机。上游文件不携带 fps，
+`output_fps` 取上游录制约定值；改变它等于改变动作的时间尺度。
 
 ## 2. 数据转化
 
