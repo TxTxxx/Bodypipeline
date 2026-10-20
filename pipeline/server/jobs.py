@@ -240,6 +240,31 @@ class JobRunner:
                 raise
         return code, stdout, stderr
 
+    def _deep_validate(self, executable: str, work: Path, allocation: str | None):
+        """Validate the converted dataset, retrying only a publish race.
+
+        A distributed filesystem caches directory metadata for about a second,
+        so a check that starts the instant conversion publishes its dataset can
+        miss ``meta/info.json`` and report ENOENT. A real validation failure
+        must fail without retrying.
+        """
+
+        for attempt in range(3):
+            code, report, err = self.command(
+                [executable, "validate", str(work / "dataset"), "--deep"],
+                work,
+                "validate",
+                allocation=allocation,
+            )
+            if not code:
+                return
+            missing = "No such file" in report.read_text(errors="replace")
+            if not missing or attempt == 2:
+                raise DomainError(
+                    f"结构验证失败：{err.read_text(errors='replace')[-2000:]}"
+                )
+            time.sleep(2)
+
     def _open_allocation(self, work: Path) -> str | None:
         """Reserve one Slurm allocation for a job, or reuse the caller's.
 
@@ -664,16 +689,7 @@ class JobRunner:
                 )
             provider.patch_dataset_info(work / "dataset", profile, synthetic=synthetic)
             self.save(job, stage="深度结构验证")
-            code, _, err = self.command(
-                [executable, "validate", str(work / "dataset"), "--deep"],
-                work,
-                "validate",
-                allocation=allocation,
-            )
-            if code:
-                raise DomainError(
-                    f"结构验证失败：{err.read_text(errors='replace')[-2000:]}"
-                )
+            self._deep_validate(executable, work, allocation)
             info = json.loads((work / "dataset/meta/info.json").read_text())
             if (
                 info.get("total_episodes") != len(ids)

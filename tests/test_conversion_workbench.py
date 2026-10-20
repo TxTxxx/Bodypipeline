@@ -257,6 +257,61 @@ def test_robot_type_catalog_and_preflight_legacy_records(settings_factory):
         } == {"robot_type", "profile_hash"}
 
 
+def test_deep_validation_retries_only_the_publish_race(
+    settings_factory, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from pipeline.shared.core import Store
+
+    s = settings_factory("server")
+    runner = JobRunner(s, SimpleNamespace(store=Store(s.root / "state")))
+    work = tmp_path / "work"
+    work.mkdir()
+    calls = []
+
+    def command(args, work, name, allocation=None):
+        calls.append(name)
+        report, err = work / f"{name}.json", work / f"{name}.stderr.log"
+        err.write_text("")
+        if len(calls) < 3:
+            report.write_text('{"errors": ["[Errno 2] No such file or directory"]}')
+            return 1, report, err
+        report.write_text('{"valid": true}')
+        return 0, report, err
+
+    monkeypatch.setattr(runner, "command", command)
+    monkeypatch.setattr("pipeline.server.jobs.time.sleep", lambda _: None)
+    runner._deep_validate("/opt/letools", work, None)
+    assert calls == ["validate"] * 3
+
+
+def test_deep_validation_does_not_retry_a_real_failure(
+    settings_factory, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from pipeline.shared.core import Store
+
+    s = settings_factory("server")
+    runner = JobRunner(s, SimpleNamespace(store=Store(s.root / "state")))
+    work = tmp_path / "work"
+    work.mkdir()
+    calls = []
+
+    def command(args, work, name, allocation=None):
+        calls.append(name)
+        report, err = work / f"{name}.json", work / f"{name}.stderr.log"
+        report.write_text('{"errors": ["episode 0 has no data"]}')
+        err.write_text("validation failed")
+        return 1, report, err
+
+    monkeypatch.setattr(runner, "command", command)
+    with pytest.raises(DomainError, match="结构验证失败"):
+        runner._deep_validate("/opt/letools", work, None)
+    assert calls == ["validate"]
+
+
 def test_verified_profile_and_optional_limit_metadata():
     from pipeline.server.quality import robot_profile_blockers, validate_robot_policy
 
