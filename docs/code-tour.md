@@ -202,6 +202,7 @@ pipeline/server/
 | `datasets.py` | 从任务记录解析可预览数据集和格式 |
 | `checks.py` | 独立质检任务、deep validate / Doctor 编排 |
 | `quality.py` | Profile 阻断项、11 项 Doctor schema 与安全策略 |
+| `analyses.py` | Argus 分析队列：预算、子进程隔离、检查聚合与结论判定 |
 | `viewer.py` | 常驻 Visualizer 生命周期、预览登记与只读网关 |
 | `viewer_data.py` | 按数据集提供 `resolve/main` 文件（Range、路径约束）与预览登记表 |
 | `viewer_bootstrap.py` | 准备固定版本 Visualizer 源码、按数据源地址构建并启动 |

@@ -102,7 +102,7 @@ def test_check_queue_recovery_and_report_error_do_not_change_job(
     store.put("job", job["id"], job)
     original = copy.deepcopy(job)
 
-    def command(args, work, name):
+    def command(args, work, name, allocation=None):
         out, err = work / (name + ".json"), work / (name + ".stderr.log")
         out.write_text("not a doctor report")
         err.write_text("test diagnostic")
@@ -197,7 +197,7 @@ def test_real_convert_then_independent_doctor(
     }
     called = []
 
-    def command(args, work, name):
+    def command(args, work, name, allocation=None):
         called.append(args[1])
         return runner.command(args, work, name)
 

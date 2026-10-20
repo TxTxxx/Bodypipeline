@@ -212,12 +212,15 @@ class JobRunner:
         job.update(**updates, updated_at=now())
         self.store.put("job", job["id"], job)
 
-    def command(self, args, work, name):
+    def command(self, args, work, name, allocation=None):
         stdout, stderr = work / f"{name}.json", work / f"{name}.stderr.log"
+        # An allocation reused across one job's steps avoids paying the Slurm
+        # queue latency three times for convert / validate / doctor.
+        argv = self._scheduled(args, allocation=allocation)
         with stdout.open("wb") as out, stderr.open("wb") as err:
             env = self.settings.tool_environment()
             process = subprocess.Popen(
-                args, stdout=out, stderr=err, start_new_session=True, cwd=work, env=env
+                argv, stdout=out, stderr=err, start_new_session=True, cwd=work, env=env
             )
             try:
                 deadline = time.monotonic() + self.settings.command_timeout
@@ -236,6 +239,158 @@ class JobRunner:
                     process.wait()
                 raise
         return code, stdout, stderr
+
+    def _open_allocation(self, work: Path) -> str | None:
+        """Reserve one Slurm allocation for a job, or reuse the caller's.
+
+        ``salloc --no-shell`` grants an allocation and exits immediately; the
+        allocation stays alive until it is explicitly cancelled, and each step
+        then runs inside it with ``srun --jobid``. That enters the queue once per
+        job instead of once per command. Without Slurm this is a no-op.
+        """
+
+        config = self.settings.slurm or {}
+        if not config.get("enabled"):
+            return None
+        if os.environ.get("SLURM_JOB_ID"):
+            return os.environ["SLURM_JOB_ID"]
+        salloc = executable_path("salloc")
+        if salloc is None:
+            raise DomainError("配置了 Slurm 但找不到 salloc", 503)
+        job_name = str(config.get("job_name", "bodypipeline-convert"))
+        argv = [
+            salloc,
+            "--no-shell",
+            "--partition",
+            str(config.get("partition", "dev")),
+            "--job-name",
+            job_name,
+            "--cpus-per-task",
+            str(config.get("cpus_per_task", 16)),
+            "--mem",
+            str(config.get("mem", "64G")),
+            "--time",
+            str(config.get("time", "02:00:00")),
+        ]
+        if config.get("nodelist"):
+            argv += ["--nodelist", str(config["nodelist"])]
+        if config.get("extra_args"):
+            argv += [str(value) for value in config["extra_args"]]
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            cwd=work,
+            env=self.settings.tool_environment(),
+        )
+        if result.returncode != 0:
+            raise DomainError(
+                "Slurm 分配失败：" + (result.stderr or result.stdout)[-800:]
+            )
+        job_id = self._allocation_id(job_name, work)
+        if job_id is None:
+            raise DomainError("Slurm 未返回分配编号")
+        self.allocation_id = job_id
+        return job_id
+
+    def _allocation_id(self, job_name: str, work: Path) -> str | None:
+        """The newest pending/running allocation with this job name and directory."""
+
+        squeue = executable_path("squeue")
+        if squeue is None:
+            return None
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            result = subprocess.run(
+                [squeue, "--me", "--name", job_name, "--noheader", "--format=%i %T"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+            for row in sorted(rows, key=lambda r: -int(r[0])):
+                if len(row) >= 2 and row[1] in {"PENDING", "RUNNING", "CONFIGURING"}:
+                    return row[0]
+            time.sleep(2)
+        return None
+
+    def _close_allocation(self):
+        job_id = getattr(self, "allocation_id", None)
+        if not job_id:
+            return
+        self.allocation_id = None
+        scancel = executable_path("scancel")
+        if scancel is None:
+            return
+        try:
+            subprocess.run([scancel, job_id], capture_output=True, timeout=60)
+        except subprocess.SubprocessError:
+            pass
+
+    def _conversion_parallelism(self) -> dict:
+        """Worker counts for this conversion, bounded by the CPUs available.
+
+        ``os.sched_getaffinity`` reports the allocation's CPUs inside a Slurm
+        step, so the same numbers hold when the pipeline is run without Slurm.
+        """
+
+        try:
+            cpus = len(os.sched_getaffinity(0))
+        except AttributeError:
+            cpus = os.cpu_count() or 1
+        config = self.settings.slurm or {}
+        configured = int(config.get("conversion_workers") or 0)
+        workers = configured or max(1, min(cpus, 8))
+        return {
+            "convert_workers": workers,
+            "video_workers": workers,
+            "video_codec_threads": max(1, cpus // max(1, workers)),
+        }
+
+    def _scheduled(self, args, allocation=None):
+        """Wrap a heavy command in an Slurm allocation when one is configured.
+
+        Conversion is CPU-bound (JPEG/H.264 encoding across every episode and
+        camera), so it runs inside its own allocation instead of competing with
+        whatever else the login node is doing. The wrapper is transparent: exit
+        code, stdout and stderr belong to the inner command, and ``srun``
+        propagates its signal so cancelling the server still stops the work.
+
+        ``allocation`` reuses an existing ``SLURM_JOB_ID`` so a job's convert,
+        validate and doctor steps share one allocation and queue once.
+        """
+
+        config = self.settings.slurm or {}
+        if not config.get("enabled"):
+            return list(args)
+        srun = executable_path("srun")
+        if srun is None:
+            raise DomainError("配置了 Slurm 但找不到 srun", 503)
+        reusable = allocation or os.environ.get("SLURM_JOB_ID")
+        if reusable:
+            return [srun, "--jobid", str(reusable), *args]
+        argv = [
+            srun,
+            "--partition",
+            str(config.get("partition", "dev")),
+            "--job-name",
+            str(config.get("job_name", "bodypipeline-convert")),
+            "--cpus-per-task",
+            str(config.get("cpus_per_task", 16)),
+            "--mem",
+            str(config.get("mem", "64G")),
+            "--time",
+            str(config.get("time", "02:00:00")),
+            # Do NOT redirect srun's output: doctor writes its JSON report to
+            # stdout, and --output /dev/null discards it, leaving an empty file.
+            "--exact",
+        ]
+        if config.get("nodelist"):
+            argv += ["--nodelist", str(config["nodelist"])]
+        if config.get("extra_args"):
+            argv += [str(value) for value in config["extra_args"]]
+        return argv + list(args)
 
     def tick(self):
         if self.settings.auto_process:
@@ -263,6 +418,9 @@ class JobRunner:
             stage="原始数据核验与时间对齐",
             started_at=now(),
         )
+        # A failed job must not leave an allocation holding CPUs until its wall
+        # clock runs out, so every exit path releases it.
+        self.allocation_id = None
         try:
             prepare_storage(self.settings, job)
             work = storage_path(self.settings, job, "work", job["id"])
@@ -478,14 +636,20 @@ class JobRunner:
                 raise DomainError(
                     "未找到 letools；请按 README 在独立 Python 3.12 环境安装固定提交并配置 letools_bin"
                 )
+            # One allocation for this job's whole toolchain chain.
+            allocation = self._open_allocation(work)
             code, _, err = self.command(
-                [executable, "doctor", "environment"], work, "environment"
+                [executable, "doctor", "environment"],
+                work,
+                "environment",
+                allocation=allocation,
             )
             if code:
                 raise DomainError(
                     "letools 环境诊断失败：" + err.read_text(errors="replace")[-1200:]
                 )
             self.save(job, stage="letools 转换")
+            job.update(self._conversion_parallelism())
             args = provider.conversion_args(
                 executable=executable,
                 source=work / "aligned",
@@ -493,7 +657,7 @@ class JobRunner:
                 profile=profile,
                 job=job,
             )
-            code, _, err = self.command(args, work, "convert")
+            code, _, err = self.command(args, work, "convert", allocation=allocation)
             if code:
                 raise DomainError(
                     f"转换失败（{code}）：{err.read_text(errors='replace')[-2000:]}"
@@ -504,6 +668,7 @@ class JobRunner:
                 [executable, "validate", str(work / "dataset"), "--deep"],
                 work,
                 "validate",
+                allocation=allocation,
             )
             if code:
                 raise DomainError(
@@ -522,6 +687,7 @@ class JobRunner:
                 episode_count=len(ids),
             )
             if not job.get("run_doctor", True):
+                self._close_allocation()
                 self.save(
                     job,
                     state="CONVERTED",
@@ -544,6 +710,7 @@ class JobRunner:
                 ],
                 work,
                 "doctor",
+                allocation=allocation,
             )
             try:
                 doctor = json.loads(output.read_text())
@@ -553,6 +720,7 @@ class JobRunner:
                 raise DomainError(
                     f"Doctor 未生成有效 JSON，属于任务错误而不是质量通过：{err.read_text(errors='replace')[-1200:]}"
                 ) from exc
+            self._close_allocation()
             self.save(job, doctor_report=doctor)
             info = json.loads((work / "dataset/meta/info.json").read_text())
             gate = doctor_gate(doctor, info, code)
@@ -580,6 +748,7 @@ class JobRunner:
                 finished_at=now(),
             )
         except InterruptedError as exc:
+            self._close_allocation()
             self.save(
                 job,
                 state="INTERRUPTED",
@@ -588,6 +757,7 @@ class JobRunner:
                 finished_at=now(),
             )
         except Exception as exc:
+            self._close_allocation()
             self.save(
                 job, state="FAILED", stage="任务失败", error=str(exc), finished_at=now()
             )

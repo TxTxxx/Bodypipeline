@@ -352,6 +352,118 @@ letools doctor check <dataset> --json ...
 
 Server 固定排除 Doctor 的 kinematics 检查，执行其余 11 项非运动学检查。关节限位不参与转换准入。
 
+## 6.4 Argus 内容分析（可选）
+
+内容分析需要独立的 Python 3.11 环境和固定提交的 Argus 源码：
+
+```bash
+bash scripts/install_argus.sh
+```
+
+脚本会安装 ffmpeg 依赖检查、克隆固定提交、应用网关补丁并**提交为一次 commit**
+（Argus 拒绝在工作区有未提交改动时执行付费运行），然后把路径写进 Server 配置：
+
+```json
+{
+  "argus_src": "/opt/bodypipeline/.runtime/argus/src",
+  "argus_python": "/opt/bodypipeline/.runtime/argus/venv/bin/python",
+  "argus_model": "openai/gpt-6-astra",
+  "argus_per_episode_budget_usd": 1.0,
+  "argus_max_tokens": 12000
+}
+```
+
+付费标注需要 `PIPELINE_ARGUS_API_KEY`；不配置时只有本地检查可用。
+`argus_base_url` 可指向任意 Chat Completions 兼容网关，此时需
+`PIPELINE_ARGUS_GENERIC_GATEWAY=1`，补丁会去掉网关不接受的字段。
+
+跨模态检查依赖 Profile 声明的相机安装关系：
+
+```json
+{"id": "left", "topic": "...", "mounting": "wrist_left"}
+```
+
+未声明时该检查为"未评估"，不会被当作通过。
+
+## 6.5 Slurm 转换资源（可选）
+
+转换是 CPU 密集型（每个 episode、每路相机都要重新编码），在计算节点上应通过
+Slurm 申请资源，而不是在登录节点上与其他人争抢。
+
+```json
+{
+  "slurm": {
+    "enabled": true,
+    "partition": "dev",
+    "job_name": "bodypipeline-convert",
+    "cpus_per_task": 32,
+    "mem": "128G",
+    "time": "04:00:00",
+    "conversion_workers": 8
+  }
+}
+```
+
+行为：
+
+- 每个转换任务用 `salloc --no-shell` 申请**一个**分配，`doctor environment`、
+  `convert`、`validate`、`doctor` 全部通过 `srun --jobid` 在该分配内执行，
+  因此只排队一次。
+- 分配在任务结束、失败或中断时都会 `scancel`，不会残留占用。
+- `--workers` / `--video-workers` 取 `conversion_workers`，
+  `--video-codec-threads` 按可用 CPU 均分；`sched_getaffinity` 反映分配内的实际核数。
+- 未配置 `slurm` 或 `enabled=false` 时，命令直接在本机执行，行为与之前完全一致。
+
+### 6.5.1 计算节点可见性
+
+Slurm 可以把作业调度到任意分区节点，而转换依赖的路径必须在该节点上真实存在：
+
+| 路径 | 要求 |
+| --- | --- |
+| `letools_bin` 指向的独立工具环境 | 每个可能被调度的节点都必须可见 |
+| `data_root` | 同上 |
+| Server 安装目录（`.venv`、`configs`） | 只需 Server 所在节点可见，但若作业读取其中文件则同样要求 |
+| `argus_src` / `argus_python` | 用到内容分析时同样要求 |
+
+**典型故障**：节点级共享目录只挂载在一部分节点上，作业被调度到其余节点后报
+
+```text
+slurmstepd: error: execve(): <toolchain>/bin/letools: No such file or directory
+srun: error: <node>: task 0: Exited with exit code 2
+```
+
+这不是路径配置错误，而是该节点没有挂载这个文件系统。诊断方法是在目标节点上直接检查：
+
+```bash
+srun -p <partition> -w <node> -c 1 --mem=1G -t 00:01:00 --exact \
+  bash -c 'test -d <toolchain-dir> && echo OK || echo MISSING'
+```
+
+两种处理方式：
+
+1. **把工具链放到所有计算节点都挂载的共享文件系统**（推荐，可解除节点限制）；
+2. **临时用 `nodelist` 固定节点**（见下），代价是该节点繁忙时转换会排队。
+
+```json
+{
+  "slurm": {
+    "enabled": true,
+    "nodelist": "<node-with-the-toolchain>"
+  }
+}
+```
+
+`nodelist` 会以 `--nodelist` 传给 `salloc`。它只应作为权宜之计：一旦该节点
+drain、维护或被长期占满，转换就无法运行。
+
+### 6.5.2 输出重定向的陷阱
+
+`srun` 的 `--output` / `--error` 会把任务自身的标准输出改写到指定文件，
+**不会**转发给父进程。Doctor 在 `--ci` 模式下把 JSON 报告写到 stdout，
+因此这两个参数会让报告文件变成 0 字节，任务被判为"未生成有效报告"。
+
+不要给 `srun` 加 `--output` / `--error`；父进程已经把它重定向到任务工作目录。
+
 ## 7. Viewer
 
 Visualizer 由 Server 随服务常驻启动（只启动一个 Next.js 进程，不绑定任何数据集），
@@ -428,6 +540,26 @@ ssh -N -L 18082:127.0.0.1:8082 <server-host>
 - 如现场需要删除已上传的 `episode.hdf5`，必须另行走经批准的数据保留和备份流程。
 - Doctor 不自动修复、裁剪或删除数据。
 
+### 10.1 迁移安装位置
+
+把 Server 或工具链从一处文件系统迁到另一处时，按顺序处理，避免出现半迁移状态：
+
+1. **先确认目标路径在所有计算节点可见**（见 6.5.1）。只迁移登录节点可见的目录，
+   会让 Slurm 作业在其余节点上失败，而且失败是间歇性的 —— 取决于调度结果。
+2. **停止 Server 并确认没有运行中的任务**。`RUNNING` 任务在重启后会转为
+   `INTERRUPTED`，但已启动的外部工具子进程不会被自动回收。
+3. **复制而不是移动**。`cp -a` 到新位置，验证后再切换配置，确认无误才删除旧目录。
+   Python 虚拟环境包含绝对路径，跨目录复制后必须重新创建或用 `venv --upgrade` 修正。
+4. **更新所有引用该路径的配置项**：`letools_bin`、`argus_src`、`argus_python`、
+   `root`、`data_root`、`viewer_bun`，以及 systemd 单元的 `WorkingDirectory` / `ExecStart`。
+5. **备份旧配置与单元**，迁移后重启并验证：`/healthz`、一次导入、一次转换、
+   一次 Doctor、一次内容分析。
+6. **权限按最小可用设置**。共享文件系统常对所有人可写；项目目录、状态目录和凭据
+   不应沿用这种默认值。
+
+迁移后旧任务的记录里仍保存着旧路径。Server 会按配置允许的根目录只读解析这些路径，
+不会自动搬迁历史结果；确认不再需要旧目录后再手工归档。
+
 ## 11. 故障排查
 
 ### Client 无法连接
@@ -453,6 +585,23 @@ systemctl --user status bodypipeline-bridge bodypipeline-client
 ### 转换报时间对齐越界
 
 查看任务中的 `episode_diagnostics`，确认具体 episode、流、帧号和误差。先检查 recorder 启动瞬态、topic 连续性、时间戳单位和磁盘写入，不要直接放宽 `max_camera_skew_ms` / `max_action_age_ms`。AgileX ALOHA 已知启动空洞见[recorder 修复文档](robots/agilex-recorder-fix.md)。
+
+### 转换作业在 Slurm 节点上找不到工具链
+
+```text
+slurmstepd: error: execve(): <toolchain>/bin/letools: No such file or directory
+srun: error: <node>: task 0: Exited with exit code 2
+```
+
+该节点没有挂载工具链所在文件系统。按 6.5.1 在目标节点上确认可见性，并把工具链
+放到全节点共享的路径；临时可用 `slurm.nodelist` 固定到可见节点。
+
+### Doctor 报告为空、任务报"未生成有效报告"
+
+若任务日志里只有一行 `srun: error: ... Exited with exit code 1`，而报告文件是 0 字节，
+检查是否为 `srun` 添加了 `--output` / `--error`：两者会把 Doctor 写到 stdout 的 JSON
+丢弃（见 6.5.2）。Doctor 以 `--fail-on warn` 运行时 exit 1 属于正常的质量结论，
+报告仍然有效。
 
 ### Doctor 不可用
 

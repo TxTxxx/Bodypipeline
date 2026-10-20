@@ -45,17 +45,20 @@
     {
       "id": "left",
       "label": "左侧相机",
-      "topic": "/camera_l/color/image_raw"
+      "topic": "/camera_l/color/image_raw",
+      "mounting": "wrist_left"
     },
     {
       "id": "front",
       "label": "前方相机",
-      "topic": "/camera_f/color/image_raw"
+      "topic": "/camera_f/color/image_raw",
+      "mounting": "scene"
     },
     {
       "id": "right",
       "label": "右侧相机",
-      "topic": "/camera_r/color/image_raw"
+      "topic": "/camera_r/color/image_raw",
+      "mounting": "wrist_right"
     }
   ],
   "state_streams": [

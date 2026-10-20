@@ -47,5 +47,16 @@ class RobotProvider(Protocol):
 
     def lineage_metadata(self, profile: dict) -> dict: ...
 
+    def analysis_context(self, profile: dict) -> dict:
+        """Facts a downstream analysis engine needs that the dataset does not carry.
+
+        Argus infers camera mounting from camera names and refuses to assume it.
+        When the profile states where each camera sits, that fact belongs here so
+        the analysis can qualify its cross-modal checks instead of skipping them.
+        Nothing in this mapping may be invented: an absent fact stays absent and
+        the engine reports the affected check as not assessed.
+        """
+        return {}
+
 
 __all__ = ["RobotProvider", "RobotRuntime"]

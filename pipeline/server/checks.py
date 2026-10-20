@@ -14,9 +14,22 @@ from .storage import storage_path
 
 
 class QualityRunner:
-    def __init__(self, settings, store, command):
+    def __init__(
+        self, settings, store, command, *, open_allocation=None, close_allocation=None
+    ):
         self.settings, self.store, self.command = settings, store, command
         self.lock = threading.RLock()
+        # Supplied by the JobRunner: a check reuses one Slurm allocation for
+        # validate and doctor, and releases it when the report is stored.
+        self._open_allocation = open_allocation
+        self._close_allocation = close_allocation
+
+    def runner_open_allocation(self, work):
+        return self._open_allocation(work) if self._open_allocation else None
+
+    def runner_close_allocation(self):
+        if self._close_allocation:
+            self._close_allocation()
 
     def save(self, row, **fields):
         row.update(**fields, updated_at=now())
@@ -76,8 +89,14 @@ class QualityRunner:
             tool = executable_path(self.settings.letools_bin)
             if not tool:
                 raise DomainError("未安装 letools / Doctor 依赖")
+            # One allocation for validate and doctor; without this each call
+            # enters the Slurm queue separately.
+            allocation = self.runner_open_allocation(work)
             code, _, err = self.command(
-                [tool, "validate", str(data), "--deep"], work, "validate"
+                [tool, "validate", str(data), "--deep"],
+                work,
+                "validate",
+                allocation=allocation,
             )
             if code:
                 raise DomainError(
@@ -98,6 +117,7 @@ class QualityRunner:
                 ],
                 work,
                 "doctor",
+                allocation=allocation,
             )
             try:
                 report = json.loads(output.read_text())
@@ -107,6 +127,7 @@ class QualityRunner:
                 raise DomainError(
                     "Doctor 未生成有效报告：" + err.read_text(errors="replace")[-1200:]
                 ) from exc
+            self.runner_close_allocation()
             self.save(row, doctor_report=report)
             info = json.loads((data / "meta/info.json").read_text())
             gate = doctor_gate(report, info, code)
