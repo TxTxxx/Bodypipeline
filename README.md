@@ -77,6 +77,7 @@ flowchart LR
 | Adapter / Bridge | 把统一采集接口映射到机器人 ROS2 service、topic 和消息 |
 | Server | 设备鉴权、上传接收、Runtime/Provider 路由、数据集分组、转换任务、Doctor 与预览调度 |
 | letools | 原始输入读取、LeRobot 转换、deep validate、Doctor 和 Visualizer |
+| 内容分析（Argus） | 独立工具链：确定性检查（跨模态、画面质量、传感器）与可选的语义标注 |
 | Viewer 网关 | 代理 Visualizer UI、数据桥与视频流；页面入口不要求登录 |
 | Shared | 配置、JSON 存储、路径约束、鉴权、collection 元数据 |
 
@@ -366,7 +367,7 @@ patches/                    # AgileX ALOHA recorder 修复补丁与 Visualizer �
 | 文档 | 内容 |
 | --- | --- |
 | [架构设计](docs/architecture.md) | 组件边界、数据流、状态机、存储与安全设计 |
-| [部署与运维](docs/deployment.md) | uv 环境、配置、多设备、ROS2、Server、Visualizer 与迁移 |
+| [部署与运维](docs/deployment.md) | uv 环境、配置、多设备、ROS2、Server、Visualizer、Slurm 资源与迁移 |
 | [Server 工作台](docs/server-workbench.md) | 导入、批量转换、预览与 Doctor 操作说明 |
 | [代码导读](docs/code-tour.md) | 模块职责、关键调用链、状态机与测试入口 |
 | [letools 集成](docs/letools-integration.md) | 固定版本、CLI 调用、Doctor 与 Visualizer 集成边界 |

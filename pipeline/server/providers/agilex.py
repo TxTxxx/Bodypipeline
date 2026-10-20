@@ -150,19 +150,27 @@ class AgileXProvider:
                 "--robot-type",
                 profile["robot_type"],
             ]
+        # Conversion is CPU-bound: every episode's frames are re-encoded per
+        # camera. A single worker leaves most of an allocation idle, so the
+        # worker counts come from configuration and are capped by the CPUs the
+        # process can actually use.
+        workers = max(1, int(job.get("convert_workers") or 1))
+        video_workers = max(1, int(job.get("video_workers") or workers))
         return [
             *common,
             *source_args,
             "--to",
             job.get("target_format", "v3.0"),
             "--workers",
-            "1",
+            str(workers),
             "--video-workers",
-            "1",
+            str(video_workers),
             "--video-codec",
             "libx264",
             "--video-pixel-format",
             "yuv420p",
+            "--video-codec-threads",
+            str(max(1, int(job.get("video_codec_threads") or 1))),
         ]
 
     def _write_hdf5_preset(
@@ -225,8 +233,15 @@ class AgileXProvider:
             return
         info_path = dataset / "meta/info.json"
         info = json.loads(info_path.read_text())
+        units = list(profile.get("joint_units") or [])
         for field in ("action", "observation.state"):
-            info["features"][field]["names"] = list(profile["joint_names"])
+            feature = info["features"][field]
+            feature["names"] = list(profile["joint_names"])
+            # Units are part of the LeRobot feature contract. Downstream tools that
+            # qualify a physical layout (for example Argus) refuse to read joint
+            # semantics when they are absent, so record what the profile declares.
+            if len(units) == len(profile["joint_names"]):
+                feature["units"] = units
         atomic_json(info_path, info)
 
     def lineage_metadata(self, profile: dict) -> dict:
@@ -235,4 +250,30 @@ class AgileXProvider:
             "source_format": self.source_format,
             "raw_formats": list(AGILEX_RAW_FORMATS),
             "joint_dimensions": AGILEX_JOINT_DIMENSIONS,
+        }
+
+    def analysis_context(self, profile: dict) -> dict:
+        """What an analysis engine cannot read from the dataset itself.
+
+        Only facts the profile actually states are returned. A camera without a
+        declared ``mounting`` is left out, so the engine reports the checks that
+        depend on it as not assessed rather than guessing.
+        """
+
+        cameras = {}
+        for camera in profile.get("cameras") or []:
+            if not isinstance(camera, dict):
+                continue
+            mounting = camera.get("mounting")
+            camera_id = camera.get("id")
+            if isinstance(camera_id, str) and isinstance(mounting, str) and mounting:
+                cameras[camera_id] = mounting
+        return {
+            "cameras": cameras,
+            "state_streams": list(profile.get("state_streams") or []),
+            "action_streams": list(profile.get("action_streams") or []),
+            "joint_names": list(profile.get("joint_names") or []),
+            "joint_units": list(profile.get("joint_units") or []),
+            "output_fps": profile.get("output_fps"),
+            "control_mode": profile.get("control_mode"),
         }
