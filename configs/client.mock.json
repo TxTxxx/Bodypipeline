@@ -2,5 +2,6 @@
   "mode": "mock",
   "root": ".runtime/client",
   "server_url": "http://127.0.0.1:8081",
-  "profile_path": "configs/agilex-aloha.json"
+  "profile_path": "configs/agilex-aloha.json",
+  "replay": {"enabled": true, "provider": "simulated"}
 }

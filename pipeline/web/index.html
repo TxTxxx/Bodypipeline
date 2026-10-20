@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>BodyPipeline · 具身数据工作台</title>
     <link rel="stylesheet" href="/assets/style.css" />
+    <script src="/assets/client-replay.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -48,7 +49,8 @@
         <div class="sidebar-heading"><span class="workspace-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"/></svg></span><div><strong>数据工作区</strong><span>BodyPipeline</span></div><button id="menu-close" class="icon-button mobile-only" type="button" aria-label="关闭导航">×</button></div>
         <p class="nav-section-label">工作台</p>
         <nav aria-label="采集导航" id="client-nav">
-          <button class="nav-item active" id="nav-main" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg><span id="nav-label">采集工作台</span></button>
+          <button class="nav-item active" id="nav-main" data-client-tab="capture" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg><span id="nav-label">采集工作台</span></button>
+          <button class="nav-item" type="button" data-client-tab="replay" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7V5Z"/><path d="M4 5v14"/></svg><span>数据回放</span></button>
         </nav>
         <nav aria-label="服务器工作台" id="server-nav" hidden>
           <button class="nav-item" type="button" data-server-tab="uploads" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg><span>原始数据</span><span class="nav-count" id="nav-upload-count">0</span></button>
@@ -166,18 +168,54 @@
               <pre id="health-detail"></pre>
             </details>
           </section>
+            <div id="client-replay-panel" hidden>
+              <section class="panel robot-scope">
+                <div><span class="small muted">当前机器人</span><strong id="cr-robot">—</strong><p id="cr-provider" class="small muted"></p></div>
+                <div><span id="cr-connection" class="badge">等待连接</span><p class="small muted">使用本机保留的采集或轨迹文件，直接在当前机器人执行。</p></div>
+              </section>
+              <p id="cr-message" class="warning" role="status" hidden></p>
+              <p id="cr-simulation" class="warning" hidden>本地模拟模式：只验证数据适配和执行流程，不连接机器人。</p>
+              <div class="client-replay-grid">
+                <section class="panel">
+                  <div class="panel-heading"><h2>选择回放数据</h2><button id="cr-refresh" class="secondary" type="button">刷新</button></div>
+                  <div class="client-replay-body">
+                    <div class="client-replay-tabs"><button id="cr-source-captures" class="secondary active" type="button">平台采集</button><button id="cr-source-files" class="secondary" type="button">机器人本地文件</button></div>
+                    <div id="cr-capture-source">
+                      <label for="cr-dataset">数据集</label><select id="cr-dataset"><option value="">正在加载数据集…</option></select>
+                      <div id="cr-episodes" class="client-replay-files"></div>
+                    </div>
+                    <div id="cr-file-source" hidden>
+                      <label for="cr-root">机器人数据目录</label><select id="cr-root"></select>
+                      <div class="client-replay-breadcrumb"><button id="cr-up" class="secondary" type="button">上一级</button><span id="cr-directory" class="small muted">/</span></div>
+                      <div id="cr-files" class="client-replay-files"></div>
+                    </div>
+                  </div>
+                </section>
+                <section class="panel">
+                  <div class="panel-heading"><h2>回放控制</h2><span id="cr-state" class="badge">空闲</span></div>
+                  <div class="client-replay-body">
+                    <p id="cr-selected" class="client-replay-path">选择左侧 Episode</p>
+                    <p id="cr-details" class="small muted">正在读取当前机器人的回放能力。</p>
+                    <progress id="cr-progress" max="1" value="0"></progress><p id="cr-counter" class="small muted">0 / 0 帧</p>
+                    <div class="client-replay-actions"><button id="cr-start" class="primary" disabled type="button">开始回放</button><button id="cr-stop" class="secondary" disabled type="button">停止回放</button></div>
+                    <p id="cr-mode-note" class="small muted">由当前机器人的回放适配器执行。</p>
+                    <details><summary>执行日志</summary><pre id="cr-log" class="client-replay-log"></pre></details>
+                  </div>
+                </section>
+              </div>
+            </div>
           <section id="server-view" hidden>
             <div class="warning" id="demo-warning" hidden>
               演示模式只验证上传与时间对齐。真实格式转换、Doctor 和 Visualizer 需部署真实工具环境。
             </div>
-            <section class="panel robot-scope" aria-label="选择机器人类型">
+            <section class="panel robot-scope" data-server-overview aria-label="选择机器人类型">
               <div>
                 <label for="server-robot-type">先选择机器人类型 <span class="required">*</span></label>
                 <select id="server-robot-type"><option value="">请选择机器人类型</option></select>
               </div>
               <p class="small muted" id="robot-scope-hint">选择后，再选择该类型下的数据集。原始数据、转换任务和预览结果会一起筛选。</p>
             </section>
-            <div class="metrics">
+            <div class="metrics" data-server-overview>
               <div class="metric"><span>已接收采集</span><strong id="metric-uploads">0</strong><small>完整校验的原始文件</small></div>
               <div class="metric"><span>转换任务</span><strong id="metric-jobs">0</strong><small>独立输出 · 可追溯处理</small></div>
               <div class="metric"><span>可预览结果</span><strong id="metric-completed">0</strong><small>已完成转换的数据集</small></div>
