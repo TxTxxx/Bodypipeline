@@ -434,7 +434,7 @@ def test_slurm_wrapper_is_transparent_and_configurable(
             "cpus_per_task": 32,
             "mem": "128G",
             "time": "04:00:00",
-            "nodelist": "H800-node11",
+            "nodelist": "gpu-node-a",
         },
     )
     runner = JobRunner(s, SimpleNamespace(store=Store(s.root / "state")))
@@ -443,7 +443,7 @@ def test_slurm_wrapper_is_transparent_and_configurable(
     assert "--partition" in argv and argv[argv.index("--partition") + 1] == "train"
     assert argv[argv.index("--cpus-per-task") + 1] == "32"
     assert argv[argv.index("--mem") + 1] == "128G"
-    assert argv[argv.index("--nodelist") + 1] == "H800-node11"
+    assert argv[argv.index("--nodelist") + 1] == "gpu-node-a"
     assert argv[-4:] == ["/opt/letools", "convert", "a", "b"]
 
 
