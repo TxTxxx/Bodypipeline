@@ -45,6 +45,17 @@ class Settings:
     viewer_data_port: int = 8765
     viewer_ttl: int = 1800
     viewer_bun: str = ""
+    argus_src: str = ""
+    argus_python: str = ""
+    argus_base_url: str = ""
+    argus_model: str = "openai/gpt-6-astra"
+    argus_api_key_env: str = "PIPELINE_ARGUS_API_KEY"
+    argus_auto_label: bool = False
+    argus_task_budget_usd: float = 20.0
+    argus_daily_budget_usd: float = 100.0
+    argus_per_episode_budget_usd: float = 1.0
+    argus_max_tokens: int = 12000
+    slurm: dict = field(default_factory=dict)
     devices: list[dict] = field(default_factory=list)
     accepted_capture_profile_hashes: list[str] = field(default_factory=list)
 

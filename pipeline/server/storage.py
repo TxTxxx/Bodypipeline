@@ -8,7 +8,7 @@ from pathlib import Path
 from pipeline.shared.core import DomainError, confined, durable_mkdir
 
 ROBOT_LAYOUT = "robot_type_v1"
-AREAS = ("incoming", "raw", "work")
+AREAS = ("incoming", "raw", "work", "analyses")
 
 
 def robot_type(value) -> str:

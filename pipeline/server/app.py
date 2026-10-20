@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -13,6 +14,7 @@ from pipeline.shared.core import DomainError, ProcessLock, executable_path
 from pipeline.shared.security import install_security
 from pipeline.shared.web import mount_ui
 
+from .analyses import AnalysisRunner
 from .checks import QualityRunner
 from .datasets import TARGET_FORMATS, dataset_for_job
 from .imports import ImportService
@@ -43,21 +45,45 @@ class ImportRequest(BaseModel):
     runtime_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class AnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["local", "full"] = "local"
+    episodes: list[int] | None = Field(default=None, max_length=1000)
+
+
+log = logging.getLogger("pipeline.server")
+
+
 def create_app(settings, background=True):
     ingest = IngestService(settings)
     runtimes = RuntimeCatalog(settings)
     imports = ImportService(settings, ingest, runtimes)
     runner = JobRunner(settings, ingest)
-    checks = QualityRunner(settings, ingest.store, runner.command)
+    checks = QualityRunner(
+        settings,
+        ingest.store,
+        runner.command,
+        open_allocation=runner._open_allocation,
+        close_allocation=runner._close_allocation,
+    )
+    analyses = AnalysisRunner(settings, ingest.store, runner.command)
     viewer = ViewerManager(settings, ingest.store)
     lock = ProcessLock(settings.root / "server.lock")
     stopping = asyncio.Event()
 
     async def loop():
         while not stopping.is_set():
-            await asyncio.to_thread(runner.tick)
-            if not stopping.is_set():
-                await asyncio.to_thread(checks.tick)
+            # One failing worker must not stop the shared loop: a dead loop means
+            # every later job, check and analysis silently stops being picked up.
+            for worker in (runner.tick, checks.tick, analyses.tick):
+                if stopping.is_set():
+                    break
+                try:
+                    await asyncio.to_thread(worker)
+                except Exception:
+                    log.exception(
+                        "worker tick failed: %s", getattr(worker, "__self__", worker)
+                    )
             try:
                 await asyncio.wait_for(stopping.wait(), settings.poll_seconds)
             except asyncio.TimeoutError:
@@ -80,6 +106,7 @@ def create_app(settings, background=True):
         ingest.reconcile()
         runner.recover()
         checks.recover()
+        analyses.recover()
         viewer.recover()
         tasks = (
             [asyncio.create_task(loop()), asyncio.create_task(viewer_loop())]
@@ -100,6 +127,7 @@ def create_app(settings, background=True):
     app.state.ingest, app.state.runner, app.state.viewer = ingest, runner, viewer
     app.state.imports = imports
     app.state.checks = checks
+    app.state.analyses = analyses
     app.state.runtimes = runtimes
     install_security(app, settings, device_prefix="/device/")
     mount_ui(app, report=True)
@@ -324,12 +352,43 @@ def create_app(settings, background=True):
 
     @app.post("/api/jobs/{jid}/checks", status_code=202)
     def run_check(jid: str):
+        # Doctor and the content analysis answer different questions about the
+        # same dataset, so starting one starts both. Argus does not need letools,
+        # so it is enqueued first: a broken Doctor install must not hide it.
+        if settings.argus_src:
+            try:
+                analyses.enqueue(jid, mode="local")
+            except DomainError:
+                pass
         return checks.enqueue(jid)
 
     @app.get("/api/jobs/{jid}/checks")
     def job_checks(jid: str):
         ingest.store.get("job", jid)
         return [r for r in ingest.store.all("check") if r["job_id"] == jid]
+
+    @app.post("/api/jobs/{jid}/analyses", status_code=202)
+    def run_analysis(jid: str, body: AnalysisRequest | None = Body(default=None)):
+        options = body or AnalysisRequest()
+        return analyses.enqueue(jid, mode=options.mode, episodes=options.episodes)
+
+    @app.get("/api/jobs/{jid}/analyses")
+    def job_analyses(jid: str):
+        ingest.store.get("job", jid)
+        return [r for r in ingest.store.all("analysis") if r["job_id"] == jid]
+
+    @app.get("/api/analyses/{aid}")
+    def analysis(aid: str):
+        return ingest.store.get("analysis", aid)
+
+    @app.post("/api/analyses/{aid}/cancel")
+    def cancel_analysis(aid: str):
+        return analyses.cancel(aid)
+
+    @app.get("/api/analyses/{aid}/budget")
+    def analysis_budget(aid: str):
+        row = ingest.store.get("analysis", aid)
+        return analyses.budget(row["job_id"], row["episode_count"], "full")
 
     @app.get("/api/checks/{cid}/logs/{name}")
     def check_logs(cid: str, name: str):
