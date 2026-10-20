@@ -91,6 +91,7 @@ let filter = "all";
 let query = "";
 let pollTimer = null;
 let logText = "";
+let analyses = [];
 
 function badge(severity) {
   const cls = severity === "FAIL" ? "error" : severity === "WARN" ? "warn" : "";
@@ -492,6 +493,151 @@ function renderBlocked(job) {
   </div>`;
 }
 
+const ANALYSIS_STATE_NAMES = {
+  QUEUED: "排队中",
+  RUNNING: "分析中",
+  COMPLETED: "已完成",
+  PARTIAL: "部分完成",
+  FAILED: "执行失败",
+  INTERRUPTED: "已中断",
+  UNAVAILABLE: "不可用",
+};
+const ANALYSIS_VERDICT = {
+  CLEAN: { zh: "未发现问题", cls: "pass" },
+  REVIEW: { zh: "需人工复查", cls: "warn" },
+  INCOMPLETE: { zh: "覆盖不完整", cls: "warn" },
+};
+const ANALYSIS_MODE_NAMES = { local: "本地检查", full: "本地检查 + 语义标注" };
+
+function analysisBadge(state) {
+  const cls =
+    state === "FAILED"
+      ? "error"
+      : ["QUEUED", "RUNNING"].includes(state)
+        ? "busy"
+        : ["PARTIAL", "INTERRUPTED", "UNAVAILABLE"].includes(state)
+          ? "warn"
+          : "";
+  return `<span class="badge ${cls}">${esc(ANALYSIS_STATE_NAMES[state] || state)}</span>`;
+}
+
+function analysisRows(checks) {
+  if (!checks) return "";
+  const rows = [];
+  const add = (label, detail, value) => {
+    rows.push(
+      `<tr><td>${esc(label)}</td><td class="small muted">${esc(detail)}</td><td class="tabular">${esc(value)}</td></tr>`,
+    );
+  };
+  const pair = checks.stream_pairing || {};
+  if (pair.assessed) {
+    add(
+      "相机与机械臂对应",
+      "腕部相机的画面变化应与对应机械臂的运动相关",
+      `${pair.assessed} 个 episode 已判定${pair.crossed ? `，${pair.crossed} 个疑似接反` : "，未发现接反"}`,
+    );
+  } else if (pair.undefined) {
+    add(
+      "相机与机械臂对应",
+      "机械臂在该 episode 内没有运动，相关系数无定义",
+      `${pair.undefined} 个无法计算`,
+    );
+  } else if (pair.not_assessed) {
+    add("相机与机械臂对应", "缺少相机安装关系或时间对齐证据", `${pair.not_assessed} 个未评估`);
+  }
+  const jumps = checks.recorded_jumps || {};
+  if (jumps.flagged) {
+    add("记录跳变", "数值跳变但对应相机画面没有同样变化", `${jumps.flagged} 个 episode 命中`);
+  } else if (jumps.clean) {
+    add("记录跳变", "数值跳变但对应相机画面没有同样变化", `${jumps.clean} 个 episode 未命中`);
+  }
+  const grip = checks.gripper_channels || {};
+  if (grip.flagged) {
+    add("夹爪通道", "整段录制数值完全不变", `${grip.flagged} 个 episode 命中`);
+  } else if (grip.clean) {
+    add("夹爪通道", "整段录制数值完全不变", `${grip.clean} 个 episode 未命中`);
+  }
+  const na = checks.capture_qc_not_assessed || 0;
+  const layoutNa = checks.capture_qc_layout_not_applicable || 0;
+  const missing = checks.capture_qc_missing_evidence || 0;
+  add(
+    "画面质量",
+    "曝光、对比度、重复帧、画面冻结",
+    `${checks.capture_qc_flags || 0} 项命中` +
+      (layoutNa ? `，${layoutNa} 项在当前机器人布局上不适用` : "") +
+      (missing ? `，${missing} 项缺少证据未评估` : "") +
+      (!layoutNa && !missing && na ? `，${na} 项未评估` : ""),
+  );
+  return `<div class="table-scroll"><table class="doctor-table"><thead><tr><th>检查</th><th>说明</th><th>结果</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+
+function renderAnalyses(job) {
+  if (!analyses.length) {
+    return `<section class="report-section">
+      <h2>内容分析</h2>
+      <p class="small muted">尚未运行内容分析。运行 Doctor 会同时启动一次免费的本地内容分析；也可以单独提交。</p>
+      <div class="action-row"><button class="secondary" type="button" data-analysis="local">运行内容分析</button></div>
+    </section>`;
+  }
+  const latest = analyses
+    .slice()
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+  const verdict = ANALYSIS_VERDICT[latest.verdict] || null;
+  const gate = latest.cross_modal || {};
+  const runs = analyses
+    .slice()
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+    .map(
+      (row) =>
+        `<div class="analysis-run">
+          <span class="small muted">${esc(timeText(row.created_at))}</span>
+          ${analysisBadge(row.state)}
+          <span class="small">${esc(ANALYSIS_MODE_NAMES[row.mode] || row.mode)}</span>
+          ${row.verdict ? `<span class="badge ${(ANALYSIS_VERDICT[row.verdict] || {}).cls || ""}">${esc((ANALYSIS_VERDICT[row.verdict] || {}).zh || row.verdict)}</span>` : ""}
+          ${row.cost_usd ? `<span class="small muted">$${Number(row.cost_usd).toFixed(4)}</span>` : '<span class="small muted">免费</span>'}
+        </div>`,
+    )
+    .join("");
+  return `<section class="report-section">
+    <h2>内容分析</h2>
+    <p class="small muted">内容分析检查录像里实际发生了什么，与上方 Doctor 的结构和统计检查互补；它不改变任务状态。</p>
+    <div class="analysis-summary">
+      ${verdict ? `<span class="badge ${verdict.cls}">${esc(verdict.zh)}</span>` : ""}
+      <span class="small muted">覆盖 ${esc(latest.episodes ?? latest.episode_count ?? "—")} 个 episode</span>
+    </div>
+    ${
+      latest.state === "FAILED"
+        ? `<div class="warning small">${esc(latest.error || "分析执行失败")}</div>`
+        : analysisRows(latest.checks)
+    }
+    ${
+      gate.cross_modal_ready === false
+        ? `<div class="warning small">${esc(gate.reason)}</div>`
+        : ""
+    }
+    ${
+      latest.not_assessed && Object.keys(latest.not_assessed).length
+        ? `<details class="analysis-na">
+            <summary>未评估的检查项（${Object.keys(latest.not_assessed).length}）</summary>
+            <ul>${Object.entries(latest.not_assessed)
+              .map(([check, why]) => `<li><code>${esc(check)}</code> ${esc(why)}</li>`)
+              .join("")}</ul>
+          </details>`
+        : ""
+    }
+    <div class="analysis-runs">${runs}</div>
+    <div class="action-row">
+      <button class="secondary" type="button" data-analysis="local">重新运行本地分析</button>
+      <button class="secondary" type="button" data-analysis="full">运行完整分析（含语义标注，计费）</button>
+    </div>
+    ${
+      latest.state === "QUEUED" || latest.state === "RUNNING"
+        ? '<p class="small muted">分析进行中，页面会自动刷新。</p>'
+        : ""
+    }
+  </section>`;
+}
+
 function renderReport(job, checks) {
   const active = reportFor(job, checks);
   const report = active.report;
@@ -526,13 +672,26 @@ function renderReport(job, checks) {
             }
           </section>`
     }
+    ${renderAnalyses(job)}
     ${renderRaw(job, active)}
     <p class="report-footer-note">
       <strong>边界说明：</strong>Doctor 只生成质量报告，不执行关节/夹爪软限位门禁、URDF 运动学准入，也不会自动修复、裁剪或删除数据。
       BodyPipeline 固定运行 11 项非运动学检查；报告中的明细消息保留 Doctor 原始英文，便于与上游工具对照排查。
       WARN / FAIL 的结果仍保留数据集，可继续预览和人工复查。
+      <br />
+      内容分析是独立的第三方检查，结论不参与任务状态；「不适用」表示该检查在当前机器人布局上没有定义（例如关节角录制没有末端位姿），
+      不等同于通过，也不等同于失败。
     </p>`;
   applyFilter();
+}
+
+function pickerAnalysis(job) {
+  const rows = analyses.filter((row) => row.job_id === job.id);
+  if (!rows.length) return '<span class="state-pill">未分析</span>';
+  const latest = rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+  const verdict = ANALYSIS_VERDICT[latest.verdict];
+  if (!verdict) return analysisBadge(latest.state);
+  return `<span class="badge ${verdict.cls}">${esc(verdict.zh)}</span>`;
 }
 
 function renderPicker(jobs) {
@@ -554,6 +713,7 @@ function renderPicker(jobs) {
             <td>LeRobot ${esc(job.target_format || "v3.0")}</td>
             <td>${report ? badge(report.overall_severity) : '<span class="state-pill">尚未质检</span>'}</td>
             <td>${badge_state(job.state)}</td>
+            <td>${pickerAnalysis(job)}</td>
             <td><button class="secondary" type="button" data-open="${esc(job.id)}">查看报告</button></td>
           </tr>`;
         })
@@ -586,18 +746,31 @@ async function load() {
     hideLogin();
     clearNotice();
     if (!jobId) {
+      // The picker shows each job's newest verdict, so it needs the analyses of
+      // every job, not just one.
+      const all = await Promise.all(
+        jobs.map((job) =>
+          api(`/api/jobs/${job.id}/analyses`).catch(() => []),
+        ),
+      );
+      analyses = all.flat();
       renderPicker(jobs);
       return;
     }
     const job = jobs.find((row) => row.id === jobId) || (await api("/api/jobs/" + jobId));
-    const checks = await api(`/api/jobs/${jobId}/checks`);
+    const [checks, runs] = await Promise.all([
+      api(`/api/jobs/${jobId}/checks`),
+      api(`/api/jobs/${jobId}/analyses`).catch(() => []),
+    ]);
     currentJob = job;
     currentChecks = checks;
+    analyses = runs;
     renderReport(job, checks);
     const active = reportFor(job, checks);
     const running =
       checks.some((row) => row.state === "QUEUED" || row.state === "RUNNING") ||
-      (active.row && active.row.state === "RUNNING");
+      (active.row && active.row.state === "RUNNING") ||
+      runs.some((row) => row.state === "QUEUED" || row.state === "RUNNING");
     if (running) pollTimer = setTimeout(load, 3000);
   } catch (error) {
     if (error.message !== "请先登录") notice(error.message || String(error), true);
@@ -687,6 +860,30 @@ document.addEventListener("click", async (event) => {
         .catch(() => notice("无法自动复制，请手动选中路径。", true));
     } else {
       notice("当前浏览器不支持自动复制，请手动选中路径。", true);
+    }
+    return;
+  }
+  const analysis = event.target.closest("[data-analysis]");
+  if (analysis) {
+    const mode = analysis.dataset.analysis;
+    if (mode === "full") {
+      const ok = window.confirm(
+        "完整分析会调用视觉语言模型，按 token 计费（受任务与每日预算限制）。继续吗？",
+      );
+      if (!ok) return;
+    }
+    analysis.disabled = true;
+    try {
+      await api(`/api/jobs/${jobId}/analyses`, "POST", { mode });
+      notice(
+        mode === "full"
+          ? "完整分析已进入队列，完成后自动刷新。"
+          : "本地内容分析已进入队列。",
+      );
+      await load();
+    } catch (error) {
+      analysis.disabled = false;
+      notice(error.message || String(error), true);
     }
     return;
   }

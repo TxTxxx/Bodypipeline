@@ -842,7 +842,7 @@ function renderServer(uploads, jobs) {
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
   const available = jobs.filter((j) => j.dataset_available);
   $("result-list").innerHTML = available.length ? available.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行 Doctor</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行质检</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型已转换的数据集。受阻任务的原因可在“数据转换”查看。</td></tr>';
 }
 function datasetLocation(job) {
@@ -880,7 +880,7 @@ async function showJob() {
     ${datasetLocation(j)}
     ${j.dataset_available ? "" : `<p class="small muted">${esc(j.dataset_unavailable_reason)}</p>`}
     ${j.work_path ? `<p class="path-hint">任务工作目录：${esc(j.work_path)}</p>` : ""}
-    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行 Doctor</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button><button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button></div>
+    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行质检</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button><button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button></div>
     <h3 class="section-label">LeRobot Doctor 质量报告</h3>
     <p class="small muted">Doctor 报告只用于展示数据质量，不会修改或删除已转换的数据集。模拟数据始终保留模拟标识。</p>
     <div class="action-row"><button class="secondary" data-report="automatic">转换时的报告</button>${checks.map((c) => `<button class="secondary" data-report="${esc(c.id)}">${esc(new Date(c.created_at * 1000).toLocaleTimeString("zh-CN"))} · ${esc(names[c.state] || c.state)}${c.severity ? " · " + esc(c.severity) : ""}</button>`).join("")}</div>

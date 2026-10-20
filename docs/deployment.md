@@ -352,6 +352,71 @@ letools doctor check <dataset> --json ...
 
 Server 固定排除 Doctor 的 kinematics 检查，执行其余 11 项非运动学检查。关节限位不参与转换准入。
 
+## 6.4 Argus 内容分析（可选）
+
+内容分析需要独立的 Python 3.11 环境和固定提交的 Argus 源码：
+
+```bash
+bash scripts/install_argus.sh
+```
+
+脚本会安装 ffmpeg 依赖检查、克隆固定提交、应用网关补丁并**提交为一次 commit**
+（Argus 拒绝在工作区有未提交改动时执行付费运行），然后把路径写进 Server 配置：
+
+```json
+{
+  "argus_src": "/opt/bodypipeline/.runtime/argus/src",
+  "argus_python": "/opt/bodypipeline/.runtime/argus/venv/bin/python",
+  "argus_model": "openai/gpt-6-astra",
+  "argus_per_episode_budget_usd": 1.0,
+  "argus_max_tokens": 12000
+}
+```
+
+付费标注需要 `PIPELINE_ARGUS_API_KEY`；不配置时只有本地检查可用。
+`argus_base_url` 可指向任意 Chat Completions 兼容网关，此时需
+`PIPELINE_ARGUS_GENERIC_GATEWAY=1`，补丁会去掉网关不接受的字段。
+
+跨模态检查依赖 Profile 声明的相机安装关系：
+
+```json
+{"id": "left", "topic": "...", "mounting": "wrist_left"}
+```
+
+未声明时该检查为"未评估"，不会被当作通过。
+
+## 6.5 Slurm 转换资源（可选）
+
+转换是 CPU 密集型（每个 episode、每路相机都要重新编码），在计算节点上应通过
+Slurm 申请资源，而不是在登录节点上与其他人争抢。
+
+```json
+{
+  "slurm": {
+    "enabled": true,
+    "partition": "dev",
+    "job_name": "bodypipeline-convert",
+    "cpus_per_task": 32,
+    "mem": "128G",
+    "time": "04:00:00",
+    "conversion_workers": 8
+  }
+}
+```
+
+行为：
+
+- 每个转换任务用 `salloc --no-shell` 申请**一个**分配，`doctor environment`、
+  `convert`、`validate`、`doctor` 全部通过 `srun --jobid` 在该分配内执行，
+  因此只排队一次。
+- 分配在任务结束、失败或中断时都会 `scancel`，不会残留占用。
+- `--workers` / `--video-workers` 取 `conversion_workers`，
+  `--video-codec-threads` 按可用 CPU 均分；`sched_getaffinity` 反映分配内的实际核数。
+- 未配置 `slurm` 或 `enabled=false` 时，命令直接在本机执行，行为与之前完全一致。
+
+前提：`srun` / `salloc` / `squeue` / `scancel` 在 Server 进程的 `PATH` 中，
+且数据根与工具链位于计算节点可见的共享文件系统。
+
 ## 7. Viewer
 
 Visualizer 由 Server 随服务常驻启动（只启动一个 Next.js 进程，不绑定任何数据集），
