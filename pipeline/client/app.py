@@ -15,6 +15,7 @@ from pipeline.shared.core import DomainError, ProcessLock
 from pipeline.shared.security import install_security
 from pipeline.shared.web import mount_ui
 
+from .replay import ReplayService
 from .service import CaptureService
 from .upload import UploadAgent
 
@@ -30,8 +31,17 @@ class CaptureRequest(BaseModel):
     remote_prefix: str = ""
 
 
+class ReplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: str
+    path: str
+    request_id: str = Field(min_length=8, max_length=128)
+
+
 def create_app(settings, background=True):
     service = CaptureService(settings)
+    replay = ReplayService(settings, service)
+    service.replay = replay
     uploader = UploadAgent(service)
     lock = ProcessLock(settings.root / "client.lock")
     stopping = asyncio.Event()
@@ -94,14 +104,40 @@ def create_app(settings, background=True):
             stopping.set()
             if tasks:
                 await asyncio.gather(*tasks)
+            await asyncio.to_thread(replay.close)
             service.adapter.close()
             lock.release()
 
     app = FastAPI(title="Embodied Pipeline Client", lifespan=lifespan)
     app.state.service = service
+    app.state.replay = replay
     app.state.uploader = uploader
     install_security(app, settings)
-    mount_ui(app)
+    mount_ui(app, replay=True)
+
+    @app.get("/api/replay/status")
+    def replay_status():
+        return replay.status()
+
+    @app.get("/api/replay/captures")
+    def replay_captures():
+        return replay.captures()
+
+    @app.get("/api/replay/files")
+    def replay_files(root: str, directory: str = ""):
+        return replay.files(root, directory)
+
+    @app.get("/api/replay/inspect")
+    def replay_inspect(root: str, path: str):
+        return replay.inspect(root, path)
+
+    @app.post("/api/replay/start", status_code=202)
+    def replay_start(body: ReplayRequest):
+        return replay.start(body.root, body.path, body.request_id)
+
+    @app.post("/api/replay/stop", status_code=202)
+    def replay_stop():
+        return replay.stop()
 
     @app.get("/healthz")
     def live():
