@@ -381,3 +381,7 @@ PR 至少包含：
 | VR / 手柄 / 自动控制 | 操作语义、action 来源、事件、Profile、Provider、转换、QC + 真机验收 |
 
 若 state / action 的语义、单位、顺序、坐标系或时间域无法确认，可以继续做采集和样本管线，但不能宣称数据已经具备可靠训练语义。机器人限位始终由控制器与安全层负责，不属于数据转换准入门禁。
+
+## Client 数据回放适配
+
+需要运动回放时，另行实现 [ReplayProvider 契约](replay-adaptation.md)。它与 CaptureAdapter、Server 转换 Provider 分开注册、共用机器人 Profile；采集或格式转换支持某型号不代表它已能执行回放。通用 Client 页面、任务、鉴权、上传和 Server 不新增型号判断。

@@ -525,6 +525,7 @@ ssh -N -L 18082:127.0.0.1:8082 <server-host>
 | 分组 | 路径 |
 | --- | --- |
 | Client 采集 | `/api/captures*`、`/api/cameras/*/frame` |
+| Client 数据回放 | `/api/replay/*`，页面 `/#replay` |
 | Client 健康与目标 | `/api/health`、`/api/targets` |
 | Server 设备上传 | `/device/uploads*`、`/device/targets` |
 | Server 数据集与任务 | `/api/collections*`、`/api/jobs*` |

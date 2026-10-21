@@ -1,0 +1,59 @@
+/* Shared by the workbench, login and quality reports. Default: late night. */
+:root { --line: #e0e3e8; }
+html[data-theme="dark"] {
+  color-scheme: dark;
+  color: #e3eaf4;
+  background: #0b1019;
+  --accent: #81a9ff;
+  --muted: #94a3b8;
+  --line: #263347;
+  --night-surface: #121b29;
+  --night-raised: #182436;
+  --night-soft: #0f1826;
+  --page-bg: #0b1019;
+  --page-ink: #e3eaf4;
+}
+html[data-theme="dark"] body { background: #0b1019; color: #e3eaf4; }
+.theme-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; margin: 0; border: 1px solid var(--line, var(--border-subtle)); border-radius: 7px; background: transparent; color: inherit; font-family: inherit; font-weight: 500; font-size: 12px; line-height: 1.3; padding: 8px 11px; white-space: nowrap; cursor: pointer; }
+.theme-toggle:hover { background: #8197b51a; }
+.theme-toggle svg { width: 15px; height: 15px; }
+html[data-theme="dark"] .theme-label-dark, html[data-theme="light"] .theme-label-light { display: none; }
+.login-theme-toggle { position: fixed; top: 20px; right: 24px; z-index: 60; }
+.standalone-theme-toggle { position: fixed; top: 18px; right: 24px; z-index: 60; }
+#app-view:not([hidden]) ~ .login-theme-toggle { display: none; }
+html[data-theme="dark"] :is(.topbar, .sidebar, .breadcrumb, .panel, .metric, .login-card, .report-meta > div, .report-hero, .report-toolbar, .check-card, .raw-grid details, .run-row) { background: var(--night-surface); border-color: var(--line); }
+html[data-theme="dark"] :is(.brand, .breadcrumb strong, .sidebar-bottom strong, .metric strong, label, .telemetry strong, .import-capabilities strong, .preview-list li span, .report-meta dd, .raw-grid summary, .empty-report h2, .report-footer-note strong) { color: #e3eaf4; }
+html[data-theme="dark"] :is(.product-label, .nav-item, .metric span, th, td, .text-button, .report-meta dd.mono, .report-hero p, .message, .run-row, .analysis-run, .analysis-na code, .dataset-location code) { color: #b0bfd2; }
+html[data-theme="dark"] :is(.workspace-mark, .icon-button, .secondary, .filter-button) { background: var(--night-raised); border-color: #34445c; color: #c5d3e6; }
+html[data-theme="dark"] :is(.secondary:hover:not(:disabled), .filter-button:hover:not(.active), .nav-item:hover, .run-row:hover, tbody tr:hover) { background: #1c2b42; border-color: #4c6485; }
+html[data-theme="dark"] :is(.nav-item.active, .filter-button.active, .run-row.active) { color: #a8c5ff; background: #213455; border-color: #354f77; }
+html[data-theme="dark"] :is(.nav-count, .count, .state-pill, .header-right .badge) { background: #24334a; color: #b6c9e3; }
+html[data-theme="dark"] .nav-item.active .nav-count { background: #304b76; color: #d8e6ff; }
+html[data-theme="dark"] :is(input, textarea, select) { background: #0c1420; border-color: #34445c; color: #e3eaf4; }
+html[data-theme="dark"] :is(input, textarea)::placeholder { color: #8190a7; }
+html[data-theme="dark"] select:disabled { background: #172130; color: #8495af; }
+html[data-theme="dark"] .primary { background: #3567d9; color: #fff; }
+html[data-theme="dark"] .primary:hover:not(:disabled) { background: #4279ee; }
+html[data-theme="dark"] :is(.import-capabilities, pre, th, .check-head, .analysis-runs, .analysis-na code) { background: var(--night-soft); border-color: var(--line); }
+html[data-theme="dark"] td { border-color: #233046; }
+html[data-theme="dark"] :is(.login-shell, .report-page) { background: #0b1019; }
+html[data-theme="dark"] :is(.warning, .badge.warn, .sev-chip.warn) { background: #3a2c18; color: #f1c576; border-color: #68502b; }
+html[data-theme="dark"] :is(.danger, .badge.error, .sev-chip.fail, #notice.error) { background: #3a202b; color: #ffabb9; border-color: #703648; }
+html[data-theme="dark"] :is(.badge:not(.error):not(.warn):not(.busy), .sev-chip.pass) { background: #17362f; color: #82dabb; }
+html[data-theme="dark"] :is(.badge.busy, #notice) { background: #1c3154; color: #b2ceff; border-color: #355580; }
+html[data-theme="dark"] :is(.online, .sev-chip.pass) { color: #82dabb; }
+html[data-theme="dark"] :is(.job-error, #login-error, .message.fail) { color: #ffabb9; }
+html[data-theme="dark"] :is(.check-desc, .check-en, .message.pass, .check-meta .small, .report-meta dt, .report-footer-note, .analysis-na ul, .check-name .check-en) { color: #94a3b8; }
+html[data-theme="dark"] .check-card.sev-warn { border-color: #68502b; }
+html[data-theme="dark"] .check-card.sev-fail { border-color: #703648; }
+html[data-theme="dark"] td .task-name { color: #9cbdff; }
+html[data-theme="dark"] :is(.progress, .sev-chip) { background: #233046; }
+html[data-theme="dark"] .sev-chip { color: #b0bfd2; }
+html[data-theme="dark"] .login-card { box-shadow: 0 24px 80px #0005; }
+html[data-theme="dark"] :is(.viewer-login-card, .doctor-header, .doctor-check, .viewer-starting-card) { background: var(--night-surface) !important; border-color: var(--line) !important; }
+html[data-theme="dark"] .viewer-starting-card { color: #e3eaf4; }
+html[data-theme="dark"] :is(.viewer-login-card label, .doctor-check h2) { color: #e3eaf4; }
+html[data-theme="dark"] :is(.viewer-login-card .hint, .doctor-header .meta, .doctor-check ul, .viewer-starting-card p) { color: #a5b6cd !important; }
+html[data-theme="dark"] .doctor-header .pass { color: #82dabb; }
+html[data-theme="dark"] .doctor-header .warn { color: #f1c576; }
+html[data-theme="dark"] .doctor-header .fail { color: #ffabb9; }

@@ -1,0 +1,24 @@
+diff --git a/src/components/simple-videos-player.tsx b/src/components/simple-videos-player.tsx
+--- a/src/components/simple-videos-player.tsx
++++ b/src/components/simple-videos-player.tsx
+@@ -24,7 +24,19 @@
+ 
+ export const SimpleVideosPlayer = ({
+-  videosInfo,
++  videosInfo: sourceVideosInfo,
+   onVideosReady,
+ }: VideoPlayerProps) => {
++  const videosInfo = React.useMemo(() => {
++    const cameraOrder = [
++      "observation.images.left_wrist",
++      "observation.images.head",
++      "observation.images.right_wrist",
++    ];
++    const rank = (filename: string) => {
++      const index = cameraOrder.indexOf(filename);
++      return index < 0 ? cameraOrder.length : index;
++    };
++    return [...sourceVideosInfo].sort((a, b) => rank(a.filename) - rank(b.filename));
++  }, [sourceVideosInfo]);
+   const { currentTime, seek, externalSeekVersion, isPlaying, setIsPlaying } =
+     useTime();

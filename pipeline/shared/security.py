@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .core import DomainError
+from .web import themed_html
 
 VIEWER_LOGIN_PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -39,7 +40,7 @@ button:hover:not(:disabled) { background: #1742c6; }
 button:disabled { opacity: .55; cursor: not-allowed; }
 #error { min-height: 18px; margin: 12px 0 0; font-size: 12px; color: #b4404c; }
 </style></head>
-<body><main>
+<body><main class="viewer-login-card">
 <div class="brand"><span class="mark">B</span> BodyPipeline</div>
 <h1>登录数据预览</h1>
 <p class="hint">预览服务与 Server 工作台使用同一个访问密钥（<code>PIPELINE_TOKEN</code>）。</p>
@@ -77,16 +78,27 @@ form.addEventListener("submit", async (event) => {
   }
 });
 </script></body></html>"""
+VIEWER_LOGIN_PAGE = themed_html(VIEWER_LOGIN_PAGE)
 
 
 def install_security(app: FastAPI, settings, device_prefix: str | None = None):
     cookie_name = f"pipeline_{settings.role}"
+    login_password = settings.login_password or settings.token
+    cookie_key = (
+        hmac.new(
+            settings.token.encode(),
+            ("login:" + settings.login_password).encode(),
+            hashlib.sha256,
+        ).digest()
+        if settings.login_password
+        else settings.token.encode()
+    )
 
     def valid_cookie(value):
         try:
             expiry, signature = value.split(".", 1)
             expected = hmac.new(
-                settings.token.encode(),
+                cookie_key,
                 f"{settings.role}:{expiry}".encode(),
                 hashlib.sha256,
             ).hexdigest()
@@ -165,16 +177,26 @@ def install_security(app: FastAPI, settings, device_prefix: str | None = None):
             response.headers["Cache-Control"] = "no-store"
             return response
 
-        public = p in (
-            "/",
-            "/healthz",
-            "/api/login",
-            "/assets/app.js",
-            "/assets/style.css",
-            "/assets/report.js",
-            "/assets/report.css",
-        ) or (
-            settings.role == "server" and (p == "/report" or p.startswith("/report/"))
+        public = (
+            p
+            in (
+                "/",
+                "/healthz",
+                "/api/login",
+                "/assets/app.js",
+                "/assets/client-replay.js",
+                "/assets/clipboard.js",
+                "/assets/theme.js",
+                "/assets/theme.css",
+                "/assets/style.css",
+                "/assets/report.js",
+                "/assets/report.css",
+            )
+            or (
+                settings.role == "server"
+                and (p == "/report" or p.startswith("/report/"))
+            )
+            or (settings.role == "client" and p == "/replay")
         )
         if public and settings.role != "viewer":
             response = await call_next(request)
@@ -228,13 +250,13 @@ def install_security(app: FastAPI, settings, device_prefix: str | None = None):
         if (
             not isinstance(body, dict)
             or not isinstance(body.get("token"), str)
-            or not hmac.compare_digest(body["token"], settings.token)
+            or not hmac.compare_digest(body["token"].encode(), login_password.encode())
         ):
             raise DomainError("密钥不正确", 401)
         attempts.pop(address, None)
         expiry = str(int(time.time()) + 8 * 3600)
         sig = hmac.new(
-            settings.token.encode(),
+            cookie_key,
             f"{settings.role}:{expiry}".encode(),
             hashlib.sha256,
         ).hexdigest()

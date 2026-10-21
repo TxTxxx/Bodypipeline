@@ -20,11 +20,14 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
+from pydantic import BaseModel, Field, StrictInt
 
 from pipeline.shared.core import DomainError, Store, executable_path
 from pipeline.shared.security import install_security
+from pipeline.shared.web import themed_html
 
 from .datasets import dataset_for_job
+from .recycle import RecycleBin
 from .viewer_data import PreviewRegistry, serve_dataset_file
 
 SERVICE_KEY = "service"
@@ -311,19 +314,19 @@ def _gateway_state(store):
         raise
 
 
-STARTING_PAGE = """<!doctype html><html lang="zh"><meta charset="utf-8">
+STARTING_PAGE = themed_html("""<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="2">
-<title>正在启动数据预览</title>
-<body style="margin:0;background:#f7f8fa;color:#292e36;font:15px system-ui,'PingFang SC','Microsoft YaHei',sans-serif">
-<main style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #e0e3e8;border-radius:8px">
+<title>正在启动数据预览</title></head>
+<body style="margin:0;background:var(--page-bg,#f7f8fa);color:var(--page-ink,#292e36);font:15px system-ui,'PingFang SC','Microsoft YaHei',sans-serif">
+<main class="viewer-starting-card" style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #e0e3e8;border-radius:8px">
 <h1 style="font-size:22px;margin:0 0 12px">正在启动 LeRobot Visualizer</h1>
 <p style="line-height:1.7;margin:0;color:#6b7280">首次启动可能需要安装或准备前端依赖。页面每 2 秒自动刷新，就绪后会直接显示数据集。</p>
-</main></body></html>"""
+</main></body></html>""")
 
 
 def _doctor_html(payload: dict, dataset_path: str, sample: str) -> str:
-    """Render the Doctor payload as a compact, light-themed report."""
+    """Render the Doctor payload with the shared workbench theme."""
 
     severity = str(payload.get("overall_severity", "PASS"))
     sections = []
@@ -337,7 +340,7 @@ def _doctor_html(payload: dict, dataset_path: str, sample: str) -> str:
             for m in check.get("messages", [])
         )
         sections.append(
-            "<section><div class='check-head'><h2>"
+            "<section class='doctor-check'><div class='check-head'><h2>"
             + html.escape(str(check.get("name", "Check")))
             + "</h2><span class='severity "
             + html.escape(str(check.get("severity", "PASS")).lower())
@@ -347,7 +350,7 @@ def _doctor_html(payload: dict, dataset_path: str, sample: str) -> str:
             + messages
             + "</ul></section>"
         )
-    return f"""<!doctype html>
+    return themed_html(f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport"
 content="width=device-width,initial-scale=1"><title>LeRobot Doctor</title>
 <style>
@@ -366,12 +369,12 @@ font: 700 11px ui-monospace, monospace; }}
 .pass {{ color: #258467; }} .warn {{ color: #9a741b; }} .fail {{ color: #c04b59; }}
 ul {{ margin: 9px 0 0; padding-left: 19px; font-size: 12px; line-height: 1.55; color: #4f5866; }}
 .message-severity {{ color: #8a919d; font: 700 10px ui-monospace, monospace; }}
-</style></head><body><header><h1>LeRobot Doctor
+</style></head><body><header class="doctor-header"><h1>LeRobot Doctor
 <span class="severity {html.escape(severity.lower())}">{html.escape(severity)}</span></h1>
 <div class="meta">{html.escape(dataset_path)} &middot; {html.escape(sample)} &middot;
 {html.escape(str(payload.get("total_episodes", "?")))} episodes &middot;
 {html.escape(str(payload.get("total_frames", "?")))} frames</div></header>
-<main>{"".join(sections)}</main></body></html>"""
+<main>{"".join(sections)}</main></body></html>""")
 
 
 class DoctorCache:
@@ -411,11 +414,17 @@ class DoctorCache:
         return payload
 
 
+class RecycleSelection(BaseModel):
+    episodes: list[StrictInt] = Field(min_length=1, max_length=100000)
+    revision: StrictInt = Field(ge=0)
+
+
 def create_gateway(settings):
     settings.role = "viewer"
     store = Store(settings.root / "state", legacy_name="server.sqlite")
     registry = PreviewRegistry(store, settings.viewer_ttl)
     doctor = DoctorCache(settings)
+    recycle = RecycleBin(settings, store, registry)
     app = FastAPI(title="LeRobot Viewer Gateway")
     # The gateway is reachable beyond loopback once it is bound to a routable
     # address, and it serves raw dataset files, so it shares the Server's token.
@@ -428,6 +437,32 @@ def create_gateway(settings):
     def service_ready():
         state = _gateway_state(store)
         return state is not None and state.get("state") == "READY"
+
+    @app.get("/api/recycle/{dataset_id}")
+    async def recycle_status(dataset_id: str):
+        result = await asyncio.to_thread(recycle.status, f"bp/{dataset_id}")
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/recycle/{dataset_id}/{action}")
+    async def recycle_change(dataset_id: str, action: str, selection: RecycleSelection):
+        if action not in {"trash", "restore", "purge"}:
+            raise DomainError("不支持的回收站操作", 404)
+        result = await asyncio.to_thread(
+            recycle.change,
+            f"bp/{dataset_id}",
+            action,
+            sorted(set(selection.episodes)),
+            selection.revision,
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @app.get("/bp/{dataset_id}/trash")
+    async def recycle_page(dataset_id: str):
+        await asyncio.to_thread(recycle.resolve, f"bp/{dataset_id}")
+        page = Path(__file__).with_name("viewer_ui") / "recycle.html"
+        return HTMLResponse(
+            themed_html(page.read_text()), headers={"Cache-Control": "no-store"}
+        )
 
     async def data_response(request: Request, path: str):
         """``/_data/<org>/<dataset>/resolve/main/<file>`` plus the Doctor report.
@@ -473,6 +508,25 @@ def create_gateway(settings):
     async def proxy(request: Request, path: str):
         if path == "_data" or path.startswith("_data/"):
             return await data_response(request, path)
+        parts = path.split("/")
+        if (
+            service_ready()
+            and len(parts) == 3
+            and parts[0] == "bp"
+            and registry.lookup(f"bp/{parts[1]}") is not None
+            and parts[2].startswith("episode_")
+        ):
+            episode_text = parts[2].removeprefix("episode_")
+            if episode_text.isdigit():
+                status = await asyncio.to_thread(recycle.status, f"bp/{parts[1]}")
+                if int(episode_text) >= status["total_episodes"] or any(
+                    e["episode"] == int(episode_text) for e in status["entries"]
+                ):
+                    return RedirectResponse(
+                        f"/bp/{parts[1]}/trash",
+                        status_code=303,
+                        headers={"Cache-Control": "no-store"},
+                    )
         if not service_ready():
             if request.headers.get("accept", "").startswith("text/html"):
                 return HTMLResponse(

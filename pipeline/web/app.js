@@ -28,6 +28,7 @@ let config = null,
   selectedEpisodes = new Set(),
   serverJobs = [],
   serverTab = "convert",
+  clientTab = "capture",
   selectedCheck = null,
   detailSignature = null,
   logText = "选择日志查看执行诊断。",
@@ -125,6 +126,7 @@ async function api(path, method = "GET", body) {  const controller = new AbortCo
   } finally { clearTimeout(timeout); }
 }
 function showLogin() {
+  window.ClientReplay.deactivate();
   clearTimeout(timer);
   clearTimeout(frameTimer);
   clearTimeout(healthTimer);
@@ -196,6 +198,7 @@ async function boot() {
   $("current-page").textContent = client ? "采集工作台" : "数据转换";
   $("client-view").hidden = !client;
   $("server-view").hidden = client;
+  $("client-replay-panel").hidden = true;
   $("workspace-label").textContent = client ? "机器人采集" : "中心数据服务";
   $("nav-label").textContent = client ? "采集工作台" : "数据管理台";
   $("page-title").textContent = client ? "采集工作台" : "数据管理台";
@@ -230,7 +233,7 @@ async function boot() {
           `<div class="camera-tile"><img id="cam-${esc(c.id)}" alt="${esc(c.label)} 实时预览"><div class="camera-error" id="err-${esc(c.id)}">等待相机图像…</div><div class="camera-caption">${esc(c.label)} <span>${esc(c.id.toUpperCase())}</span></div></div>`,
       )
       .join("");
-    refreshFrames();
+    setClientTab(location.hash.slice(1) || "capture", false);
     clearTimeout(healthTimer);
     void refreshClientHealth();
     clearInterval(clockTimer);
@@ -274,7 +277,7 @@ async function loadTargets() {
 async function refreshFrames() {
   clearTimeout(frameTimer);
   if (!config || config.role !== "client" || frameFetching) return;
-  if (previewPaused || busy || document.hidden) {
+  if (clientTab !== "capture" || previewPaused || busy || document.hidden) {
     frameTimer = setTimeout(refreshFrames, 1500);
     return;
   }
@@ -407,6 +410,8 @@ function controls(c) {
     buttons.push(
       `<button class="secondary" data-capture="${c.id}" data-op="retry-upload">重试上传</button>`,
     );
+  if (c.state === "SEALED")
+    buttons.push(`<a class="secondary" href="#replay?capture=${encodeURIComponent(c.id)}">回放</a>`);
   return `<div class="action-row">${buttons.join("").replaceAll("<button ", busy ? "<button disabled " : "<button ") || '<span class="muted">—</span>'}</div>`;
 }
 $("capture-form").onsubmit = (e) => {
@@ -510,8 +515,16 @@ document.addEventListener("click", (e) => {
     if (popup) {
       popup.opener = null;
       popup.document.title = "正在打开数据预览";
+      popup.document.documentElement.dataset.theme = document.documentElement.dataset.theme;
+      const themeStyle = popup.document.createElement("link");
+      themeStyle.rel = "stylesheet";
+      themeStyle.href = new URL("/assets/theme.css", location.href).href;
+      popup.document.head.appendChild(themeStyle);
+      const themeScript = popup.document.createElement("script");
+      themeScript.src = new URL("/assets/theme.js", location.href).href;
+      popup.document.head.appendChild(themeScript);
       popup.document.body.innerHTML =
-        '<main style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;color:#202124;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在打开数据预览</h1><p style="margin:0">Visualizer 就绪后会自动显示所选数据集。</p></main>';
+        '<main class="viewer-starting-card" style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在打开数据预览</h1><p style="margin:0">Visualizer 就绪后会自动显示所选数据集。</p></main>';
     }
     action(async () => {
       try {
@@ -649,7 +662,9 @@ function setSidebarOpen(open, restoreFocus = false) {
 }
 $("menu-toggle").onclick = () => setSidebarOpen(!$("app-view").classList.contains("sidebar-open"));
 $("menu-close").onclick = $("sidebar-overlay").onclick = () => setSidebarOpen(false, true);
-$("nav-main").onclick = () => setSidebarOpen(false, true);
+document.querySelectorAll("[data-client-tab]").forEach((button) => {
+  button.onclick = () => setClientTab(button.dataset.clientTab);
+});
 matchMedia("(max-width: 850px)").addEventListener("change", () => setSidebarOpen(false));
 document.addEventListener("keydown", (event) => {
   if (!$("app-view").classList.contains("sidebar-open")) return;
@@ -663,10 +678,43 @@ document.addEventListener("keydown", (event) => {
 });
 window.addEventListener("hashchange", () => {
   if (config?.role === "server") setServerTab(location.hash.slice(1), false);
+  else if (config?.role === "client") setClientTab(location.hash.slice(1), false);
 });
+function setClientTab(value, updateHistory = true) {
+  const tab = value.split("?")[0] === "replay" ? "replay" : "capture";
+  clientTab = tab;
+  if (updateHistory && location.hash !== "#" + value) { location.hash = value; return; }
+  $("client-view").hidden = tab !== "capture";
+  $("client-replay-panel").hidden = tab !== "replay";
+  document.querySelectorAll("[data-client-tab]").forEach((button) => {
+    const active = button.dataset.clientTab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  const title = tab === "replay" ? "数据回放" : "采集工作台";
+  $("page-title").textContent = $("current-page").textContent = title;
+  document.title = title + " · BodyPipeline";
+  $("page-eyebrow").textContent = tab === "replay" ? "ROBOT REPLAY" : "TELEOPERATION COLLECTION";
+  $("page-description").textContent = tab === "replay"
+    ? "选择本机 Episode，查看轨迹信息、执行进度和日志。"
+    : "在机器人本地录制，确认保留后可靠上传。";
+  $("notice").hidden = true;
+  clearTimeout(frameTimer); frameController?.abort();
+  if (tab === "replay") void window.ClientReplay.activate(api, config.robot_id);
+  else {
+    window.ClientReplay.deactivate();
+    $("mode-badge").textContent = config.mode === "mock" ? "MOCK · 模拟模式" : "ROS2 · 遥操作";
+    void refreshFrames();
+  }
+  const wasOpen = $("app-view").classList.contains("sidebar-open");
+  setSidebarOpen(false, wasOpen);
+}
 function setServerTab(tab, updateHistory = true) {
   if (!["uploads", "convert", "results"].includes(tab)) tab = "convert";
   serverTab = tab;
+  if (location.hash === "#replay") history.replaceState(null, "", "#" + tab);
   if (updateHistory && location.hash !== "#" + tab) location.hash = tab;
   document.querySelectorAll("[data-server-panel]").forEach((el) => {
     el.hidden = el.dataset.serverPanel !== tab;
@@ -687,6 +735,8 @@ function setServerTab(tab, updateHistory = true) {
   }[tab];
   document.title = title + " · BodyPipeline";
   $("job-detail-panel").hidden = !selectedJob || tab !== "results";
+  $("demo-warning").hidden = config?.processing_mode !== "demo";
+  $("mode-badge").textContent = config?.processing_mode === "demo" ? "DEMO · 演示处理" : "SERVER · 中心服务";
   const wasOpen = $("app-view").classList.contains("sidebar-open");
   setSidebarOpen(false, wasOpen);
 }
@@ -812,7 +862,7 @@ $("conversion-form").onsubmit = (event) => {
 };
 function renderServer(uploads, jobs) {
   const runtimeTypes = (config.runtimes || []).map((r) => r.robot_type).filter(Boolean);
-  const types = [...new Set([...runtimeTypes, ...uploads, ...jobs].map(rowRobotType))].sort();
+  const types = [...new Set([...runtimeTypes, ...uploads.map(rowRobotType), ...jobs.map(rowRobotType)])].sort();
   const oldType = $("server-robot-type").value;
   const type = types.includes(oldType) ? oldType : "";
   if (oldType && !type) {

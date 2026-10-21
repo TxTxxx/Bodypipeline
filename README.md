@@ -10,6 +10,12 @@ BodyPipeline 在机器人端提供 Web 数采工作台，在服务器端统一�
 
 ## 核心能力
 
+机器人 Client 已集成[AgileX 真机回放](docs/robots/agilex-replay.md)：可从已保留的 episode 直接进入，支持平台原始包、对齐 HDF5 与原工具 ALOHA HDF5，复用已有工具完成回放，提供进度、日志和停止。本地 Mock 演示支持模拟回放，不连接机器人。
+
+回放采用独立的 [ReplayProvider 多机器人适配层](docs/robots/replay-adaptation.md)，与采集 Adapter、Server 转换 Provider 分工；当前真实实现为 AgileX ALOHA，其他机器人需接入对应执行接口。
+
+数据回放统一位于 Client 工作台侧栏（`/#replay`），与采集共用登录和页面布局，直接操作当前机器人。Server 仅负责接收、转换、质检与预览，不再提供回放转发接口。
+
 | 能力 | 说明 |
 | --- | --- |
 | 机器人端 Web 采集 | 多相机预览、数据集选择、本地存储根与子目录、远端目标、开始 / 停止 / 保留 / 丢弃 |
@@ -299,7 +305,8 @@ Skill 包含[操作与动作语义核查](agents/skills/adapt-robot/references/c
 独立部署至少需要：
 
 ```text
-PIPELINE_TOKEN          # Client / Server 网页登录
+PIPELINE_TOKEN          # 管理 API 密钥；默认也用于网页登录
+PIPELINE_LOGIN_PASSWORD # 可选：单独设置网页登录密码，不改变 API / 设备密钥
 PIPELINE_DEVICE_TOKEN   # Client 上传；多设备时使用独立 token_env
 PIPELINE_BRIDGE_TOKEN   # Client 与 ROS2 Bridge
 ```

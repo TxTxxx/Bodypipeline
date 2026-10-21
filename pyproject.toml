@@ -29,7 +29,7 @@ embodied-pipeline = "pipeline.cli:main"
 include = ["pipeline*"]
 
 [tool.setuptools.package-data]
-pipeline = ["web/*"]
+pipeline = ["web/*", "client/replay_providers/*.sh", "server/*.patch", "server/viewer_ui/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
