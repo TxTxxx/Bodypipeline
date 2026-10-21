@@ -387,6 +387,9 @@ def test_viewer_patch_is_version_checked_and_idempotent(tmp_path):
 def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     from pipeline.server import viewer_bootstrap as bootstrap
 
+    channel_patch = tmp_path / "channels.patch"
+    channel_patch.write_text("layout-v1")
+    monkeypatch.setattr(bootstrap, "CHANNEL_PATCH", channel_patch)
     (tmp_path / "source/.next").mkdir(parents=True)
     (tmp_path / ".letools-source.json").write_text(json.dumps({"fingerprint": "f1"}))
     builds = []
@@ -401,6 +404,18 @@ def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     (tmp_path / ".letools-source.json").write_text(json.dumps({"fingerprint": "f2"}))
     bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
     assert len(builds) == 3
+    channel_patch.write_text("layout-v2")
+    bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
+    assert len(builds) == 4
+    assets = tmp_path / "ui"
+    assets.mkdir()
+    (assets / "chart.tsx").write_text("new chart presentation")
+    monkeypatch.setattr(bootstrap, "UI_ASSETS", assets)
+    bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
+    assert len(builds) == 5
+    (assets / "chart.tsx").write_text("updated chart presentation")
+    bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
+    assert len(builds) == 6
 
 
 def test_corrupt_viewer_state_is_not_reported_as_stopped(settings_factory):

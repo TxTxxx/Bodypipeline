@@ -3,8 +3,26 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 
 ASSETS = Path(__file__).resolve().parents[1] / "web"
-BASE_ASSETS = {"app.js", "style.css"}
+BASE_ASSETS = {"app.js", "style.css", "theme.js", "theme.css"}
 REPORT_ASSETS = {"report.js", "report.css"}
+
+
+def themed_html(page: str) -> str:
+    """Share theme preferences with standalone Viewer login/Doctor pages."""
+
+    assets = (
+        "<script>" + (ASSETS / "theme.js").read_text() + "</script>"
+        "<style>" + (ASSETS / "theme.css").read_text() + "</style>"
+    )
+    toggle = (
+        '<button type="button" class="theme-toggle standalone-theme-toggle" '
+        'data-theme-toggle aria-label="切换深夜与浅色模式">'
+        '<span class="theme-label-light">浅色模式</span>'
+        '<span class="theme-label-dark">深夜模式</span></button>'
+    )
+    return page.replace("</head>", assets + "</head>", 1).replace(
+        "</body>", toggle + "</body>", 1
+    )
 
 
 def mount_ui(app, *, report=False):

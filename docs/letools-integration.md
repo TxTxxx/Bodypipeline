@@ -165,7 +165,23 @@ Visualizer 由 `pipeline/server/viewer_bootstrap.py` 启动并常驻；网关用
 - 预览链接默认 30 分钟过期；
 - Viewer 入口与 Server 共用 `PIPELINE_TOKEN`，未登录返回登录页；仍应只监听内网或 Tailscale 地址。
 
-### 3.6 中文界面与浅色主题补丁
+关节曲线固定为每个通道一个图框，同一通道的 `action` 与 `observation.state` 放在一起对照。
+不按数值范围组合不同通道，也不提供“合并显示”模式。启动时自动应用
+`pipeline/server/viewer_channels.patch`；补丁内容参与构建指纹，更新后会在下次启动
+Visualizer 时重新构建，无需重新转换数据集。
+
+`viewer_presentation.patch` 和 `pipeline/server/viewer_ui/` 在上述基础上提供信号浏览器：
+关节位置、关节速度、力矩、末端位姿、底盘位姿及底盘速度分别查看。每张图仅显示
+同一通道、同一类别的信号，指令使用蓝色实线，实测使用琥珀色虚线；未知字段独立成类。
+原始采样和单位不变，支持图例开关、时间联动、通道筛选和单列放大。三路视频等宽铺满，
+保持画面比例，顺序为左腕、Head、右腕；支持隐藏、恢复、放大和 Esc 退出放大。
+
+工作台、预览、登录和质检报告默认使用深夜模式，可切换浅色。`pipeline/web/theme.js`
+通过同主机 Cookie 在 Server / Viewer 端口间共享偏好，并用 localStorage 保留设置。
+页面头部先初始化主题，避免进入页面时闪白。所有展示补丁、UI 源文件与主题脚本都参与
+构建指纹；部署后重启服务即可更新，结果文件无需移动或重新转换。
+
+### 3.6 中文基础补丁与主题覆盖
 
 上游 Visualizer 是英文深色界面。BodyPipeline 通过 letools 的集成补丁机制，在准备 Visualizer
 源码时叠加一个中文化与主题补丁，不修改上游子模块：
@@ -182,7 +198,8 @@ bash scripts/install_visualizer_zh_patch.sh
 
 脚本会用 letools 自身的解析逻辑找到补丁目录，并把补丁复制进去，因此同时支持
 `git` checkout 与打包安装两种 letools 布局。补丁集合会进入 Visualizer 源码指纹，
-下一次打开预览时会自动重建缓存并重新 `bun install`。
+下一次打开预览时会自动重建缓存并重新 `bun install`。下表描述基础中文补丁；
+启动时还会叠加上一节的信号浏览器与深夜主题，最终主题以用户偏好为准。
 
 补丁内容：
 
@@ -194,7 +211,7 @@ bash scripts/install_visualizer_zh_patch.sh
 | 图表 | Recharts 网格、坐标轴、Tooltip 改为浅色，原有数据配色保留 |
 | 标注 | `annotations-skin.css` 表面与前景色改为浅色 |
 | 首页 | 去掉全屏视频背景，改为与工作台一致的浅色封面 |
-| Doctor | letools 渲染的 Doctor HTML 由 Viewer Gateway 注入浅色覆盖样式 |
+| Doctor | Viewer Gateway 为 Doctor HTML 注入共享主题，随深夜 / 浅色偏好切换 |
 
 边界：
 
@@ -203,7 +220,7 @@ bash scripts/install_visualizer_zh_patch.sh
 - 报告中 Doctor 的逐条明细仍保留英文原文，便于与上游工具对照；
 - `--no-annotations` 仍然生效，标注页只做本地会话内编辑，不写回数据集；
 - Doctor 标签页里的报告由 letools 以硬编码深色样式渲染，因此宿主在
-  `pipeline/server/viewer.py` 的 Viewer Gateway 中给 `/_data/doctor` 注入一份浅色覆盖样式，
+  `pipeline/server/viewer.py` 的 Viewer Gateway 中给 `/_data/doctor` 注入共享主题，
   不 fork 固定版本工具链。该路由只在 Viewer 进程内生效，改动后需重启 `bodypipeline-viewer`。
 
 ## 4. 与上游协作
@@ -238,3 +255,27 @@ bash scripts/install_visualizer_zh_patch.sh
 - 重新应用 `patches/letools-visualizer/0002-zh-cn-light-theme.patch`，确认它仍能干净应用。
 
 不要在运行中的任务上替换工具环境；先排空任务、停止 Server，再同步依赖。
+
+## 6. Episode 回收站
+
+Viewer 侧边栏垃圾箱按钮位于标记按钮左侧，数据集回收站地址为
+`/bp/<preview-id>/trash`。软删除状态按数据集绝对路径保存至
+`state/recycle/`，因此多个预览链接共享同一个回收站，重新打开预览也不会丢失。
+支持批量恢复与批量永久清理；所有写操作沿用登录认证与同源 CSRF 检查，
+并要求提交列表 revision，避免误操作已经重新编号的 Episode。
+
+永久清理由 letools Python 环境中的 `pipeline.server.recycle_worker` 执行：
+保留其他 Episode，重写共享 Parquet 和受影响视频，更新计数、统计、拆分和
+连续索引，完成 deep validate 后用 `renameat2(RENAME_EXCHANGE)` 原子发布，
+最后删除旧数据。未受影响视频沿用原文件；跨 GOP 的剪切需要重新编码 H.264。
+清理对象仅为当前转换数据集，不追溯删除原始采集目录或其他副本。
+全部清空也保留有效的空数据集元数据。
+
+同一数据集的回收站修改和清理使用跨进程文件锁。持久化日志及数据集内的
+`.bodypipeline-recycle.json` 标记区分发布前后中断：发布前保留原数据，
+发布后继续移除旧数据并完成状态更新。清理过程中检测到数据被其他进程修改
+则取消发布。预览缓存随数据版本失效，剩余回收站项目与标记同步重编号。
+
+验证：`tests/test_recycle.py` 测试 API、权限、路径约束及持久化；
+`tests/fixtures/recycle_scenario.py` 在独立 letools 环境中验证共享数据/视频的
+实际删除、非关键帧边界、全部清空，以及发布前后中断恢复。

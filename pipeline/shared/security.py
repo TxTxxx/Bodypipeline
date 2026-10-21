@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .core import DomainError
+from .web import themed_html
 
 VIEWER_LOGIN_PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -39,7 +40,7 @@ button:hover:not(:disabled) { background: #1742c6; }
 button:disabled { opacity: .55; cursor: not-allowed; }
 #error { min-height: 18px; margin: 12px 0 0; font-size: 12px; color: #b4404c; }
 </style></head>
-<body><main>
+<body><main class="viewer-login-card">
 <div class="brand"><span class="mark">B</span> BodyPipeline</div>
 <h1>登录数据预览</h1>
 <p class="hint">预览服务与 Server 工作台使用同一个访问密钥（<code>PIPELINE_TOKEN</code>）。</p>
@@ -77,6 +78,7 @@ form.addEventListener("submit", async (event) => {
   }
 });
 </script></body></html>"""
+VIEWER_LOGIN_PAGE = themed_html(VIEWER_LOGIN_PAGE)
 
 
 def install_security(app: FastAPI, settings, device_prefix: str | None = None):
@@ -173,6 +175,8 @@ def install_security(app: FastAPI, settings, device_prefix: str | None = None):
             "/assets/style.css",
             "/assets/report.js",
             "/assets/report.css",
+            "/assets/theme.js",
+            "/assets/theme.css",
         ) or (
             settings.role == "server" and (p == "/report" or p.startswith("/report/"))
         )

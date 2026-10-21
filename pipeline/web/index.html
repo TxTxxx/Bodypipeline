@@ -4,7 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>BodyPipeline · 具身数据工作台</title>
+    <script src="/assets/theme.js"></script>
     <link rel="stylesheet" href="/assets/style.css" />
+    <link rel="stylesheet" href="/assets/theme.css" />
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -41,7 +43,7 @@
           <a class="brand" href="/" aria-label="BodyPipeline 首页"><span class="brand-icon">B</span> BodyPipeline</a>
           <span class="product-label">具身数据工作台</span>
         </div>
-        <div class="header-right"><span id="mode-badge" class="badge"></span><button id="logout" class="text-button">退出登录</button></div>
+        <div class="header-right"><button type="button" class="theme-toggle" data-theme-toggle aria-label="切换深夜与浅色模式"><span class="theme-label-light">浅色模式</span><span class="theme-label-dark">深夜模式</span></button><span id="mode-badge" class="badge"></span><button id="logout" class="text-button">退出登录</button></div>
       </header>
       <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="关闭导航" tabindex="-1" hidden></button>
       <aside class="sidebar" id="sidebar" aria-label="工作台导航">
@@ -276,5 +278,6 @@
         </main>
       </div>
     </div>
+    <button type="button" class="theme-toggle login-theme-toggle" data-theme-toggle aria-label="切换深夜与浅色模式"><span class="theme-label-light">浅色模式</span><span class="theme-label-dark">深夜模式</span></button>
   </body>
 </html>

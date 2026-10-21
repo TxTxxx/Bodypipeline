@@ -1,0 +1,56 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Episode 回收站</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:var(--page-bg,#f4f6fa);color:var(--page-ink,#233047);font:14px system-ui,-apple-system,'Microsoft YaHei',sans-serif}main{max-width:1050px;margin:auto;padding:38px 24px 64px}a{color:#6da4ff;text-decoration:none}header{display:flex;justify-content:space-between;align-items:center;gap:20px}h1{font-size:28px;margin:28px 0 8px}p{line-height:1.7}.muted{color:var(--muted,#63718a)}.panel{border:1px solid var(--line,#d9dfeb);border-radius:12px;padding:20px;background:var(--night-surface,#fff);margin-top:22px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar strong{margin-right:auto}button{font:inherit;padding:9px 14px;border:1px solid var(--line,#d9dfeb);border-radius:7px;background:transparent;color:inherit;cursor:pointer}button:hover:enabled{background:#8197b51a}button:disabled{opacity:.4;cursor:not-allowed}.danger{background:#ac3344;color:white;border-color:#d54a61}.danger:hover:enabled{background:#c13a4c}table{border-collapse:collapse;width:100%;margin-top:16px;text-align:left}th,td{padding:14px 10px;border-bottom:1px solid var(--line,#d9dfeb)}th{color:var(--muted,#63718a);font-size:12px;font-weight:500}input[type=checkbox]{width:16px;height:16px;accent-color:#669cff;cursor:pointer}.empty{text-align:center;padding:65px 16px}.empty svg{color:#677a99;margin-bottom:10px}.note{font-size:13px;padding:14px 16px;border-left:3px solid #d9a34b;background:#d9a34b10;border-radius:4px}.status{white-space:pre-wrap;color:#81a9ff;line-height:1.7;margin-top:18px}.error{color:#f08090}.progress{height:3px;overflow:hidden;background:#24334a;border-radius:4px;margin-top:14px}.progress:before{content:'';display:block;height:100%;width:35%;background:#81a9ff;animation:slide 1.4s infinite ease-in-out}@keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(380%)}}dialog{background:var(--night-surface,#fff);color:inherit;border:1px solid var(--line,#d9dfeb);border-radius:14px;width:min(520px,calc(100vw - 30px));padding:28px}dialog::backdrop{background:#0009;backdrop-filter:blur(3px)}dialog h2{margin-top:0}#confirm-selection{max-height:130px;overflow:auto;padding:12px;background:#8197b512;border-radius:6px;line-height:1.7}#dataset{overflow-wrap:anywhere}@media(max-width:600px){main{padding:22px 14px}.panel{padding:14px}th,td{padding:12px 5px}h1{font-size:24px}}
+</style></head><body><main>
+<header><a id="back" href="./episode_0">← 返回数据预览</a></header>
+<h1>Episode 回收站</h1><div id="dataset" class="muted">正在读取数据集…</div>
+<p class="note">放入回收站的 Episode 可以恢复。永久清理会从 H800 当前转换数据集中删除所选片段的视频与曲线数据，无法恢复；不删除原始采集文件或其他数据集。清理后，剩余 Episode 会从 0 开始重新连续编号。</p>
+<section class="panel"><div class="toolbar"><strong id="count">正在加载…</strong><button id="restore" disabled>恢复所选</button><button id="purge" class="danger" disabled>永久清理所选</button></div>
+<div id="status" role="status" class="status"></div><div id="progress" class="progress" hidden></div>
+<div id="list"></div></section>
+<dialog id="confirm"><h2>永久清理所选片段？</h2><p>以下 Episode 的视频与曲线数据将从 H800 当前数据集中删除，无法恢复。</p><div id="confirm-selection"></div><p class="muted">其他 Episode 会保留，并重新连续编号。请确认选择无误。</p><div class="toolbar"><button id="cancel">取消</button><button id="confirm-purge" class="danger">确认永久清理</button></div></dialog>
+</main><script>
+(() => {
+ const id = location.pathname.split('/')[2], api = '/api/recycle/' + encodeURIComponent(id);
+ let state = null, selected = new Set(), busy = false, confirmation = null;
+ const $ = (id) => document.getElementById(id);
+ const message = (text, error=false) => { $('status').textContent=text; $('status').classList.toggle('error', error); };
+ const running = () => busy || ['pending','running'].includes(state?.operation?.state);
+ function buttons() { $('restore').disabled = $('purge').disabled = !state || !selected.size || running(); }
+ function render() {
+   $('dataset').textContent = state.dataset_name;
+   $('count').textContent = `回收站 ${state.entries.length} 个 · 已选 ${selected.size} 个`;
+   $('progress').hidden = !running();
+   const available = new Set(state.entries.map(e=>e.episode)); selected = new Set([...selected].filter(e=>available.has(e)));
+   $('list').replaceChildren();
+   if (!state.entries.length) {
+     const p=document.createElement('div');p.className='empty';p.textContent='回收站是空的。放入回收站的 Episode 会显示在这里。';$('list').append(p);
+   } else {
+     const table=document.createElement('table'),thead=document.createElement('thead'),tr=document.createElement('tr');
+     const th=document.createElement('th'),all=document.createElement('input');all.type='checkbox';all.setAttribute('aria-label','全选回收站中的 Episode');all.disabled=running();all.checked=selected.size===state.entries.length;all.indeterminate=selected.size>0&&!all.checked;
+     all.onchange=()=>{selected=new Set(all.checked?state.entries.map(e=>e.episode):[]);render();};th.append(all);tr.append(th);
+     for(const label of ['Episode','放入时间','操作']){const el=document.createElement('th');el.textContent=label;tr.append(el);}thead.append(tr);table.append(thead);
+     const body=document.createElement('tbody');
+     for(const entry of state.entries){const row=document.createElement('tr'),cell=document.createElement('td'),check=document.createElement('input');check.type='checkbox';check.setAttribute('aria-label',`选择 Episode ${entry.episode}`);check.checked=selected.has(entry.episode);check.disabled=running();check.onchange=()=>{check.checked?selected.add(entry.episode):selected.delete(entry.episode);render();};cell.append(check);row.append(cell);
+       for(const value of [`Episode ${entry.episode}`,new Date(entry.deleted_at*1000).toLocaleString('zh-CN')]){const td=document.createElement('td');td.textContent=value;row.append(td);}
+       const td=document.createElement('td'),btn=document.createElement('button');btn.textContent='恢复';btn.disabled=running();btn.onclick=()=>change('restore',[entry.episode]);td.append(btn);row.append(td);body.append(row);
+     }table.append(body);$('list').append(table);
+   }
+   $('back').href='/bp/'+encodeURIComponent(id)+'/episode_'+(Array.from({length:state.total_episodes},(_,i)=>i).find(i=>!available.has(i))??0);
+   if(state.total_episodes===0){$('back').href='http://'+location.hostname+':8081/';$('back').textContent='← 返回管理台（数据集已清空）';}
+   const op=state.operation;
+   if(['pending','running'].includes(op?.state)) message(op.progress || '正在清理，请稍候…');
+   else if(op?.state==='completed' && !busy) message(`清理完成，已从 H800 删除 ${op.episodes.length} 个 Episode、${op.deleted_frames} 帧。剩余 ${op.remaining_episodes} 个 Episode，编号已更新。`);
+   else if(op?.state==='failed' && !busy) message('清理失败：'+(op.error || '请重试')+'。所选项目仍在回收站。',true);
+   buttons();
+ }
+ async function load(){if(busy||confirmation)return;try{const r=await fetch(api,{cache:'no-store'}),data=await r.json();if(!r.ok)throw Error(data.detail||'无法读取回收站');state=data;render();}catch(e){message(e.message,true);}}
+ async function change(action,episodes,revision=state.revision){busy=true;buttons();try{const r=await fetch(api+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({episodes,revision})}),data=await r.json();if(!r.ok)throw Error(data.detail||'操作失败');state=data;selected=new Set();message(action==='restore'?'所选 Episode 已恢复。':'清理任务已开始。');}catch(e){render();message(e.message,true);return;}finally{busy=false;buttons();}render();}
+ $('restore').onclick=()=>change('restore',[...selected]);
+ $('purge').onclick=()=>{confirmation={episodes:[...selected].sort((a,b)=>a-b),revision:state.revision};$('confirm-selection').textContent=confirmation.episodes.map(i=>'Episode '+i).join('、');$('confirm').showModal();};
+ $('cancel').onclick=()=>{$('confirm').close();confirmation=null;load();};
+ $('confirm').addEventListener('cancel',()=>{confirmation=null;});
+ $('confirm-purge').onclick=()=>{const choice=confirmation;$('confirm').close();confirmation=null;if(choice)change('purge',choice.episodes,choice.revision);};
+ load();setInterval(load,2000);window.addEventListener('focus',load);
+})();
+</script></body></html>

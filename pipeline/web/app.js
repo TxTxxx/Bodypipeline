@@ -509,8 +509,16 @@ document.addEventListener("click", (e) => {
     if (popup) {
       popup.opener = null;
       popup.document.title = "正在打开数据预览";
+      popup.document.documentElement.dataset.theme = document.documentElement.dataset.theme;
+      const themeStyle = popup.document.createElement("link");
+      themeStyle.rel = "stylesheet";
+      themeStyle.href = new URL("/assets/theme.css", location.href).href;
+      popup.document.head.appendChild(themeStyle);
+      const themeScript = popup.document.createElement("script");
+      themeScript.src = new URL("/assets/theme.js", location.href).href;
+      popup.document.head.appendChild(themeScript);
       popup.document.body.innerHTML =
-        '<main style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;color:#202124;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在打开数据预览</h1><p style="margin:0">Visualizer 就绪后会自动显示所选数据集。</p></main>';
+        '<main class="viewer-starting-card" style="max-width:620px;margin:15vh auto;padding:32px;background:#fff;border:1px solid #dedee3;border-radius:12px;font:15px system-ui,sans-serif;line-height:1.7"><h1 style="font-size:22px;margin:0 0 12px">正在打开数据预览</h1><p style="margin:0">Visualizer 就绪后会自动显示所选数据集。</p></main>';
     }
     action(async () => {
       try {
@@ -808,7 +816,7 @@ $("conversion-form").onsubmit = (event) => {
 };
 function renderServer(uploads, jobs) {
   const runtimeTypes = (config.runtimes || []).map((r) => r.robot_type).filter(Boolean);
-  const types = [...new Set([...runtimeTypes, ...uploads, ...jobs].map(rowRobotType))].sort();
+  const types = [...new Set([...runtimeTypes, ...uploads.map(rowRobotType), ...jobs.map(rowRobotType)])].sort();
   const oldType = $("server-robot-type").value;
   const type = types.includes(oldType) ? oldType : "";
   if (oldType && !type) {
