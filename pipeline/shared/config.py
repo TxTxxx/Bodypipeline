@@ -18,6 +18,7 @@ class Settings:
     data_root: Path | None = None
     import_roots: list[Path] = field(default_factory=list)
     token: str = ""
+    login_password: str = ""
     device_token: str = ""
     bridge_token: str = ""
     server_url: str = "http://127.0.0.1:8081"
@@ -58,10 +59,12 @@ class Settings:
     slurm: dict = field(default_factory=dict)
     devices: list[dict] = field(default_factory=list)
     accepted_capture_profile_hashes: list[str] = field(default_factory=list)
+    replay: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, role: str, path: str | None = None):
         raw = json.loads(Path(path).read_text()) if path else {}
+        raw.pop("replay_clients", None)  # Retired Server proxy configuration.
         raw["role"] = role
         raw.setdefault("root", f".runtime/{'server' if role == 'viewer' else role}")
         raw["root"] = Path(raw["root"]).expanduser().resolve()
@@ -72,6 +75,7 @@ class Settings:
         ]
         for key, env in [
             ("token", "PIPELINE_TOKEN"),
+            ("login_password", "PIPELINE_LOGIN_PASSWORD"),
             ("device_token", "PIPELINE_DEVICE_TOKEN"),
             ("bridge_token", "PIPELINE_BRIDGE_TOKEN"),
         ]:

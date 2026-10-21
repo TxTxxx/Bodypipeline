@@ -1,9 +1,10 @@
 from pathlib import Path
+from urllib.parse import urlencode
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 ASSETS = Path(__file__).resolve().parents[1] / "web"
-BASE_ASSETS = {"app.js", "style.css", "theme.js", "theme.css"}
+BASE_ASSETS = {"app.js", "style.css", "theme.js", "theme.css", "client-replay.js"}
 REPORT_ASSETS = {"report.js", "report.css"}
 
 
@@ -25,7 +26,7 @@ def themed_html(page: str) -> str:
     )
 
 
-def mount_ui(app, *, report=False):
+def mount_ui(app, *, report=False, replay=False):
     @app.get("/")
     def index():
         return FileResponse(ASSETS / "index.html")
@@ -36,6 +37,13 @@ def mount_ui(app, *, report=False):
         @app.get("/report/{job_id}")
         def report_page(job_id: str | None = None):
             return FileResponse(ASSETS / "report.html")
+
+    if replay:
+
+        @app.get("/replay")
+        def replay_page(capture: str | None = None):
+            query = "?" + urlencode({"capture": capture}) if capture else ""
+            return RedirectResponse("/#replay" + query, status_code=307)
 
     @app.get("/assets/{name}")
     def asset(name: str):

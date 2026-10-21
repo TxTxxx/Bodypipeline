@@ -181,6 +181,13 @@ class CaptureService:
 
     def start(self, cid):
         with self.lock:
+            if getattr(self, "replay", None) and self.replay.row["state"] in {
+                "PREPARING",
+                "RUNNING",
+                "STOPPING",
+                "RECOVERY_REQUIRED",
+            }:
+                raise DomainError("请先结束当前回放")
             row = self.store.get("capture", cid)
             if row["state"] in {"STARTING", "RECORDING"}:
                 return row
