@@ -19,6 +19,7 @@ from pipeline.shared.core import (
 )
 
 from .datasets import TARGET_FORMATS
+from .merges import MergeRunner
 from .providers import RuntimeCatalog
 from .quality import DOCTOR_CHECK_IDS, doctor_gate
 from .storage import (
@@ -36,6 +37,7 @@ class JobRunner:
         self.catalog = RuntimeCatalog(settings)
         self.lock = threading.RLock()
         self.shutdown_requested = threading.Event()
+        self.merges = MergeRunner(settings, self)
 
     def recover(self):
         for job in self.store.all("job"):
@@ -445,6 +447,9 @@ class JobRunner:
         return False
 
     def run(self, job):
+        if job.get("operation") == "merge":
+            self.merges.run(job)
+            return
         self.save(
             job,
             state="RUNNING",

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
+import { EpisodeScoreBadge, EpisodeScorePanel, useEpisodeScores } from "@/components/episode-scores";
 
 import type { DatasetDisplayInfo } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 
@@ -37,6 +38,8 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [mobileVisible, setMobileVisible] = useState(false);
   const { flagged, count, toggle } = useFlaggedEpisodes();
+  const { result: scores, retry: retryScores } = useEpisodeScores(datasetInfo.repoId);
+  const scoreByEpisode = useMemo(() => new Map(scores.report?.episodes.map(row => [row.episode_index, row]) || []), [scores.report]);
   const [recycle, setRecycle] = useState<{entries: {episode: number}[]; revision: number; total_episodes: number; operation?: {id: string; state: string; mapping?: Record<string, number>}} | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -123,6 +126,8 @@ const Sidebar: React.FC<SidebarProps> = ({
           <dd className="text-slate-200">{datasetInfo.fps}</dd>
         </dl>
 
+        <EpisodeScorePanel result={scores} episodeId={episodeId} retry={retryScores} />
+
         <a href={`/${datasetInfo.repoId}/trash`} className="pipeline-recycle-link"><TrashIcon /> 回收站 <span>{recycle?.entries.length ?? "…"}</span></a>
         {notice && <div role="status" className="pipeline-recycle-notice">{notice} {undo !== null && <button disabled={busy || cleaning} onClick={() => changeEpisode(undo, "restore")}>撤销</button>}</div>}
         {cleaning && <p className="pipeline-recycle-notice">正在永久清理，请等待完成后刷新。</p>}
@@ -162,6 +167,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     >
                       Episode {episode}
                     </button>
+                    <EpisodeScoreBadge score={scoreByEpisode.get(episode)} />
                     <button type="button" className="pipeline-trash-button" title={`将 Episode ${episode} 放入回收站`} aria-label={`将 Episode ${episode} 放入回收站`} disabled={!recycle || busy || cleaning} onClick={() => changeEpisode(episode, "trash")}><TrashIcon /></button>
                     <button
                       onClick={() => toggle(episode)}
@@ -183,6 +189,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     >
                       Episode {episode}
                     </Link>
+                    <EpisodeScoreBadge score={scoreByEpisode.get(episode)} />
                     <button type="button" className="pipeline-trash-button" title={`将 Episode ${episode} 放入回收站`} aria-label={`将 Episode ${episode} 放入回收站`} disabled={!recycle || busy || cleaning} onClick={() => changeEpisode(episode, "trash")}><TrashIcon /></button>
                     <button
                       onClick={() => toggle(episode)}

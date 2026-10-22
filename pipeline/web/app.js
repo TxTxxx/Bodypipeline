@@ -27,6 +27,8 @@ let config = null,
   activeCollection = null,
   selectedEpisodes = new Set(),
   serverJobs = [],
+  serverMergeCandidates = [],
+  selectedMergeDatasets = new Set(),
   serverTab = "convert",
   clientTab = "capture",
   selectedCheck = null,
@@ -66,8 +68,12 @@ const names = {
   READY: "已就绪",
   STOPPED: "未启动",
   IMPORTED: "历史导入",
+  MERGED: "合并数据集",
 };
+const jobBadge = (job) => job.operation === "merge" && job.state === "CONVERTED"
+  ? '<span class="badge">合并完成 · 待质检</span>' : badge(job.state);
 const sourceBadge = (job) => {
+  if (job.operation === "merge") return badge("MERGED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
   const upload = serverUploads.find((u) => u.id === job.upload_id);
   if (job.capture_mode === "mock" || upload?.capture_mode === "mock") return badge("MOCK");
   if (job.capture_mode === "imported" || upload?.capture_mode === "imported" || upload?.source_kind === "raw_import") return badge("IMPORTED");
@@ -159,7 +165,7 @@ async function action(fn) {
     notice(e.message, true);
   } finally {
     busy = false;
-    if (config?.role === "server") updateConversionSelection();
+    if (config?.role === "server") { updateConversionSelection(); updateMergeSelection(); }
     if (client && config?.role === "client") {
       renderClientCaptures();
       void refresh();
@@ -631,14 +637,16 @@ async function refresh() {
       const rows = await api("/api/capture-status");
       if (config?.role === "client") acceptCaptures(rows);
     } else {
-      const [uploads, jobs, v] = await Promise.all([
+      const [uploads, jobs, v, mergeCandidates] = await Promise.all([
         api("/api/collections"),
         api("/api/jobs"),
         api("/api/viewer"),
+        api("/api/merge-candidates"),
       ]);
       serverCollections = uploads;
       serverUploads = uploads.flatMap((c) => c.uploads);
       serverJobs = jobs;
+      serverMergeCandidates = mergeCandidates;
       renderServer(serverUploads, jobs);
       renderViewerStatus(v);
       if (selectedJob) await showJob();
@@ -712,7 +720,7 @@ function setClientTab(value, updateHistory = true) {
   setSidebarOpen(false, wasOpen);
 }
 function setServerTab(tab, updateHistory = true) {
-  if (!["uploads", "convert", "results"].includes(tab)) tab = "convert";
+  if (!["uploads", "convert", "results", "merge"].includes(tab)) tab = "convert";
   serverTab = tab;
   if (location.hash === "#replay") history.replaceState(null, "", "#" + tab);
   if (updateHistory && location.hash !== "#" + tab) location.hash = tab;
@@ -726,16 +734,17 @@ function setServerTab(tab, updateHistory = true) {
     if (active) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
-  const title = { uploads: "原始数据", convert: "数据转换", results: "预览与质检" }[tab];
+  const title = { uploads: "原始数据", convert: "数据转换", results: "预览与质检", merge: "数据集合并" }[tab];
   $("page-title").textContent = $("current-page").textContent = title;
   $("page-description").textContent = {
     uploads: "按任务组织原始采集，同一数据集持续接收新的 episodes。",
     convert: "填写 instruction，批量转换所选 episodes 为一个 LeRobot 数据集。",
     results: "浏览转换结果、预览多路视频，并查看数据质量报告。",
+    merge: "选择已有数据集，合并生成独立的 LeRobot 数据集。",
   }[tab];
   document.title = title + " · BodyPipeline";
   $("job-detail-panel").hidden = !selectedJob || tab !== "results";
-  $("demo-warning").hidden = config?.processing_mode !== "demo";
+  $("demo-warning").hidden = config?.processing_mode !== "demo" || tab === "merge";
   $("mode-badge").textContent = config?.processing_mode === "demo" ? "DEMO · 演示处理" : "SERVER · 中心服务";
   const wasOpen = $("app-view").classList.contains("sidebar-open");
   setSidebarOpen(false, wasOpen);
@@ -763,6 +772,7 @@ function replaceOptions(element, options, selected) {
   }
 }
 $("server-robot-type").onchange = () => {
+  selectedMergeDatasets.clear();
   $("conversion-upload").value = "";
   selectedJob = null;
   selectedCheck = null;
@@ -873,13 +883,15 @@ function renderServer(uploads, jobs) {
   replaceOptions($("server-robot-type"), '<option value="">请选择机器人类型</option>' + types.map((t) => `<option value="${esc(t)}">${esc(robotTypeLabel(t))}</option>`).join(""), type);
   const robotTypes = [...new Set([config.profile?.robot_type, ...runtimeTypes, ...types].filter(Boolean))];
   replaceOptions($("import-robot-types"), robotTypes.map((t) => `<option value="${esc(t)}">${esc(robotTypeLabel(t))}</option>`).join(""), $("import-robot-type").value);
-  $("robot-scope-hint").textContent = type ? `当前范围：${robotTypeLabel(type)}。下方数据、任务、结果仅显示此类型；同类型多台设备通过设备 ID 区分。` : "选择后，再选择该类型下的数据集。原始数据、转换任务和预览结果会一起筛选。";
+  $("robot-scope-hint").textContent = type ? `当前范围：${robotTypeLabel(type)}。下方数据、任务、结果仅显示此类型；同类型多台设备通过设备 ID 区分。` : "选择后，再选择该类型下的数据集。原始数据、转换任务、合并任务和预览结果会一起筛选。";
   uploads = uploads.filter((u) => rowRobotType(u) === type);
   jobs = jobs.filter((j) => rowRobotType(j) === type);
   $("metric-uploads").textContent = uploads.filter((x) => x.state === "COMMITTED").length;
-  $("metric-jobs").textContent = jobs.length;
+  const conversions = jobs.filter((j) => j.operation !== "merge");
+  $("metric-jobs").textContent = conversions.length;
   $("nav-upload-count").textContent = uploads.length;
-  $("nav-job-count").textContent = jobs.length;
+  $("nav-job-count").textContent = conversions.length;
+  $("nav-merge-count").textContent = jobs.filter((j) => j.operation === "merge").length;
   $("nav-result-count").textContent = jobs.filter((j) => j.dataset_available).length;
   $("metric-completed").textContent = jobs.filter((x) => x.dataset_available).length;
   const collections = serverCollections.filter((c) => rowRobotType(c) === type);
@@ -891,14 +903,78 @@ function renderServer(uploads, jobs) {
   $("upload-list").innerHTML = collections.length ? collections.map((c) =>
     `<tr><td><strong class="task-name">${esc(c.dataset_name)}</strong><span class="sub">${esc(c.id.slice(0, 12))} · ${esc(collectionLocation(c))}</span></td><td>${esc([...new Set(c.uploads.map((u) => u.robot_id))].join(", "))} ${c.capture_mode === "mock" ? badge("MOCK") : c.target === "imported" ? badge("IMPORTED") : ""}</td><td>${bytes(c.total_bytes)}<span class="sub">${c.episode_count} 个 episodes</span></td><td>${c.ready_count} / ${c.episode_count}</td><td><button class="secondary" data-process="${esc(c.id)}">查看 / 批量转换</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型；该类型的数据集将在此显示。</td></tr>';
-  $("job-list").innerHTML = jobs.length ? jobs.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || 1} 个 episodes</span></td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
+  $("job-list").innerHTML = conversions.length ? conversions.map((j) =>
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || 1} 个 episodes</span></td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
   const available = jobs.filter((j) => j.dataset_available);
   $("result-list").innerHTML = available.length ? available.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${badge(j.state)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行质检</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行质检</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型已转换的数据集。受阻任务的原因可在“数据转换”查看。</td></tr>';
+  updateMergeSelection();
+  renderMergeJobs(jobs.filter((j) => j.operation === "merge"));
 }
+function updateMergeSelection() {
+  const type = $("server-robot-type").value;
+  const sources = serverMergeCandidates.filter((s) => rowRobotType(s) === type);
+  selectedMergeDatasets = new Set([...selectedMergeDatasets].filter((id) => sources.some((s) => s.id === id)));
+  const selected = [...selectedMergeDatasets].map((id) => sources.find((s) => s.id === id));
+  const first = selected[0];
+  const reason = (s) => !s.selectable ? s.reason : first && s.compatibility_key !== first.compatibility_key ? "与已选来源不兼容（版本、帧率、特征结构或模拟标识不同）" : "";
+  const rows = sources.length ? sources.map((s) => {
+    const checked = selectedMergeDatasets.has(s.id), issue = reason(s);
+    const order = [...selectedMergeDatasets].indexOf(s.id) + 1;
+    return `<tr><td><label class="check-label"><input type="checkbox" data-merge-source="${esc(s.id)}" aria-label="选择数据集 ${esc(s.dataset_name)}" ${checked ? "checked" : ""} ${busy || (issue && !checked) ? "disabled" : ""} />${checked ? `第 ${order} 个` : ""}</label></td><td><strong class="task-name">${esc(s.dataset_name)}</strong><span class="sub">${esc(s.id.slice(0, 12))}${s.synthetic ? " · 模拟数据" : ""}</span></td><td>${esc(s.target_format || "—")}<span class="sub">${s.fps ? esc(s.fps) + " FPS" : "—"}</span></td><td>${s.episode_count ?? "—"} episodes<span class="sub">${s.frame_count ?? "—"} 帧</span></td><td>${jobBadge(s)}${issue ? `<span class="sub job-error">${esc(issue)}</span>` : '<span class="sub muted">可合并</span>'}</td></tr>`;
+  }).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型；已转换或已导入的 LeRobot 数据集将在此显示。</td></tr>';
+  const list = $("merge-source-list");
+  if (list.dataset.content !== rows) {
+    const focused = document.activeElement?.dataset.mergeSource;
+    list.innerHTML = rows;
+    list.dataset.content = rows;
+    if (focused) [...list.querySelectorAll("[data-merge-source]")].find((el) => el.dataset.mergeSource === focused)?.focus();
+  }
+  $("merge-name").disabled = busy;
+  $("merge-clear").disabled = busy || !selected.length;
+  $("merge-summary").textContent = `已选 ${selected.length} 个数据集 · 共 ${selected.reduce((n, s) => n + (s.episode_count || 0), 0)} 个 episodes · ${selected.reduce((n, s) => n + (s.frame_count || 0), 0)} 帧${first ? " · LeRobot " + first.target_format : ""}`;
+  const problems = [...new Set(selected.map(reason).filter(Boolean))];
+  if (!config?.letools_available) problems.push("服务器尚未配置 LeTools 合并环境。");
+  if (selected.length > 100) problems.push("一次最多合并 100 个数据集。");
+  $("merge-warning").hidden = !problems.length;
+  $("merge-warning").textContent = problems.join("；");
+  $("merge-submit").disabled = busy || selected.length < 2 || !$("merge-name").value.trim() || problems.length > 0;
+  $("merge-help").textContent = selected.length < 2 ? "请选择至少两个兼容的数据集。" : !$("merge-name").value.trim() ? "请填写新数据集名称。" : problems.length ? "请先处理来源兼容性问题。" : "合并在后台执行，完成后显示新数据集。";
+}
+$("merge-source-list").onchange = (event) => {
+  const id = event.target.dataset.mergeSource;
+  if (!id) return;
+  if (event.target.checked) selectedMergeDatasets.add(id); else selectedMergeDatasets.delete(id);
+  updateMergeSelection();
+};
+$("merge-clear").onclick = () => { selectedMergeDatasets.clear(); updateMergeSelection(); };
+$("merge-name").oninput = updateMergeSelection;
+$("merge-form").onsubmit = (event) => {
+  event.preventDefault();
+  action(async () => {
+    const name = $("merge-name").value.trim(), ids = [...selectedMergeDatasets];
+    updateMergeSelection();
+    const job = await api("/api/merges", "POST", { name, source_job_ids: ids });
+    selectedMergeDatasets.clear();
+    $("merge-name").value = "";
+    notice(`已提交合并任务「${job.dataset_name}」：${job.merge_source_count} 个数据集、${job.source_count} 个 episodes。`);
+  });
+};
+function renderMergeJobs(jobs) {
+  $("merge-job-list").innerHTML = jobs.length ? jobs.map((j) => `<tr><td><strong class="task-name">${esc(j.dataset_name)}</strong><span class="sub">${esc(j.id.slice(0, 12))} · LeRobot ${esc(j.target_format)}</span></td><td>${j.merge_source_count} 个数据集<span class="sub">${j.source_count} episodes · ${j.frame_count} 帧</span></td><td>${esc(j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-detail="${esc(j.id)}">查看结果</button>` : ["FAILED", "INTERRUPTED"].includes(j.state) ? `<button class="secondary" data-merge-retry="${esc(j.id)}">重新选择 / 重试</button><button class="secondary" data-detail="${esc(j.id)}">查看详情</button>` : '<span class="small muted">后台处理中</span>'}</div></td></tr>`).join("") : '<tr><td colspan="5" class="empty">该机器人类型暂无合并任务。提交后可在此查看进度和结果。</td></tr>';
+}
+$("merge-job-list").addEventListener("click", (event) => {
+  const id = event.target.closest("[data-merge-retry]")?.dataset.mergeRetry;
+  const job = serverJobs.find((j) => j.id === id);
+  if (!job || busy) return;
+  selectedMergeDatasets = new Set(job.source_job_ids);
+  $("merge-name").value = job.dataset_name;
+  updateMergeSelection();
+  $("merge-form").scrollIntoView({ behavior: "smooth", block: "start" });
+  notice("已填入原合并配置，请检查来源后重新提交；新任务会使用新的输出目录。");
+});
 function datasetLocation(job) {
   if (!job.dataset_available) return '<span class="small muted">尚无可用转换结果</span>';
   return `<div class="dataset-location"><span class="small muted">服务器文件系统路径</span><code>${esc(job.dataset_path)}</code><button type="button" class="secondary" data-copy-path="${esc(job.dataset_path)}">复制路径</button></div>`;
@@ -928,13 +1004,14 @@ async function showJob() {
   $("job-detail").innerHTML = `
     <p class="small"><strong>${esc(j.dataset_name || "历史数据集")}</strong> · ${j.source_count || j.episode_count || 1} 个 episodes</p>
     <p class="small">Instruction：${esc(j.instruction || "—")}</p>
-    ${badge(j.state)} ${sourceBadge(j)} <span class="small muted">${esc(j.state === "CONVERTED" ? "转换完成（独立质检见报告）" : j.stage)}</span>
+    ${jobBadge(j)} ${sourceBadge(j)} <span class="small muted">${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}</span>
     ${j.error && !j.blockers?.length ? `<p class="job-error">${esc(j.error)}</p>` : ""}
     ${j.state === "BLOCKED" ? `<div class="warning preflight-detail"><strong>转换尚未启动：此任务使用的机器人配置尚未完成核实</strong><ul>${(j.blockers || []).map((b) => `<li><code>${esc(b.field)}</code>：${esc(b.message)}</li>`).join("")}</ul><p>请核实关节顺序、单位、动作来源和时钟，更新服务器 Profile 后重新提交转换。旧任务保留提交时的配置与阻断记录。</p></div>` : ""}
     ${datasetLocation(j)}
     ${j.dataset_available ? "" : `<p class="small muted">${esc(j.dataset_unavailable_reason)}</p>`}
     ${j.work_path ? `<p class="path-hint">任务工作目录：${esc(j.work_path)}</p>` : ""}
-    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行质检</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button><button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button></div>
+    ${j.operation === "merge" ? `<h3 class="section-label">合并来源（拼接顺序）</h3><ol>${(j.merge_sources || []).map((s) => `<li>${esc(s.dataset_name)} · ${s.episode_count} episodes · ${s.frame_count} 帧</li>`).join("")}</ol>` : ""}
+    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行质检</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button>${j.operation === "merge" ? '<button class="secondary" data-log="merge">合并日志</button>' : '<button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button>'}</div>
     <h3 class="section-label">LeRobot Doctor 质量报告</h3>
     <p class="small muted">Doctor 报告只用于展示数据质量，不会修改或删除已转换的数据集。模拟数据始终保留模拟标识。</p>
     <div class="action-row"><button class="secondary" data-report="automatic">转换时的报告</button>${checks.map((c) => `<button class="secondary" data-report="${esc(c.id)}">${esc(new Date(c.created_at * 1000).toLocaleTimeString("zh-CN"))} · ${esc(names[c.state] || c.state)}${c.severity ? " · " + esc(c.severity) : ""}</button>`).join("")}</div>

@@ -240,6 +240,9 @@ footer { display: flex; justify-content: space-between; gap: 16px; color: #9aa2a
 .dataset-location { display: grid; gap: 8px; white-space: normal; min-width: 210px; max-width: 480px; margin: 12px 0; }
 .dataset-location code { overflow-wrap: anywhere; font: 11px/1.7 ui-monospace, monospace; color: #4e5f79; user-select: text; }
 .dataset-location button { justify-self: start; }
+.merge-summary { padding: 14px 16px; margin: 16px 0 8px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: #8197b50d; }
+#merge-source-list td, #merge-job-list td { vertical-align: top; }
+#merge-source-list .check-label { white-space: nowrap; }
 @media (max-width: 480px) { .camera-panel .panel-heading { align-items: flex-start; flex-direction: column; } }
 
 #cr-robot { display: block; margin-top: 6px; }

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -27,6 +28,7 @@ from pipeline.shared.security import install_security
 from pipeline.shared.web import themed_html
 
 from .datasets import dataset_for_job
+from .episode_scores import EpisodeScoreCache
 from .recycle import RecycleBin
 from .viewer_data import PreviewRegistry, serve_dataset_file
 
@@ -424,8 +426,18 @@ def create_gateway(settings):
     store = Store(settings.root / "state", legacy_name="server.sqlite")
     registry = PreviewRegistry(store, settings.viewer_ttl)
     doctor = DoctorCache(settings)
+    scores = EpisodeScoreCache(settings, store)
     recycle = RecycleBin(settings, store, registry)
-    app = FastAPI(title="LeRobot Viewer Gateway")
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(scores.close)
+
+    app = FastAPI(title="LeRobot Viewer Gateway", lifespan=lifespan)
+    app.state.episode_scores = scores
     # The gateway is reachable beyond loopback once it is bound to a routable
     # address, and it serves raw dataset files, so it shares the Server's token.
     install_security(app, settings)
@@ -437,6 +449,26 @@ def create_gateway(settings):
     def service_ready():
         state = _gateway_state(store)
         return state is not None and state.get("state") == "READY"
+
+    def score_preview(dataset_id):
+        row = registry.lookup(f"bp/{dataset_id}")
+        if row is None:
+            raise DomainError("预览已过期或不存在，请在管理台重新打开", 404)
+        return row
+
+    @app.get("/api/episode-scores/{dataset_id}")
+    async def score_status(dataset_id: str):
+        row = score_preview(dataset_id)
+        result = await asyncio.to_thread(scores.status, row)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/episode-scores/{dataset_id}")
+    async def score_start(dataset_id: str):
+        row = score_preview(dataset_id)
+        result = await asyncio.to_thread(scores.start, row)
+        return JSONResponse(
+            result, status_code=202, headers={"Cache-Control": "no-store"}
+        )
 
     @app.get("/api/recycle/{dataset_id}")
     async def recycle_status(dataset_id: str):

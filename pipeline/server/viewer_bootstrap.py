@@ -145,6 +145,7 @@ def patch_presentation(cache: Path):
         "chart-model.ts": "src/utils/chart-model.ts",
         "viewer-ui.css": "src/app/viewer-ui.css",
         "side-nav.tsx": "src/components/side-nav.tsx",
+        "episode-scores.tsx": "src/components/episode-scores.tsx",
     }
     for name, target in destinations.items():
         (source / target).write_bytes((UI_ASSETS / name).read_bytes())

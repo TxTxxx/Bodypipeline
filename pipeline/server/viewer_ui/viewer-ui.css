@@ -1,4 +1,27 @@
 /* BodyPipeline signal explorer and responsive camera stage. */
+.episode-score-panel {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.episode-score-heading { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.episode-score-heading strong { color: var(--accent); font-size: 21px; font-variant-numeric: tabular-nums; }
+.episode-score-heading small { color: var(--text-muted); font-size: 10px; font-weight: 400; }
+.episode-score-panel p { margin-top: 8px; }
+.episode-score-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+.episode-score-metrics > div { display: flex; justify-content: space-between; gap: 5px; }
+.episode-score-metrics dd { margin: 0; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.episode-score-badge { min-width: 30px; text-align: right; color: var(--accent); font-variant-numeric: tabular-nums; font-size: 10px; }
+.episode-score-badge.needs-review, .episode-score-review { color: var(--color-orange-400, #b35f00); }
+.episode-score-panel details { margin-top: 8px; }
+.episode-score-panel details ul { padding-left: 14px; list-style: disc; }
+.episode-score-note { font-size: 10px; line-height: 1.6; }
+.episode-score-retry { margin-top: 8px; color: var(--accent); text-decoration: underline; }
+
 :root {
   --signal-command: #2455d6;
   --signal-measured: #b35f00;

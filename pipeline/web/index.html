@@ -59,6 +59,7 @@
           <button class="nav-item" type="button" data-server-tab="uploads" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg><span>原始数据</span><span class="nav-count" id="nav-upload-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="convert" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>数据转换</span><span class="nav-count" id="nav-job-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="results" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg><span>预览与质检</span><span class="nav-count" id="nav-result-count">0</span></button>
+          <button class="nav-item" type="button" data-server-tab="merge" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v3c0 3 8 3 8 6v7M20 4v3c0 3-8 3-8 6m-4 3 4 4 4-4"/></svg><span>数据集合并</span><span class="nav-count" id="nav-merge-count">0</span></button>
         </nav>
         <div class="sidebar-bottom"><strong><span class="dot"></span> 文件目录存储</strong><p>原始数据保留<br />转换与质检记录可追溯</p><span class="version">BodyPipeline / 0.1</span></div>
       </aside>
@@ -304,6 +305,29 @@
               <section class="panel viewer-panel">
                 <div><h2>LeRobot Visualizer</h2><p class="muted small">只读预览 · Visualizer 常驻运行 · 可同时打开多个数据集</p></div>
                 <div id="viewer-status" aria-live="polite">未启动</div>
+              </section>
+            </div>
+            <div data-server-panel="merge" hidden>
+              <section class="panel">
+                <div class="panel-heading"><h2>合并为新数据集</h2><span class="step">MERGE DATASETS</span></div>
+                <p class="panel-note small muted">选择至少两个已转换或已导入的 LeRobot 数据集。按勾选顺序拼接 Episodes，保留各自的 instruction，生成独立的新数据集；相同片段不会自动去重。</p>
+                <form id="merge-form" class="conversion-form">
+                  <label for="merge-name">新数据集名称 <span class="required">*</span></label>
+                  <input id="merge-name" required maxlength="2000" autocomplete="off" placeholder="例如：抓取任务训练集 · 第一批" />
+                  <div class="episode-picker">
+                    <div class="episode-toolbar"><strong>选择来源数据集</strong><button type="button" class="text-button" id="merge-clear">清空选择</button></div>
+                    <div class="table-scroll"><table><thead><tr><th>选择 / 顺序</th><th>数据集</th><th>格式 / 帧率</th><th>数据规模</th><th>状态 / 兼容性</th></tr></thead><tbody id="merge-source-list"></tbody></table></div>
+                  </div>
+                  <div id="merge-summary" class="merge-summary small" aria-live="polite">请先选择机器人类型和来源数据集。</div>
+                  <p class="small muted">来源须具有相同的 LeRobot 版本、帧率、特征结构与模拟标识。合并会重新编号并验证结构，完成后可在“预览与质检”查看结果或单独运行质检。</p>
+                  <p class="small muted">新数据集自动开放给所有人读写，目录允许所有人进入。</p>
+                  <div id="merge-warning" class="warning" hidden></div>
+                  <div class="conversion-submit"><button id="merge-submit" class="primary" type="submit" disabled>创建合并任务</button><span class="small muted" id="merge-help">请选择至少两个兼容的数据集并填写名称。</span></div>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><h2>合并任务与结果</h2><span class="step">MERGE QUEUE</span></div>
+                <div class="table-scroll"><table><thead><tr><th>新数据集 / 任务</th><th>来源 / 数据规模</th><th>进度</th><th>状态</th><th>操作</th></tr></thead><tbody id="merge-job-list"></tbody></table></div>
               </section>
             </div>
             <section class="panel" id="job-detail-panel" hidden>

@@ -51,6 +51,12 @@ class AnalysisRequest(BaseModel):
     episodes: list[int] | None = Field(default=None, max_length=1000)
 
 
+class MergeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_job_ids: list[str] = Field(min_length=2, max_length=100)
+    name: str = Field(min_length=1, max_length=2000)
+
+
 log = logging.getLogger("pipeline.server")
 
 
@@ -341,6 +347,14 @@ def create_app(settings, background=True):
     def jobs():
         return [job_response(row) for row in ingest.store.all("job")]
 
+    @app.get("/api/merge-candidates")
+    def merge_candidates():
+        return runner.merges.candidates()
+
+    @app.post("/api/merges", status_code=202)
+    def merge(body: MergeRequest):
+        return job_response(runner.merges.enqueue(body.source_job_ids, body.name))
+
     @app.post("/api/uploads/{uid}/process", status_code=202)
     def process(uid: str, body: ConversionRequest | None = Body(default=None)):
         options = body or ConversionRequest()
@@ -410,7 +424,7 @@ def create_app(settings, background=True):
 
     @app.get("/api/jobs/{jid}/logs/{name}")
     def logs(jid: str, name: str):
-        if name not in {"convert", "validate", "doctor"}:
+        if name not in {"convert", "validate", "doctor", "merge"}:
             raise DomainError("日志不存在", 404)
         row = ingest.store.get("job", jid)
         p = storage_path(settings, row, "work", row["id"]) / f"{name}.stderr.log"

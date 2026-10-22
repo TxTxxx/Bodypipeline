@@ -140,6 +140,24 @@ Doctor 的 JSON 报告必须与数据集 `meta/info.json` 中的 episode 数和�
 
 WARN / FAIL 不会删除结果目录，仍可在 Server 中预览和查看报告。
 
+#### Episode 质量评分
+
+Visualizer 的 Episode 侧栏显示逐片段总分（0–100），选中片段时展示动作平滑度、动作覆盖度、
+跨片段一致性和长度四个分项，以及原算法建议复查的提示。评分不参与 Doctor 质量门禁，也不执行
+数据修复、裁剪或删除；分数是启发式指标，不代表任务成功率，也不适合作为不同机器人间的统一质量标尺。
+
+首次打开预览后，浏览器通过 Viewer Gateway 的 `POST /api/episode-scores/<dataset_id>` 提交评分，
+再用同路径 GET 读取状态与结果。接口沿用 Viewer 鉴权、同源校验和预览有效期；只接受已登记的数据集 ID。
+评分运行于现有 LeTools Python 环境中的独立 CPU 子进程，不占用转换队列；Viewer 最多同时计算一个数据集，
+播放可以继续。结果缓存于私有 `state/episode-score/`，原数据集保持只读。元信息或 Parquet 分片变化后，
+旧结果失效并在再次打开/轮询时重新计算；计算期间发生变化则不发布该次结果。
+
+固定 Doctor 的 `score` 数据加载器会展平向量动作、遗漏后续分片。`episode_score_worker.py` 在独立
+子进程中替换该加载步骤，合并同一 Episode 的各分片并保持动作矩阵的 `(帧数, 维度)`，随后调用
+原版 `score_episodes` 算法和权重；不修改上游源码。每个声明的 Episode 都保留一行，缺数据、
+少于三帧、索引异常或含 NaN/Inf 时显示“无法评分”及原因。有效 Episode 不足四个时，原算法
+一致性项未评估且按零计入总分；界面显示该项为 `—` 并说明这一限制。更新 Doctor 固定版本时需重新验证适配。
+
 ### 3.5 Visualizer
 
 BodyPipeline 不再为每个数据集执行 `letools visualizer serve`（它把应用绑定到单个数据集，
