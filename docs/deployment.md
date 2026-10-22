@@ -326,6 +326,17 @@ uv run --locked python -m pipeline.cli server \
 
 `data_root` 必须存在且可写。`robot_type` 只能包含字母、数字、下划线和连字符。目录分类不等于转换能力：新增机器人类型仍需在 `profiles` 注册 Provider、Profile 和 `raw_formats`，并完成适配测试。
 
+Server 自动将上传的数据、Manifest、转换产物及转换报告开放给所有本机用户：普通文件为
+`0666`（所有用户可读写），目录为 `0777`（所有用户可进入、读写），已有可执行文件保留执行权限。
+该策略不依赖服务进程或 Slurm 的 `umask`；转换工具和 Provider 完成元数据写入后，会在开放
+数据集预览前再次设置权限，避免 `meta/info.json` 等原子写入文件恢复成 `0600`。
+仅处理 Pipeline 管理的数据目录，不修改导入的外部源数据，也不沿对齐符号链接修改其目标。
+`state`、账号凭据和服务配置继续使用原有私有权限。
+
+部署时应保证 `data_root` 以上各级父目录允许其他用户进入（`o+x`）；Server 只自动处理
+数据根及其内部目录，不会修改上级部署目录。已有数据不会在启动时全盘补权；新上传、续传提交
+及新转换会自动应用。若现有数据目录属于其他账号且尚未共享，需由所有者或管理员先授权。
+
 当前 AgileX ALOHA 保留时只上传一个自包含 `episode.hdf5`，Server 不解包原始目录。一次批量转换会为每个
 来源生成 `work/<job_id>/aligned/episodeN.hdf5`，再调用一次 letools 生成单个
 `work/<job_id>/dataset`。单文件 HDF5 主要减少小文件、目录遍历、RPC 和元数据开销；相机仍保留

@@ -21,7 +21,13 @@ from pipeline.shared.core import (
 from .datasets import TARGET_FORMATS
 from .providers import RuntimeCatalog
 from .quality import DOCTOR_CHECK_IDS, doctor_gate
-from .storage import prepare_storage, storage_path
+from .storage import (
+    data_directory,
+    prepare_storage,
+    share_data_path,
+    share_data_tree,
+    storage_path,
+)
 
 
 class JobRunner:
@@ -218,6 +224,8 @@ class JobRunner:
         # queue latency three times for convert / validate / doctor.
         argv = self._scheduled(args, allocation=allocation)
         with stdout.open("wb") as out, stderr.open("wb") as err:
+            share_data_path(stdout)
+            share_data_path(stderr)
             env = self.settings.tool_environment()
             process = subprocess.Popen(
                 argv, stdout=out, stderr=err, start_new_session=True, cwd=work, env=env
@@ -450,7 +458,7 @@ class JobRunner:
             prepare_storage(self.settings, job)
             work = storage_path(self.settings, job, "work", job["id"])
             self.save(job, work_path=str(work))
-            work.mkdir(parents=True, exist_ok=False)
+            data_directory(self.settings, job, "work", job["id"], exist_ok=False)
             runtime = self.runtime_for_job(job)
             provider = self.catalog.provider(runtime)
             profile = job.get("profile") or runtime.profile
@@ -652,6 +660,7 @@ class JobRunner:
                     "video_encoding": {"codec": "libx264", "pixel_format": "yuv420p"},
                 },
             )
+            share_data_tree(work)
             if job["processing_mode"] == "demo":
                 self.save(
                     job,
@@ -692,6 +701,10 @@ class JobRunner:
                     f"转换失败（{code}）：{err.read_text(errors='replace')[-2000:]}"
                 )
             provider.patch_dataset_info(work / "dataset", profile, synthetic=synthetic)
+            # Run after the provider's atomic metadata rewrite, and before the
+            # dataset becomes available to previews or downstream users. This
+            # also fixes restrictive modes created inside a Slurm allocation.
+            share_data_tree(work)
             self.save(job, stage="深度结构验证")
             self._deep_validate(executable, work, allocation)
             info = json.loads((work / "dataset/meta/info.json").read_text())
@@ -741,6 +754,7 @@ class JobRunner:
                     f"Doctor 未生成有效 JSON，属于任务错误而不是质量通过：{err.read_text(errors='replace')[-1200:]}"
                 ) from exc
             self._close_allocation()
+            share_data_tree(work)
             self.save(job, doctor_report=doctor)
             info = json.loads((work / "dataset/meta/info.json").read_text())
             gate = doctor_gate(doctor, info, code)

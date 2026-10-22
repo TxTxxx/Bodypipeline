@@ -491,6 +491,10 @@ def run(store, key, operation):
                     os.chmod(path, stat.S_IMODE(original.stat().st_mode))
                 elif path.is_dir():
                     os.chmod(path, stat.S_IMODE(root.stat().st_mode))
+                else:
+                    # New metadata (including the transaction marker) must not
+                    # revert a shared dataset to atomic_json's private 0600.
+                    os.chmod(path, stat.S_IMODE(root.stat().st_mode) & 0o666)
             # Flush newly created payloads before exposing the new directory.
             for path in stage.rglob("*"):
                 if path.is_file():

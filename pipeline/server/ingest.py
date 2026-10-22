@@ -28,7 +28,15 @@ from pipeline.shared.hdf5 import (
 )
 
 from .providers import RobotRuntime, RuntimeCatalog
-from .storage import ROBOT_LAYOUT, prepare_storage, robot_type, storage_path
+from .storage import (
+    ROBOT_LAYOUT,
+    data_directory,
+    prepare_storage,
+    robot_type,
+    share_data_path,
+    share_data_tree,
+    storage_path,
+)
 
 
 class IngestService:
@@ -186,8 +194,9 @@ class IngestService:
             ):
                 raise DomainError("服务器可用空间不足（含待上传配额预留）", 507)
             staging = storage_path(self.settings, storage, "incoming", key)
-            (staging / "data").mkdir(parents=True, exist_ok=True)
+            data_directory(self.settings, storage, "incoming", f"{key}/data")
             atomic_json(staging / "manifest.json", m)
+            share_data_path(staging / "manifest.json")
             row = {
                 **storage,
                 **collection_metadata(m, target, prefix),
@@ -347,7 +356,12 @@ class IngestService:
             if hashlib.sha256(data).hexdigest() != expected_hash:
                 raise DomainError("分块校验失败", 422)
             p = confined(self.root(row) / "data", spec["path"])
-            p.parent.mkdir(parents=True, exist_ok=True)
+            data_directory(
+                self.settings,
+                row,
+                "incoming",
+                str(Path(row["id"], "data", spec["path"]).parent),
+            )
             size = p.stat().st_size if p.exists() else 0
             if offset < size:
                 with p.open("rb") as f:
@@ -366,6 +380,7 @@ class IngestService:
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
+            share_data_path(p)
             # A crash during an append may leave a partial chunk. Resume uses exact byte offset;
             # final SHA-256 verification protects against torn/corrupt persisted data.
             return {"offset": p.stat().st_size}
@@ -411,7 +426,13 @@ class IngestService:
             row["state"] = "COMMITTING"
             self.store.put("upload", uid, row)
             final = self.final_dir(row)
-            final.parent.mkdir(parents=True, exist_ok=True)
+            data_directory(
+                self.settings,
+                row,
+                "raw",
+                str(final.parent.relative_to(storage_path(self.settings, row, "raw"))),
+            )
+            share_data_tree(root)
             if root != final:
                 os.replace(root, final)
                 fsync_dir(final.parent)
