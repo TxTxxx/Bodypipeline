@@ -1,0 +1,15 @@
+diff --git a/src/components/filtering-panel.tsx b/src/components/filtering-panel.tsx
+--- a/src/components/filtering-panel.tsx
++++ b/src/components/filtering-panel.tsx
+@@ -3,3 +3,4 @@
+ import React, { useState, useMemo, useCallback } from "react";
+ import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
++import { EpisodeScoreFilter } from "@/components/episode-score-filter";
+ import type {
+@@ -377,3 +378,5 @@
+       )}
+-
++
++      <EpisodeScoreFilter key={repoId} repoId={repoId} />
++
+       {crossEpisodeLoading && (

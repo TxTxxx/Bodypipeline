@@ -390,6 +390,9 @@ def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     channel_patch = tmp_path / "channels.patch"
     channel_patch.write_text("layout-v1")
     monkeypatch.setattr(bootstrap, "CHANNEL_PATCH", channel_patch)
+    score_filter_patch = tmp_path / "score-filter.patch"
+    score_filter_patch.write_text("score-filter-v1")
+    monkeypatch.setattr(bootstrap, "SCORE_FILTER_PATCH", score_filter_patch)
     (tmp_path / "source/.next").mkdir(parents=True)
     (tmp_path / ".letools-source.json").write_text(json.dumps({"fingerprint": "f1"}))
     builds = []
@@ -416,6 +419,9 @@ def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     (assets / "chart.tsx").write_text("updated chart presentation")
     bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
     assert len(builds) == 6
+    score_filter_patch.write_text("score-filter-v2")
+    bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
+    assert len(builds) == 7
 
 
 def test_corrupt_viewer_state_is_not_reported_as_stopped(settings_factory):
