@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BodyPipeline · 具身数据工作台</title>
+    <link rel="stylesheet" href="/assets/style.css?v=20261024-dagger-checkpoint-raw" />
+    <script src="/assets/client-replay.js" defer></script>
+    <script src="/assets/client-video.js?v=20261026-http-download" defer></script>
+    <script src="/assets/client-inference.js?v=20261026-download" defer></script>
+    <script src="/assets/app.js?v=20261026-download" defer></script>
+  </head>
+  <body>
+    <div id="login-view" class="login-shell">
+      <section class="login-card">
+        <div class="brand">
+          <span class="brand-icon">B</span> BodyPipeline
+          <span class="muted">/ DATA WORKSPACE</span>
+        </div>
+        <p class="eyebrow">LOCAL FIRST · ROBOT READY</p>
+        <h1>从一次示教，<br />到可追溯的数据。</h1>
+        <p class="muted">
+          连接采集工作台或中心数据服务。默认不启动任何机器人设备。
+        </p>
+        <form id="login-form">
+          <label for="token">服务访问密钥</label
+          ><input
+            id="token"
+            type="password"
+            required
+            autocomplete="off"
+            placeholder="输入管理员配置的访问密钥"
+          /><button class="primary" type="submit">
+            进入工作台 <span>→</span>
+          </button>
+        </form>
+        <p id="login-error" role="alert"></p>
+      </section>
+    </div>
+    <div id="app-view" hidden>
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="menu-toggle" class="icon-button mobile-only" type="button" aria-label="打开导航" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <a class="brand" href="/" aria-label="BodyPipeline 首页"><span class="brand-icon">B</span> BodyPipeline</a>
+          <span class="product-label">具身数据工作台</span>
+        </div>
+        <div class="header-right"><span id="mode-badge" class="badge"></span><button id="logout" class="text-button">退出登录</button></div>
+      </header>
+      <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="关闭导航" tabindex="-1" hidden></button>
+      <aside class="sidebar" id="sidebar" aria-label="工作台导航">
+        <div class="sidebar-heading"><span class="workspace-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"/></svg></span><div><strong>数据工作区</strong><span>BodyPipeline</span></div><button id="menu-close" class="icon-button mobile-only" type="button" aria-label="关闭导航">×</button></div>
+        <p class="nav-section-label">工作台</p>
+        <nav aria-label="采集导航" id="client-nav">
+          <button class="nav-item active" id="nav-main" data-client-tab="capture" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg><span id="nav-label">采集工作台</span></button>
+          <button class="nav-item" type="button" data-client-tab="replay" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7V5Z"/><path d="M4 5v14"/></svg><span>数据回放</span></button>
+          <button class="nav-item" type="button" data-client-tab="inference" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10l5 2-5 2v-4Z"/></svg><span>模型推理</span></button>
+        </nav>
+        <nav aria-label="服务器工作台" id="server-nav" hidden>
+          <button class="nav-item" type="button" data-server-tab="uploads" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg><span>原始数据</span><span class="nav-count" id="nav-upload-count">0</span></button>
+          <button class="nav-item" type="button" data-server-tab="convert" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>数据转换</span><span class="nav-count" id="nav-job-count">0</span></button>
+          <button class="nav-item" type="button" data-server-tab="results" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg><span>预览与质检</span><span class="nav-count" id="nav-result-count">0</span></button>
+        </nav>
+        <div class="sidebar-bottom"><strong><span class="dot"></span> 文件目录存储</strong><p>原始数据保留<br />转换与质检记录可追溯</p><span class="version">BodyPipeline / 0.1</span></div>
+      </aside>
+      <div class="workspace" id="workspace">
+        <div class="breadcrumb"><span id="workspace-label">机器人采集</span><span aria-hidden="true">/</span><strong id="current-page">采集工作台</strong></div>
+        <main>
+          <div class="page-title">
+            <div>
+              <p class="eyebrow" id="page-eyebrow">TELEOPERATION COLLECTION</p>
+              <h1 id="page-title">采集工作台</h1>
+              <p class="muted" id="page-description">
+                录制数据直接保存在指定路径，录制结束后自动显示。
+              </p>
+            </div>
+            <div class="online" id="health-label">检查服务状态…</div>
+          </div>
+          <div id="notice" role="status" hidden></div>
+          <section id="client-view" hidden>
+            <div class="warning" id="mock-warning">
+              模拟模式：相机与关节数据由程序生成，不连接真实机器人。
+            </div>
+            <div class="capture-layout">
+              <section class="panel camera-panel">
+                <div class="panel-heading">
+                  <h2>
+                    实时视野 <span id="camera-count" class="count">3</span>
+                  </h2>
+                  <div class="preview-controls"><label for="preview-quality" class="sr-only">预览画质</label><select id="preview-quality"><option value="low">省流预览 · 320px</option><option value="full">清晰预览 · 640px</option></select><button id="preview-toggle" class="secondary" type="button">暂停预览</button></div>
+                </div>
+                <p id="preview-note" class="panel-note small muted">预览独立于原始录制；弱网时可暂停</p>
+                <div id="camera-grid" class="camera-grid"></div>
+                <div class="telemetry">
+                  <div>
+                    <span>机器人</span><strong id="robot-label">—</strong>
+                  </div>
+                  <div>
+                    <span>录制状态</span
+                    ><strong id="capture-state">就绪</strong>
+                  </div>
+                  <div>
+                    <span>当前时长</span
+                    ><strong id="capture-duration">00:00</strong>
+                  </div>
+                </div>
+              </section>
+              <section class="panel setup-panel">
+                <div class="panel-heading">
+                  <h2>采集配置</h2>
+                  <span class="step">01 — CAPTURE</span>
+                </div>
+                <form id="capture-form">
+                  <label for="dataset-name">数据集名称 <span class="required">*</span></label>
+                  <input id="dataset-name" list="dataset-names" required maxlength="2000" autocomplete="off" placeholder="输入任务名称" />
+                  <datalist id="dataset-names"></datalist>
+                  <p id="capture-dataset-summary" class="small muted">按“数据集-数采员”命名；下一条开始录制时，自动上传上一条未丢弃的数据。</p>
+                  <label for="collector-name">数采员名称 <span class="required">*</span></label>
+                  <input id="collector-name" required maxlength="200" autocomplete="name" placeholder="输入数采员姓名" />
+                  <button class="secondary quick-path-button" id="quick-create-path" type="button">快速创建数据路径</button>
+                  <label for="data-path">数据路径 <span class="required">*</span></label>
+                  <div class="path-input-row">
+                    <input id="data-path" required maxlength="4096" autocomplete="off" placeholder="先快速创建，或输入已有数据目录" />
+                    <button class="icon-button folder-button" id="choose-data-path" type="button" title="选择文件夹" aria-label="选择文件夹">📁</button>
+                  </div>
+                  <p id="data-path-note" class="path-hint">保存格式：数据集/数采员/YYYYMMDD/episode1.hdf5，日期目录下直接保存 HDF5。</p>
+                  <div class="divider"></div>
+                  <div class="capture-mode-toolbar"><span id="capture-mode-label" class="badge">正在读取控制模式</span><button class="secondary" id="capture-mode-switch" type="button">切换到采集模式</button></div>
+                  <button class="primary" id="arm-enable" type="button">
+                    机械臂使能
+                  </button>
+                  <button class="secondary arm-reset-button" id="arm-reset" type="button">机械臂复位</button>
+                  <p class="small muted">收拢状态启动后，首次按 data[1] 自动记录复位点；复位将结束连续采集。</p>
+                  <p class="small muted">
+                    首次按 data[1] 起臂；之后按 data[0] 开始、按 data[1] 回位保存，循环采集，无需再次使能。
+                  </p>
+                </form>
+              </section>
+              <div id="data-path-picker" class="path-picker" hidden role="dialog" aria-modal="true" aria-labelledby="path-picker-title">
+                <div class="path-picker-card">
+                  <div class="panel-heading"><h2 id="path-picker-title">选择数据文件夹</h2><button class="icon-button" id="close-path-picker" type="button" aria-label="关闭">×</button></div>
+                  <div class="path-picker-body">
+                    <p id="path-picker-current" class="path-hint"></p>
+                    <div id="path-picker-list" class="path-picker-list"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <section class="panel">
+              <div class="panel-heading"><h2>我的数据集</h2><span class="muted small">同一任务持续追加 episodes</span></div>
+              <div class="table-scroll"><table><thead><tr><th>数据集</th><th>已保存 Episodes</th><th>数据路径</th></tr></thead><tbody id="client-dataset-list"></tbody></table></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><h2>Episodes</h2><span id="client-episode-summary" class="muted small">每次保存的采集都会单独列出</span></div>
+              <div class="table-scroll"><table><thead><tr><th>Episode</th><th>任务 / 数采员</th><th>采集时间</th><th>状态</th><th>数据路径</th><th>操作</th></tr></thead><tbody id="client-episode-list"></tbody></table></div>
+            </section>
+            <details class="panel diagnostic">
+              <summary>机器人健康与适配器诊断</summary>
+              <pre id="health-detail"></pre>
+            </details>
+          </section>
+          <section id="client-inference-panel" hidden>
+            <section class="panel inference-vision">
+              <div class="panel-heading"><div class="inference-title"><h2>实时拼接视野</h2><span id="inf-camera-labels" class="small muted"></span></div><div class="inference-heading-actions"><span id="inf-camera-status" class="small muted" role="status">等待相机</span><button id="inf-preview-toggle" class="secondary" type="button">暂停预览</button></div></div>
+              <div class="inference-camera-strip" id="inf-cameras" aria-label="实时相机视野"></div>
+            </section>
+            <section id="inf-mode-panel" class="panel control-mode-panel">
+              <div><h2>运行模式</h2><p class="small muted">切换模式会先结束当前任务，再切换机械臂驱动。</p></div>
+              <div class="control-mode-actions"><span id="inf-mode-label" class="badge">正在读取控制模式</span><button class="secondary" id="inf-mode-switch" type="button">切换到推理模式</button></div>
+            </section>
+            <section class="panel inference-arm-panel" aria-label="机械臂控制">
+              <div><h2>机械臂控制</h2><p class="small muted">使能：启动与恢复设备，不抬臂。预备：进入推理准备位姿。复位：沿用采集控制器记录的合拢参考。</p></div>
+              <div class="inference-arm-buttons"><button class="secondary" id="inf-arm-enable" type="button" title="启动并恢复 CAN、相机和双臂控制器，不进入抬臂位姿">机械臂使能</button><button class="primary" id="inf-arm-prepare" type="button" disabled title="移动到推理准备位姿，完成后可开始推理">机械臂预备</button><button class="secondary" id="inf-arm-reset" type="button" disabled title="暂停推理并返回合拢位置">机械臂复位</button></div>
+            </section>
+            <section class="panel inference-settings" aria-labelledby="inf-settings-title">
+              <div class="inference-settings-heading">
+                <div class="inference-settings-title">
+                  <span class="inference-settings-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9m-4-16.5 8 4.5"/></svg></span>
+                  <div><h2 id="inf-settings-title">模型配置</h2><p>选择模型权重，描述本次执行任务</p></div>
+                </div>
+                <div class="inference-settings-connection"><span class="inference-provider-tag">Enactive</span><span id="inf-connection" class="badge">检查连接…</span></div>
+              </div>
+              <div class="inference-config-fields">
+                <div class="inference-config-field">
+                  <label for="inf-checkpoint">权重路径 <span class="required">*</span></label>
+                  <div class="inference-path-control">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3V7Z"/></svg>
+                    <input id="inf-checkpoint" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="4096" placeholder="输入模型权重目录" aria-describedby="inf-checkpoint-help inf-loaded-model" />
+                  </div>
+                  <div class="inference-loaded-model">
+                    <span class="inference-loaded-label"><span id="inf-model-indicator" class="inference-model-indicator" aria-hidden="true"></span>当前已加载</span>
+                    <code id="inf-loaded-model">正在读取模型信息…</code>
+                  </div>
+                  <p id="inf-checkpoint-help" class="inference-field-help">路径需与当前权重一致；更换模型请先在 Enactive 中加载。</p>
+                </div>
+                <div class="inference-config-field inference-prompt-field">
+                  <label for="inf-prompt">任务指令 <span class="inference-field-alias">Prompt</span> <span class="required">*</span></label>
+                  <textarea id="inf-prompt" rows="4" maxlength="4000" placeholder="描述希望机器人完成的任务，例如：Unscrew the screw." aria-describedby="inf-prompt-help inf-prompt-count"></textarea>
+                  <div class="inference-prompt-footer"><p id="inf-prompt-help" class="inference-field-help">模型将根据这条指令执行任务。</p><span id="inf-prompt-count">0 / 4000</span></div>
+                </div>
+              </div>
+              <div id="inf-config-feedback" class="inference-config-feedback">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-9h.01"/></svg>
+                <p id="inf-message" class="inference-message" role="status">正在读取推理服务状态。</p>
+              </div>
+            </section>
+            <div class="inference-action-grid">
+              <section class="panel inference-action-card"><div class="inference-card-top"><span class="inference-feature-index">01</span><span id="inf-policy-state" class="badge">待启动</span></div><h2>推理</h2><p class="small muted">使用当前权重与 prompt 执行模型推理。</p><button class="primary" id="inf-start" type="button">开始推理</button><button class="secondary" id="inf-pause" type="button" disabled>暂停推理</button></section>
+              <section class="panel inference-action-card"><div class="inference-card-top"><span class="inference-feature-index">02</span><span id="inf-stage-state" class="badge">未进入</span></div><h2>在线强化学习 <span class="muted">RLT</span></h2><p class="small muted">进入 Stage 2，为当前回合标记执行结果。</p><button class="primary" id="inf-stage2" type="button">进入 Stage 2</button><div class="inference-result-actions"><button class="danger" id="inf-failed" type="button" disabled>Failed</button><button class="secondary inference-success" id="inf-success" type="button" disabled>Success</button></div><p id="inf-feedback" class="small muted" aria-live="polite">尚未标记结果</p></section>
+              <section class="panel inference-action-card"><div class="inference-card-top"><span class="inference-feature-index">03</span><span id="inf-dagger-state" class="badge">未进入</span></div><h2>DAgger</h2><p class="small muted">策略偏离时接管，等待显示“人工纠偏中”后拖动执行臂，再保留纠偏并接回策略。</p><button class="primary" id="inf-dagger" type="button">进入 DAgger</button><div class="dagger-control-actions"><button class="primary" id="inf-dagger-takeover" type="button" disabled hidden>拖动接管</button><button class="primary" id="inf-dagger-resume" type="button" disabled hidden>保留并接回策略</button><button class="secondary" id="inf-dagger-save" type="button" disabled hidden>保留并暂停</button><button class="danger" id="inf-dagger-discard" type="button" disabled hidden>丢弃本段</button><button class="secondary" id="inf-dagger-finish" type="button" disabled hidden>结束采集</button></div><p id="inf-dagger-feedback" class="small muted" aria-live="polite">进入 DAgger 后可人工接管纠偏。</p><p id="inf-dagger-output" class="small muted dagger-output"></p></section>
+            </div>
+            <section class="panel dagger-episodes-panel" aria-labelledby="inf-episodes-title">
+              <div class="panel-heading"><div><h2 id="inf-episodes-title">DAgger Episodes</h2><p class="small muted dagger-episode-note">纠偏时逐帧保存，保留后立即自动上传；关闭页面也会继续。</p></div><span id="inf-episode-live" class="badge">正在读取</span></div>
+              <div class="dagger-episode-metrics" aria-live="polite"><div><span>纠偏 Episodes</span><strong id="inf-episode-total">0</strong></div><div><span>已保存</span><strong id="inf-episode-saved">0</strong></div><div><span>上传中 / 等待上传</span><strong id="inf-episode-pending">0</strong></div><div><span>已上传</span><strong id="inf-episode-uploaded">0</strong></div></div>
+              <div class="dagger-episode-toolbar"><div class="dagger-episode-filters" role="group" aria-label="筛选纠偏 Episodes"><button type="button" class="is-selected" data-dagger-filter="all" aria-pressed="true">全部</button><button type="button" data-dagger-filter="recording" aria-pressed="false">录制中</button><button type="button" data-dagger-filter="pending" aria-pressed="false">待上传</button><button type="button" data-dagger-filter="uploaded" aria-pressed="false">已上传</button></div><span id="inf-episode-summary" class="small muted">每段人工纠偏单独保存为一个 Episode</span></div>
+              <p id="inf-episode-error" class="dagger-episode-error small" role="status" hidden></p>
+              <div class="table-scroll"><table class="dagger-episode-table"><thead><tr><th>Episode / 任务</th><th>时长 / 帧数</th><th>本地保存</th><th>自动上传</th><th>数据位置</th><th>操作</th></tr></thead><tbody id="inf-episode-list"><tr><td colspan="6" class="empty">尚无纠偏记录。进入 DAgger 后点击“拖动接管”，新的 Episode 将实时出现在这里。</td></tr></tbody></table></div>
+            </section>
+            <section class="panel inference-joints">
+              <div class="panel-heading"><div class="inference-title"><h2>关节角度 · 实时曲线</h2><span class="small muted">全部关节 · 最近 60 秒</span></div><div class="inference-heading-actions"><span id="inf-joint-status" class="small muted" role="status">等待关节反馈</span><button id="inf-chart-clear" class="secondary" type="button">清空曲线</button></div></div>
+              <div id="inf-joint-groups" class="inference-joint-groups"></div>
+              <p class="inference-chart-note small muted">横轴：时间（秒） · 纵轴：角度（rad） · 暂无反馈时显示空值</p>
+            </section>
+          </section>
+            <div id="client-replay-panel" hidden>
+              <section class="panel robot-scope">
+                <div><span class="small muted">当前机器人</span><strong id="cr-robot">—</strong><p id="cr-provider" class="small muted"></p></div>
+                <div><span id="cr-connection" class="badge">等待连接</span><p class="small muted">使用本机保留的采集或轨迹文件，直接在当前机器人执行。</p></div>
+              </section>
+              <p id="cr-message" class="warning" role="status" hidden></p>
+              <p id="cr-simulation" class="warning" hidden>本地模拟模式：只验证数据适配和执行流程，不连接机器人。</p>
+              <div class="client-replay-grid">
+                <section class="panel">
+                  <div class="panel-heading"><h2>选择回放数据</h2><button id="cr-refresh" class="secondary" type="button">刷新</button></div>
+                  <div class="client-replay-body">
+                    <div class="client-replay-tabs"><button id="cr-source-captures" class="secondary active" type="button">平台采集</button><button id="cr-source-files" class="secondary" type="button">机器人本地文件</button></div>
+                    <div id="cr-capture-source">
+                      <label for="cr-dataset">数据集</label><select id="cr-dataset"><option value="">正在加载数据集…</option></select>
+                      <div id="cr-episodes" class="client-replay-files"></div>
+                    </div>
+                    <div id="cr-file-source" hidden>
+                      <label for="cr-root">机器人数据目录</label><select id="cr-root"></select>
+                      <div class="client-replay-breadcrumb"><button id="cr-up" class="secondary" type="button">上一级</button><span id="cr-directory" class="small muted">/</span></div>
+                      <div id="cr-files" class="client-replay-files"></div>
+                    </div>
+                  </div>
+                </section>
+                <section class="panel">
+                  <div class="panel-heading"><h2>回放控制</h2><span id="cr-state" class="badge">空闲</span></div>
+                  <div class="client-replay-body">
+                    <p id="cr-selected" class="client-replay-path">选择左侧 Episode</p>
+                    <p id="cr-details" class="small muted">正在读取当前机器人的回放能力。</p>
+                    <progress id="cr-progress" max="1" value="0"></progress><p id="cr-counter" class="small muted">0 / 0 帧</p>
+                    <div class="client-replay-actions"><button id="cr-start" class="primary" disabled type="button">开始回放</button><button id="cr-stop" class="secondary" disabled type="button">停止回放</button></div>
+                    <p id="cr-mode-note" class="small muted">由当前机器人的回放适配器执行。</p>
+                    <details><summary>执行日志</summary><pre id="cr-log" class="client-replay-log"></pre></details>
+                  </div>
+                </section>
+              </div>
+            </div>
+          <section id="server-view" hidden>
+            <div class="warning" id="demo-warning" hidden>
+              演示模式只验证上传与时间对齐。真实格式转换、Doctor 和 Visualizer 需部署真实工具环境。
+            </div>
+            <section class="panel robot-scope" data-server-overview aria-label="选择机器人类型">
+              <div>
+                <label for="server-robot-type">先选择机器人类型 <span class="required">*</span></label>
+                <select id="server-robot-type"><option value="">请选择机器人类型</option></select>
+              </div>
+              <p class="small muted" id="robot-scope-hint">选择后，再选择该类型下的数据集。原始数据、转换任务和预览结果会一起筛选。</p>
+            </section>
+            <div class="metrics" data-server-overview>
+              <div class="metric"><span>已接收采集</span><strong id="metric-uploads">0</strong><small>完整校验的原始文件</small></div>
+              <div class="metric"><span>转换任务</span><strong id="metric-jobs">0</strong><small>独立输出 · 可追溯处理</small></div>
+              <div class="metric"><span>可预览结果</span><strong id="metric-completed">0</strong><small>已完成转换的数据集</small></div>
+            </div>
+            <section class="panel" data-server-panel="uploads" hidden>
+              <div class="panel-heading"><h2>导入历史数据</h2><span class="step">IMPORT IN PLACE</span></div>
+              <form id="import-form" class="import-form">
+                <div class="conversion-grid">
+                  <div>
+                    <label for="import-path">Server 数据目录 <span class="required">*</span></label>
+                    <input id="import-path" required maxlength="4096" autocomplete="off" placeholder="/srv/bodypipeline-imports/your-dataset" />
+                    <p class="small muted">填写 Server 文件系统中的绝对路径。数据不会复制；原始采集和 LeRobot 数据集均原地登记。</p>
+                  </div>
+                  <div>
+                    <label for="import-robot-type">机器人类型覆盖（可选）</label>
+                    <input id="import-robot-type" list="import-robot-types" maxlength="64" autocomplete="off" placeholder="自动读取；缺失时再填写" />
+                    <datalist id="import-robot-types"></datalist>
+                    <p class="small muted">目录声明了机器人类型时以声明为准；显式填写且不一致会拒绝导入。</p>
+                  </div>
+                </div>
+                <div class="import-capabilities">
+                  <span><strong>原始采集</strong> manifest.json + data/episode0 → 批量转换</span>
+                  <span><strong>LeRobot</strong> meta/info.json (v2.1 / v3.0) → 预览 + Doctor</span>
+                </div>
+                <p id="import-roots" class="small muted">正在读取允许导入的目录…</p>
+                <div class="conversion-submit"><button id="import-submit" class="primary" type="submit" disabled>识别并导入</button><span class="small muted">导入操作只登记元数据，不移动、不改写原数据。</span></div>
+              </form>
+            </section>
+            <section class="panel" data-server-panel="uploads" hidden>
+              <div class="panel-heading"><h2>原始数据集</h2><span class="step">SOURCE DATA</span></div>
+              <div class="table-scroll"><table>
+                <thead><tr><th>数据集</th><th>来源</th><th>数据规模</th><th>已接收 episodes</th><th>操作</th></tr></thead>
+                <tbody id="upload-list"></tbody>
+              </table></div>
+            </section>
+            <div data-server-panel="convert">
+              <section class="panel">
+                <div class="panel-heading"><h2>创建数据转换任务</h2><span class="step">CONVERT TO LEROBOT</span></div>
+                <form id="conversion-form" class="conversion-form">
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="conversion-upload">选择原始数据集 <span class="required">*</span></label>
+                      <select id="conversion-upload" required disabled><option value="">请先选择机器人类型</option></select>
+                      <div id="conversion-source" class="source-summary small muted">选择数据集后，可批量转换其中已完整上传的 episodes。</div>
+                    </div>
+                    <div>
+                      <label for="conversion-format">目标数据格式 <span class="required">*</span></label>
+                      <select id="conversion-format" required></select>
+                      <p class="small muted">目标格式写入任务记录；同一原始采集可分别转换为不同版本。</p>
+                    </div>
+                  </div>
+                  <label for="conversion-instruction">训练 instruction <span class="required">*</span></label>
+                  <textarea id="conversion-instruction" required maxlength="2000" rows="3" placeholder="例如：Pick up the red block and place it in the tray."></textarea>
+                  <p class="small muted">所选 episodes 统一使用此 instruction；原始采集信息保留。修改 instruction 或追加采集后，可生成新的转换版本。</p>
+                  <div class="episode-picker" id="episode-picker" hidden>
+                    <div class="episode-toolbar"><label class="check-label"><input id="episode-all" type="checkbox" />全选已接收采集</label><span id="episode-selection-count" class="small muted"></span></div>
+                    <div class="table-scroll"><table><thead><tr><th>选择</th><th>采集 / 设备</th><th>数据规模</th><th>状态</th></tr></thead><tbody id="episode-list"></tbody></table></div>
+                  </div>
+                  <label class="check-label" for="conversion-doctor"><input id="conversion-doctor" type="checkbox" checked />转换后自动运行 LeRobot Doctor</label>
+                  <p class="small muted">自动质检仅生成质量报告，不改变转换结果。取消勾选时仅转换与结构验证，之后仍可直接预览或单独质检。</p>
+                  <div id="conversion-warning" class="warning" hidden></div>
+                  <div class="conversion-submit"><button id="conversion-submit" class="primary" type="submit" disabled>提交批量转换</button><span id="conversion-help" class="small muted">请选择数据集并填写 instruction。</span></div>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><h2>转换任务与进度</h2><span class="step">PROCESSING QUEUE</span></div>
+                <div class="table-scroll"><table>
+                  <thead><tr><th>任务 / 来源</th><th>目标格式</th><th>进度</th><th>状态</th><th>结果</th></tr></thead>
+                  <tbody id="job-list"></tbody>
+                </table></div>
+              </section>
+            </div>
+            <div data-server-panel="results" hidden>
+              <section class="panel">
+                <div class="panel-heading"><h2>转换结果</h2><span class="step">PREVIEW & QUALITY</span></div>
+                <p class="panel-note small muted">转换结果保存在 Server 的 work/&lt;job_id&gt;/dataset，所有完成转换的数据集都可直接预览，以每行显示的完整路径为准。</p>
+                <div class="table-scroll"><table>
+                  <thead><tr><th>数据集 / 任务</th><th>格式</th><th>状态</th><th>数据保存路径</th><th>操作</th></tr></thead>
+                  <tbody id="result-list"></tbody>
+                </table></div>
+              </section>
+              <section class="panel viewer-panel">
+                <div><h2>LeRobot Visualizer</h2><p class="muted small">只读预览 · Visualizer 常驻运行 · 可同时打开多个数据集</p></div>
+                <div id="viewer-status" aria-live="polite">未启动</div>
+              </section>
+            </div>
+            <section class="panel" id="job-detail-panel" hidden>
+              <div class="panel-heading"><h2 id="job-detail-title">任务详情</h2><button class="text-button" id="close-detail">关闭</button></div>
+              <div id="job-detail"></div>
+            </section>
+          </section>
+          <footer>
+            BodyPipeline
+            <span>原始数据 · 转换 · 质检 · 预览</span>
+          </footer>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

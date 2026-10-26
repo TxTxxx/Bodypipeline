@@ -1,0 +1,97 @@
+{
+  "bridge_url": "http://127.0.0.1:10867",
+  "capture": {
+    "auto_stop": true,
+    "continuous": true,
+    "data_root": "/mnt/data0/arx",
+    "hardware": {
+      "camera_serials": {
+        "camera_h": "REPLACE_HEAD_SERIAL",
+        "camera_l": "REPLACE_LEFT_SERIAL",
+        "camera_r": "REPLACE_RIGHT_SERIAL"
+      },
+      "project_root": "/opt/ROS2_AC-one_Play",
+      "robot_root": "/opt/ARX_X5",
+      "control_mode": "inference",
+      "controller_nodes": [
+        "arm_slave_l",
+        "arm_slave_r"
+      ],
+      "controller_profiles_path": "configs/arx-x5-control-profiles.json",
+      "resident_control": true
+    },
+    "raw_queue_bytes": 134217728,
+    "raw_ros_queue_depth": 128,
+    "recording_mode": "raw_first",
+    "repository": "/opt/ROS2_AC-one_Play",
+    "return_pose_min_frames": 100,
+    "return_pose_threshold": 0.1,
+    "stale_timeout": 2,
+    "start_timeout": 5,
+    "start_trigger": "arx_buttons",
+    "upload_ssh": {
+      "host": "upload.example.com",
+      "port": 60011,
+      "user": "collector",
+      "root": "/data/share/robotsdata/ARX_X5",
+      "identity_file": "/var/lib/bodypipeline/ssh/upload_ed25519",
+      "known_hosts_file": "/var/lib/bodypipeline/ssh/known_hosts",
+      "trash_identity_file": "/var/lib/bodypipeline/ssh/trash_ed25519",
+      "previous_roots": [
+        "/data/share/robotsdata/arx"
+      ]
+    },
+    "inference": {
+      "provider": "enactive",
+      "dashboard_url": "http://127.0.0.1:8080",
+      "policy_url": "http://127.0.0.1:9998",
+      "stage2_dashboard_url": "",
+      "dagger_dashboard_url": "http://127.0.0.1:8080",
+      "prepare_hardware": true,
+      "episode_provider": "enactive_arx_kinesthetic_v1"
+    },
+    "recording_enabled": true,
+    "switch_control_modes": true
+  },
+  "capture_backend": "arx_ros2",
+  "default_profile": "arx_x5",
+  "local_roots": {
+    "arx-data": "/mnt/data0/arx",
+    "robot-data": "/var/lib/bodypipeline/captures"
+  },
+  "min_free_bytes": 10737418240,
+  "mode": "ros2",
+  "profiles": {
+    "arx_x5": {
+      "label": "ARX 方舟 X5 双臂",
+      "profile_path": "configs/arx-x5-workbench.json",
+      "provider": "arx",
+      "raw_formats": [
+        "arx_direct_teaching_hdf5_v1"
+      ]
+    }
+  },
+  "project_id": "teleop",
+  "replay": {
+    "alignment_duration": 5,
+    "backend": "capture_bridge",
+    "bridge_url": "http://127.0.0.1:10867",
+    "command_topics": [
+      "/bodypipeline/replay/left/joint_control",
+      "/bodypipeline/replay/right/joint_control"
+    ],
+    "controller_nodes": [
+      "arm_master_l",
+      "arm_master_r"
+    ],
+    "enabled": false,
+    "hardware_profile": "/opt/arx-data-studio/runtime/robot-profile.json",
+    "provider": "arx_tool",
+    "python": "/opt/bodypipeline-ros/bin/python",
+    "speed": 1,
+    "tool_root": "/opt/arx-data-studio"
+  },
+  "robot_id": "arx-x5-001",
+  "root": "/var/lib/bodypipeline/arx-client",
+  "server_url": "http://127.0.0.1:8181"
+}

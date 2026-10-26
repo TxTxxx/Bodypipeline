@@ -1,0 +1,80 @@
+{
+  "id": "arx_x5_direct_teaching_v1",
+  "version": 1,
+  "robot_type": "arx_x5",
+  "control_mode": "teleoperation",
+  "semantics_approved": false,
+  "clock_verified": false,
+  "joint_names": [
+    "left_joint_1",
+    "left_joint_2",
+    "left_joint_3",
+    "left_joint_4",
+    "left_joint_5",
+    "left_joint_6",
+    "left_gripper",
+    "right_joint_1",
+    "right_joint_2",
+    "right_joint_3",
+    "right_joint_4",
+    "right_joint_5",
+    "right_joint_6",
+    "right_gripper"
+  ],
+  "joint_units": [
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad",
+    "rad"
+  ],
+  "output_fps": 30,
+  "minimum_frames": 30,
+  "max_frame_skew_ms": 20,
+  "max_sensor_skew_ms": 20,
+  "cameras": [
+    {
+      "id": "head",
+      "label": "头部相机",
+      "topic": "/camera/camera_h/color/image_raw/compressed"
+    },
+    {
+      "id": "left_wrist",
+      "label": "左腕相机",
+      "topic": "/camera/camera_l/color/image_raw/compressed"
+    },
+    {
+      "id": "right_wrist",
+      "label": "右腕相机",
+      "topic": "/camera/camera_r/color/image_raw/compressed"
+    }
+  ],
+  "arm_topics": {
+    "left": "/arm_master_l_status",
+    "right": "/arm_master_r_status"
+  },
+  "joy_topic": "/arx_joy",
+  "action_semantics": {
+    "representation": "measured_joint_position_as_demonstration_target",
+    "source": "Same-frame copy of measured qpos, matching ROS2_AC-one_Play/act/collect.py:145-147; no independent command or future-target inference",
+    "order": [
+      "left J1..J6, gripper",
+      "right J1..J6, gripper"
+    ]
+  },
+  "clock_policy": {
+    "recording": "monotonic host time when the complete observation snapshot is read",
+    "source": "ROS message header.stamp seconds for each camera and arm; no synthetic timestamps",
+    "alignment": "bounded nearest complete snapshot on monotonic time, with independent cross-sensor header-skew check",
+    "verification": "Hardware clock domain and real acquisition cadence remain to be verified"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "agilex_aloha_teleop_v1",
+  "version": 1,
+  "control_mode": "teleoperation",
+  "robot_type": "agilex_aloha",
+  "semantics_approved": false,
+  "joint_names": null,
+  "joint_units": null,
+  "clock_verified": false,
+  "output_fps": 30,
+  "max_camera_skew_ms": 20,
+  "max_action_age_ms": 50,
+  "minimum_frames": 30,
+  "cameras": [
+    {
+      "id": "left",
+      "label": "左侧相机",
+      "topic": "/camera_l/color/image_raw"
+    },
+    {
+      "id": "front",
+      "label": "前方相机",
+      "topic": "/camera_f/color/image_raw"
+    },
+    {
+      "id": "right",
+      "label": "右侧相机",
+      "topic": "/camera_r/color/image_raw"
+    }
+  ],
+  "state_streams": ["puppetLeft", "puppetRight"],
+  "action_streams": ["masterLeft", "masterRight"],
+  "joint_topics": [
+    "/master/joint_left",
+    "/master/joint_right",
+    "/puppet/joint_left",
+    "/puppet/joint_right"
+  ],
+  "pose_topics": ["/puppet/end_pose_left", "/puppet/end_pose_right"],
+  "service": "/data_tools_dataCapture/capture_service",
+  "status_topic": "/data_tools_dataCapture/status",
+  "crop_time_seconds": 0,
+  "notes": "阈值为草案。真实数据发布前必须核实单位、动作语义、时钟并审批；不自动放行。",
+  "state_limits": null,
+  "action_limits": null
+}

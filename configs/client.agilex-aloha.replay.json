@@ -1,0 +1,20 @@
+{
+  "mode": "ros2",
+  "root": "/var/lib/bodypipeline/client",
+  "local_roots": {
+    "robot-data": "/var/lib/bodypipeline/captures"
+  },
+  "server_url": "http://127.0.0.1:8081",
+  "bridge_url": "http://127.0.0.1:8090",
+  "profile_path": "configs/agilex-aloha-v2.json",
+  "min_free_bytes": 10737418240,
+  "replay": {
+    "enabled": true,
+    "provider": "agilex_tool",
+    "trajectory_source": "state",
+    "launcher": "/home/agilex/Data_Conversion_app/scripts/run_data_tool.sh",
+    "roots": {
+      "aloha-episodes": "/home/agilex/data_episode"
+    }
+  }
+}
