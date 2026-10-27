@@ -44,6 +44,10 @@ Apex 适配器仅访问 loopback HTTP 的 `status/projects/start/stop` 录制接
 不会封存或上传。每次开始下一段手柄采集前，需要在前端重新准备一个 DRAFT，避免在未知
 数据集或旧任务上静默追加数据。
 
+Preview 默认在 Apex 录制期间停止 H.264 解码，空档期最多以 2 FPS 生成预览，并将单路
+画面缩到 640 px。录制期间网页预览会暂停，但相机原始录制不受影响。可使用
+`--no-pause-during-recording` 和 `--max-preview-fps` 调整这一取舍。
+
 ## 两端配置
 
 | 用途 | 文件 | 契约 |
