@@ -618,7 +618,12 @@ function renderClientCaptures() {
     active ||
     armed ||
     rows.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id));
-  $("start-button").disabled = !!active || !!armed || busy;
+  $("start-button").disabled =
+    !!active || !!armed || busy || clientHealth?.ready !== true;
+  $("start-button").title =
+    clientHealth?.ready === true
+      ? ""
+      : (clientHealth?.reasons || []).join("; ") || "采集适配器尚未就绪";
   $("start-button").textContent = controllerTriggerEnabled()
     ? "● 准备手柄采集"
     : "● 采集下一个 episode";
