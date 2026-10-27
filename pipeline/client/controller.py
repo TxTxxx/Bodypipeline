@@ -178,17 +178,21 @@ class ControllerCaptureCoordinator:
                         error=f"手柄录制已结束，但导入 Client 失败：{exc}",
                     )
                 self.service.save(active)
+                if active["state"] == "REVIEW":
+                    self.service.request_keep(active["id"])
                 return True
             if phase in {"cancelled", "error", "failed"}:
                 active.update(
-                    state="REVIEW",
-                    capture_failed=True,
                     stopped_at=status.get("ended_at") or now(),
-                    error=(
-                        status.get("error_message")
-                        or "手柄取消了本次录制，不能保留或上传"
-                    ),
+                    controller_cancelled=phase == "cancelled",
+                    error=None
+                    if phase == "cancelled"
+                    else status.get("error_message") or "手柄录制失败",
                 )
-                self.service.save(active)
+                if phase == "cancelled":
+                    self.service._discard(active)
+                else:
+                    active.update(state="RECOVERY_REQUIRED", capture_failed=True)
+                    self.service.save(active)
                 return True
             return False

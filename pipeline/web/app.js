@@ -453,7 +453,7 @@ $("capture-form").onsubmit = (e) => {
     if (!controller && c.state !== "RECORDING")
       throw Error(c.error || "启动未确认，请查看会话状态，勿重复启动");
     notice(controller
-      ? "会话已准备。按右手柄 B 开始，再按一次结束；上传仍需在页面确认。"
+      ? "会话已准备。按右手柄 B 开始，再按一次结束并自动上传；右摇杆按下直接丢弃。"
       : "采集已开始。保留后作为一个 episode 加入当前数据集并上传。");
   });
 };

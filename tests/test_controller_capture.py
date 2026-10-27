@@ -82,7 +82,7 @@ def recording_status(**changes):
     }
 
 
-def test_arm_adopt_stop_and_leave_review_without_upload(settings_factory):
+def test_arm_adopt_stop_and_auto_upload(settings_factory):
     service, adapter, bridge = controller(settings_factory)
     armed = bridge.arm(body())
     assert armed["state"] == "DRAFT"
@@ -117,9 +117,10 @@ def test_arm_adopt_stop_and_leave_review_without_upload(settings_factory):
     )
     assert bridge.tick() is True
     reviewed = service.store.get("capture", armed["id"])
-    assert reviewed["state"] == "REVIEW"
+    assert reviewed["state"] == "SEALING"
     assert reviewed["upload_state"] == "NONE"
     assert reviewed["stopped_at"] == 110.0
+    assert reviewed["seal_requested_at"] > 0
     assert len(adapter.imports) == 1
     assert (adapter.starts, adapter.stops) == (0, 0)
 
@@ -132,7 +133,7 @@ def test_non_controller_session_is_not_adopted(settings_factory):
     assert service.store.get("capture", armed["id"])["state"] == "DRAFT"
 
 
-def test_controller_cancel_is_review_failure_and_cannot_upload(settings_factory):
+def test_controller_cancel_discards_without_upload(settings_factory):
     service, adapter, bridge = controller(settings_factory)
     armed = bridge.arm(body())
     adapter.current = recording_status()
@@ -146,10 +147,11 @@ def test_controller_cancel_is_review_failure_and_cannot_upload(settings_factory)
     )
     assert bridge.tick() is True
     row = service.store.get("capture", armed["id"])
-    assert row["state"] == "REVIEW"
-    assert row["capture_failed"] is True
+    assert row["state"] == "DISCARDED"
+    assert row["controller_cancelled"] is True
+    assert row.get("capture_failed") is not True
     assert row["upload_state"] == "NONE"
-    with pytest.raises(DomainError, match="采集报告故障"):
+    with pytest.raises(DomainError):
         service.request_keep(row["id"])
 
 
