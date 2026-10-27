@@ -79,6 +79,9 @@ def source_path(settings) -> Path:
 
 MAX_BASE_URL = 2048
 MAX_API_KEY = 4096
+# Argus can also read its upstream key variables directly.  They survive
+# tool_environment() because it only filters PIPELINE_* names.
+NATIVE_KEY_ENVS = ("OPENROUTER_API_KEYS", "OPENAI_API_KEY")
 
 
 def normalize_base_url(value) -> str:
@@ -120,13 +123,19 @@ def normalize_api_key(value) -> str:
     return text
 
 
-def resolve_credentials(
-    settings, base_url=None, api_key=None
-) -> dict:
+def server_key_configured(settings) -> bool:
+    if os.environ.get(settings.argus_api_key_env, "").strip():
+        return True
+    return any(os.environ.get(name, "").strip() for name in NATIVE_KEY_ENVS)
+
+
+def resolve_credentials(settings, base_url=None, api_key=None) -> dict:
     """Credentials for one task: the page input wins over server defaults.
 
     The key is returned to the caller only.  It must never be copied into the
-    annotation record, the work context, a log or an export.
+    annotation record, the work context, a log or an export.  When Argus reads
+    its own upstream key variables, ``api_key`` stays empty and those variables
+    are left untouched in the subprocess environment.
     """
 
     task_base_url = normalize_base_url(base_url)
@@ -134,7 +143,7 @@ def resolve_credentials(
     key = normalize_api_key(api_key) or normalize_api_key(
         os.environ.get(settings.argus_api_key_env, "")
     )
-    if not key:
+    if not key and not server_key_configured(settings):
         raise DomainError(
             "未提供模型 API Key，且服务器未配置默认密钥；请在页面填写本次任务的 API Key",
             400,

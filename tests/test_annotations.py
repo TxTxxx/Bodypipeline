@@ -161,6 +161,8 @@ def test_enqueue_requires_credentials_and_keeps_the_key_off_the_record(
 ):
     runner, _store, _src, _data = service
     monkeypatch.delenv("PIPELINE_ARGUS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEYS", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(DomainError, match="API Key"):
         runner.enqueue("job-1")
 
@@ -228,6 +230,8 @@ def test_resume_asks_for_the_key_again_after_memory_is_cleared(service, monkeypa
     store.put("annotation", row["id"], dict(row, state="FAILED", error="boom"))
     runner.credentials.pop(row["id"], None)
     monkeypatch.delenv("PIPELINE_ARGUS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEYS", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(DomainError, match="API Key"):
         runner.resume(row["id"])
 
@@ -256,6 +260,20 @@ def test_recover_marks_queued_interrupted(service):
     recovered = store.get("annotation", "q1")
     assert recovered["state"] == "INTERRUPTED"
     assert "续跑" in recovered["error"]
+
+
+def test_native_argus_keys_still_work_without_a_task_key(service, monkeypatch):
+    runner, _store, _src, _data = service
+    monkeypatch.delenv("PIPELINE_ARGUS_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "sk-or-native")
+    row = runner.enqueue("job-1")
+    assert runner.credentials[row["id"]]["api_key"] == ""
+    env = argus_annotation.environment(
+        runner.settings, row, {}, runner.credentials[row["id"]]
+    )
+    assert env["OPENROUTER_API_KEYS"] == "sk-or-native"
+    assert "PIPELINE_ARGUS_API_KEY" not in env
+    assert runner.options()["api_key_configured"] is True
 
 
 def test_budget_is_shared_with_analyses(service):

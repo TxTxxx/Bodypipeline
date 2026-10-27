@@ -119,8 +119,8 @@ class AnnotationRunner:
             "models": models,
             "default_model": default_model,
             "rigs": list(ANNOTATION_RIGS),
-            "api_key_configured": bool(
-                os.environ.get(self.settings.argus_api_key_env, "")
+            "api_key_configured": argus_annotation.server_key_configured(
+                self.settings
             ),
             "gateway_configured": bool(self.settings.argus_base_url),
             "defaults": {
