@@ -666,6 +666,14 @@ def test_api_accepts_task_credentials_without_persisting_them(service):
         assert resumed.json()["state"] == "QUEUED"
         assert "resume-secret" not in resumed.text
         assert runner.credentials[aid]["api_key"] == "resume-secret"
+        assert http.post(f"/api/annotations/{aid}/cancel", headers=headers).json()[
+            "state"
+        ] == "CANCELLED"
+
+        # Older callers post no body; server defaults still have to work.
+        legacy = http.post(f"/api/annotations/{aid}/resume", headers=headers)
+        assert legacy.status_code == 200, legacy.text
+        assert legacy.json()["state"] == "QUEUED"
 
 
 def test_unavailable_toolchain_disables_enqueue(settings_factory, tmp_path):
