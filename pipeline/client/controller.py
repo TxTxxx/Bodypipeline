@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pipeline.shared.core import DomainError, now
+from pipeline.shared.collections import dataset_name
+from pipeline.shared.core import DomainError, digest, now, safe_relative
 
 from .service import BUSY, CaptureService
 
@@ -12,9 +13,9 @@ from .service import BUSY, CaptureService
 class ControllerCaptureCoordinator:
     """Bridge a controller-owned recorder session into the generic Client flow.
 
-    The teleoperation controller starts and stops Apex directly. This class only
-    arms one explicit Client draft and adopts the matching recorder session. It
-    never calls start/stop on Apex and never requests upload.
+    The adapter observes externally started recordings. A selected dataset stays
+    available across sessions; each new recording gets its own Client capture.
+    Completed recordings use the normal seal/upload queue.
     """
 
     def __init__(self, service: CaptureService):
@@ -23,6 +24,63 @@ class ControllerCaptureCoordinator:
     @property
     def enabled(self) -> bool:
         return self.service.settings.controller_trigger.get("enabled") is True
+
+    def selection(self) -> dict | None:
+        try:
+            return self.service.store.get("controller", "selection")
+        except DomainError as exc:
+            if exc.code != 404:
+                raise
+            return None
+
+    def select(self, data: dict) -> dict:
+        if not self.enabled:
+            raise DomainError("当前部署未启用遥操作手柄采集", 409)
+        status_fn = getattr(self.service.adapter, "controller_status", None)
+        if not callable(status_fn):
+            raise DomainError("当前采集适配器不支持手柄会话", 409)
+        if data["local_root"] not in self.service.roots:
+            raise DomainError("未知本地存储根", 400)
+        data = {
+            **data,
+            "dataset_name": dataset_name(
+                data.get("dataset_name") or data["instruction"]
+            ),
+            "local_prefix": safe_relative(data.get("local_prefix", ""), True),
+            "remote_prefix": safe_relative(data.get("remote_prefix", ""), True),
+        }
+        with self.service.lock:
+            selected = self.selection()
+            if selected and selected.get("data") == data:
+                return selected
+            if any(row["state"] in BUSY for row in self.service.store.all("capture")):
+                raise DomainError("请先结束或恢复当前采集，再切换手柄数据集", 409)
+            health = self.service.adapter.health()
+            if not health.get("ready"):
+                raise DomainError(f"采集前检查失败：{health}")
+            status = status_fn()
+            row = {
+                "id": "selection",
+                "data": data,
+                "selected_at": now(),
+                "excluded_session_id": status.get("session_id"),
+            }
+            self.service.store.put("controller", "selection", row)
+            self._disarm_drafts()
+            return row
+
+    def clear_selection(self) -> dict:
+        with self.service.lock:
+            row = {"id": "selection", "data": None, "selected_at": now()}
+            self.service.store.put("controller", "selection", row)
+            self._disarm_drafts()
+            return row
+
+    def _disarm_drafts(self):
+        for row in self.service.store.all("capture"):
+            if row["state"] == "DRAFT" and row.get("controller_armed"):
+                row["controller_armed"] = False
+                self.service.save(row)
 
     def _active(self) -> dict | None:
         return next(
@@ -86,6 +144,7 @@ class ControllerCaptureCoordinator:
             return False
 
         with self.service.lock:
+            rows = self.service.store.all("capture")
             active = self._active()
             if active is None:
                 armed = next(
@@ -101,7 +160,7 @@ class ControllerCaptureCoordinator:
                     None,
                 )
                 if (
-                    armed is None
+                    not status.get("session_id")
                     or not status.get("controller_owned")
                     or status.get("phase") != "recording"
                     or status.get("data_state") != "recording"
@@ -109,10 +168,38 @@ class ControllerCaptureCoordinator:
                 ):
                     return False
                 if any(
-                    row["id"] != armed["id"] and row["state"] in BUSY
-                    for row in self.service.store.all("capture")
+                    row["state"] in BUSY
+                    or row.get("controller_session_id") == status["session_id"]
+                    for row in rows
                 ):
                     return False
+                replay = getattr(self.service, "replay", None)
+                if replay and replay.row["state"] in {
+                    "PREPARING",
+                    "RUNNING",
+                    "STOPPING",
+                    "RECOVERY_REQUIRED",
+                }:
+                    return False
+                if armed is None:
+                    selected = self.selection()
+                    if (
+                        not selected
+                        or not selected.get("data")
+                        or status["session_id"] == selected.get("excluded_session_id")
+                    ):
+                        return False
+                    armed = self.service.create(
+                        {
+                            **selected["data"],
+                            "idempotency_key": "controller-"
+                            + digest(status["session_id"]),
+                        }
+                    )
+                    armed.update(
+                        capture_trigger="controller",
+                        controller_selected_at=selected["selected_at"],
+                    )
                 raw = Path(armed["raw_root"])
                 if raw.resolve() != raw or (raw / "episode0").exists():
                     armed.update(

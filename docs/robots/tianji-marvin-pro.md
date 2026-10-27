@@ -33,16 +33,19 @@ Apex 适配器仅访问 loopback HTTP 的 `status/projects/start/stop` 录制接
 ## 遥操作手柄触发
 
 右手柄 B 当前由 Tianji 遥操作节点直接切换 Apex recorder 的开始与保存。BodyPipeline
-启用 `controller_trigger` 后，前端“准备手柄采集”只创建一个显式 DRAFT；Client 后台
-监视由该链路启动的 Apex 会话，并把它绑定到该 DRAFT。新版 controller 会携带
+启用 `controller_trigger` 后，在前端选定数据集和存储位置即保存持续使用的采集配置，
+无需逐次点击“准备手柄采集”。Client 后台监视由该链路启动的 Apex 会话，每次检测到
+新的录制都自动创建独立的 Client 会话；选择数据集本身不会创建 DRAFT。新版 controller 会携带
 `controller-` request id；当前现场手柄链路不传 request id，因此部署配置显式启用
 `accept_missing_request_id`。第二次按 B 后，Client 等待 data/video writer 都关闭，
 将录制复制到受管目录，然后自动封存并上传到 H800；Server 不可达时保留本地文件并进入
 上传重试队列。
 
 右摇杆按下继续使用原手柄取消语义，并由 Client 将对应会话直接标记为 `DISCARDED`，
-不会封存或上传。每次开始下一段手柄采集前，需要在前端重新准备一个 DRAFT，避免在未知
-数据集或旧任务上静默追加数据。
+不会封存或上传。保存、上传或丢弃后，所选数据集保持不变，下一次按 B 即录制下一段。
+数据集选择持久化在 Client，刷新页面或重启 Client 后可恢复；录制时不可切换数据集。
+“暂停手柄接管”只取消下一次会话的接管，当前会话仍按原流程处理。
+尚未选择数据集、选择前已存在的 recorder 会话或已接管过的会话不会自动创建新会话。
 
 Preview 默认在 Apex 录制期间停止 H.264 解码，空档期最多以 2 FPS 生成预览，并将单路
 画面缩到 640 px。录制期间网页预览会暂停，但相机原始录制不受影响。可使用

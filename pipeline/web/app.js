@@ -9,6 +9,12 @@ const esc = (v) =>
       ],
   );
 const sessionCaptures = new Set();
+let controllerSelection = null,
+  controllerSelectionPending = false,
+  controllerSelectionError = "",
+  controllerSelectionTimer = null,
+  controllerSelectionRevision = 0,
+  controllerSelectionWrites = Promise.resolve();
 let config = null,
   captures = [],
   timer = null,
@@ -136,6 +142,10 @@ async function api(path, method = "GET", body) {  const controller = new AbortCo
   } finally { clearTimeout(timeout); }
 }
 function showLogin() {
+  clearTimeout(controllerSelectionTimer);
+  controllerSelectionRevision++;
+  controllerSelection = null;
+  controllerSelectionPending = false;
   window.ClientReplay.deactivate();
   clearTimeout(timer);
   clearTimeout(frameTimer);
@@ -233,9 +243,18 @@ async function boot() {
       .join("");
     updateLocalPath();
     $("remote-target").innerHTML = '<option value="default">default（远端待连接）</option>';
-    void loadTargets().catch(() => {
+    await loadTargets().catch(() => {
       $("target-note").textContent = "远端目标暂未更新，请检查连接后刷新页面。";
     });
+    if (controllerTriggerEnabled()) {
+      controllerSelection = await api("/api/controller/selection");
+      if (controllerSelection?.data) {
+        const data = controllerSelection.data;
+        for (const [id, key] of [["dataset-name", "dataset_name"], ["local-root", "local_root"], ["local-prefix", "local_prefix"], ["remote-target", "remote_target"], ["remote-prefix", "remote_prefix"]])
+          $(id).value = data[key] || "";
+        updateLocalPath();
+      }
+    }
     $("camera-count").textContent = config.profile.cameras.length;
     $("camera-grid").innerHTML = config.profile.cameras
       .map(
@@ -378,14 +397,62 @@ function updateClientDatasetSummary() {
     ? `当前数据集：${name}。保留的每次采集作为一个 episode 加入，instruction 在 Server 转换时填写。`
     : "选择已有数据集或输入新名称；同名任务持续追加 episodes。";
 }
+function controllerSelectionData() {
+  return {
+    dataset_name: normalizedName($("dataset-name").value),
+    local_root: $("local-root").value,
+    local_prefix: $("local-prefix").value.trim(),
+    remote_target: $("remote-target").value,
+    remote_prefix: $("remote-prefix").value.trim(),
+  };
+}
+async function saveControllerSelection(revision = ++controllerSelectionRevision) {
+  clearTimeout(controllerSelectionTimer);
+  const data = controllerSelectionData();
+  const valid = $("capture-form").checkValidity();
+  controllerSelectionPending = true;
+  controllerSelectionError = "";
+  renderClientCaptures();
+  // Serialize writes so a slower response cannot restore an earlier dataset.
+  const write = controllerSelectionWrites.catch(() => {}).then(async () => {
+    if (revision !== controllerSelectionRevision || !controllerTriggerEnabled()) return;
+    const selected = await api("/api/controller/selection", valid ? "PUT" : "DELETE", valid ? data : undefined);
+    if (revision === controllerSelectionRevision) controllerSelection = selected;
+  });
+  controllerSelectionWrites = write;
+  try {
+    await write;
+  } catch (error) {
+    if (revision === controllerSelectionRevision) {
+      controllerSelectionError = error.message;
+      notice("手柄数据集设置未保存：" + error.message, true);
+    }
+    throw error;
+  } finally {
+    if (revision === controllerSelectionRevision) {
+      controllerSelectionPending = false;
+      if (config?.role === "client") renderClientCaptures();
+    }
+  }
+}
+function scheduleControllerSelection(delay = 400) {
+  if (!controllerTriggerEnabled()) return;
+  clearTimeout(controllerSelectionTimer);
+  const revision = ++controllerSelectionRevision;
+  controllerSelectionPending = true;
+  renderClientCaptures();
+  controllerSelectionTimer = setTimeout(() => { void saveControllerSelection(revision).catch(() => {}); }, delay);
+}
 $("dataset-name").oninput = updateClientDatasetSummary;
+$("capture-form").addEventListener("input", () => scheduleControllerSelection());
+$("capture-form").addEventListener("change", () => scheduleControllerSelection(0));
 function renderClientDatasets() {
   const names = [...new Set(captures.map((c) => c.dataset_name || c.instruction))];
   const options = names.map((name) => `<option value="${esc(name)}"></option>`).join("");
   if ($("dataset-names").innerHTML !== options) $("dataset-names").innerHTML = options;
   if (!$("dataset-name").dataset.initialized) {
     $("dataset-name").dataset.initialized = "true";
-    if (!$("dataset-name").value && names.length) $("dataset-name").value = names[0];
+    if (!controllerTriggerEnabled() && !$("dataset-name").value && names.length) $("dataset-name").value = names[0];
   }
   const groups = new Map();
   for (const row of captures) {
@@ -429,6 +496,10 @@ function controls(c) {
 $("capture-form").onsubmit = (e) => {
   e.preventDefault();
   action(async () => {
+    if (controllerTriggerEnabled()) {
+      await saveControllerSelection();
+      return;
+    }
     if (!requestKey)
       requestKey = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
         b.toString(16).padStart(2, "0"),
@@ -442,19 +513,14 @@ $("capture-form").onsubmit = (e) => {
       remote_prefix: $("remote-prefix").value.trim(),
     };
     $("start-button").disabled = true;
-    const controller = controllerTriggerEnabled();
-    notice(controller ? "正在准备手柄采集会话…" : "正在请求开始采集，等待机器人确认…");
-    const c = await api(controller ? "/api/controller/arm" : "/api/captures/start", "POST", data);
+    notice("正在请求开始采集，等待机器人确认…");
+    const c = await api("/api/captures/start", "POST", data);
     acceptCaptures([c]);
     sessionCaptures.add(c.id);
     requestKey = null;
-    if (controller && (c.state !== "DRAFT" || !c.controller_armed))
-      throw Error(c.error || "手柄采集准备未确认");
-    if (!controller && c.state !== "RECORDING")
+    if (c.state !== "RECORDING")
       throw Error(c.error || "启动未确认，请查看会话状态，勿重复启动");
-    notice(controller
-      ? "会话已准备。按右手柄 B 开始，再按一次结束并自动上传；右摇杆按下直接丢弃。"
-      : "采集已开始。保留后作为一个 episode 加入当前数据集并上传。");
+    notice("采集已开始。保留后作为一个 episode 加入当前数据集并上传。");
   });
 };
 document.addEventListener("click", (e) => {
@@ -475,9 +541,20 @@ document.addEventListener("click", (e) => {
       $("remote-target").value = row.remote_target;
       $("remote-prefix").value = row.remote_prefix || "";
       updateLocalPath(); updateClientDatasetSummary();
+      scheduleControllerSelection(0);
       $("capture-form").scrollIntoView({behavior: "smooth", block: "center"});
     }
   }
+  if (e.target.closest("[data-controller-clear]"))
+    action(async () => {
+      clearTimeout(controllerSelectionTimer);
+      ++controllerSelectionRevision;
+      await controllerSelectionWrites.catch(() => {});
+      controllerSelection = await api("/api/controller/selection", "DELETE");
+      controllerSelectionPending = false;
+      controllerSelectionError = "";
+      notice("已暂停手柄接管。重新选择数据集后恢复。");
+    });
   const disarm = e.target.closest("[data-controller-disarm]");
   if (disarm)
     action(async () => {
@@ -625,16 +702,26 @@ function renderClientCaptures() {
       ? ""
       : (clientHealth?.reasons || []).join("; ") || "采集适配器尚未就绪";
   $("start-button").textContent = controllerTriggerEnabled()
-    ? "● 准备手柄采集"
+    ? "重试保存数据集"
     : "● 采集下一个 episode";
+  $("start-button").hidden = controllerTriggerEnabled() && !controllerSelectionError;
+  for (const id of ["dataset-name", "local-root", "local-prefix", "remote-target", "remote-prefix"])
+    $(id).disabled = controllerTriggerEnabled() && !!active;
   $("controller-capture-hint").hidden = !controllerTriggerEnabled();
+  $("controller-capture-hint").textContent = controllerSelectionPending
+    ? "正在保存数据集选择，请等待确认后按手柄开始。"
+    : controllerSelectionError
+      ? `设置未保存：${controllerSelectionError}。当前手柄数据集：${controllerSelection?.data?.dataset_name || "未选择"}。`
+      : controllerSelection?.data
+        ? `手柄数据集：${controllerSelection.data.dataset_name}。每次按开始自动创建新会话，结束后自动上传，丢弃则不上传；无需重复准备。`
+        : "选定数据集后自动等待手柄开始，无需逐次准备会话。";
   $("health-label").textContent = active
     ? "● " + (names[active.state] || active.state)
     : clientHealth?.ready
       ? "● 采集适配器就绪"
       : clientHealth ? "○ 适配器尚未就绪" : "○ 健康检查待更新";
   $("capture-state").textContent = !current
-    ? "就绪"
+    ? controllerTriggerEnabled() && controllerSelection?.data ? "等待手柄开始" : "就绪"
     : armed
       ? "等待手柄开始"
     : current.capture_failed
@@ -644,6 +731,8 @@ function renderClientCaptures() {
   $("session-actions").innerHTML = current
     ? `<span class="small muted">当前会话 ${esc(current.id.slice(0, 8))}</span>${armed ? `<button class="secondary" data-controller-disarm="${esc(armed.id)}" type="button"${busy ? " disabled" : ""}>取消准备</button>` : controls(current)}`
     : "";
+  if (controllerTriggerEnabled() && controllerSelection?.data)
+    $("session-actions").innerHTML += `<button class="secondary" data-controller-clear type="button"${busy || controllerSelectionPending ? " disabled" : ""}>暂停手柄接管</button>`;
   $("capture-list").innerHTML = rows.length
     ? rows
         .map((c) => {
@@ -666,7 +755,13 @@ async function refresh() {
   polling = true;
   try {
     if (config.role === "client") {
-      const rows = await api("/api/capture-status");
+      const revision = controllerSelectionRevision, saving = controllerSelectionPending;
+      const [rows, selected] = await Promise.all([
+        api("/api/capture-status"),
+        controllerTriggerEnabled() ? api("/api/controller/selection") : Promise.resolve(null),
+      ]);
+      if (!saving && !controllerSelectionPending && revision === controllerSelectionRevision)
+        controllerSelection = selected;
       if (config?.role === "client") acceptCaptures(rows);
     } else {
       const [uploads, jobs, v, mergeCandidates, versionConversionCandidates] = await Promise.all([

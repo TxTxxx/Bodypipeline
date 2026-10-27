@@ -22,15 +22,18 @@ from .service import CaptureService
 from .upload import UploadAgent
 
 
-class CaptureRequest(BaseModel):
+class CaptureSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset_name: str | None = Field(default=None, min_length=1, max_length=2000)
     instruction: str = Field(default="", max_length=2000)
-    idempotency_key: str = Field(min_length=8, max_length=128)
     local_root: str = "default"
     local_prefix: str = ""
     remote_target: str = "default"
     remote_prefix: str = ""
+
+
+class CaptureRequest(CaptureSelectionRequest):
+    idempotency_key: str = Field(min_length=8, max_length=128)
 
 
 class ReplayRequest(BaseModel):
@@ -223,7 +226,7 @@ def create_app(settings, background=True):
         row = create(body)
         return service.start(row["id"])
 
-    def capture_data(body: CaptureRequest):
+    def capture_data(body: CaptureSelectionRequest):
         data = body.model_dump(exclude_none=True)
         data["instruction"] = data["instruction"].strip()
         if not (data.get("dataset_name") or data["instruction"]):
@@ -241,6 +244,18 @@ def create_app(settings, background=True):
     @app.post("/api/controller/disarm/{cid}")
     def controller_disarm(cid: str):
         return controller.disarm(cid)
+
+    @app.get("/api/controller/selection")
+    def controller_selection():
+        return controller.selection()
+
+    @app.put("/api/controller/selection")
+    def controller_select(body: CaptureSelectionRequest):
+        return controller.select(capture_data(body))
+
+    @app.delete("/api/controller/selection")
+    def controller_clear():
+        return controller.clear_selection()
 
     @app.get("/api/captures/{cid}")
     def get(cid: str):

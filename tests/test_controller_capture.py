@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -48,6 +49,9 @@ class FakeControllerAdapter:
     def controller_status(self):
         return dict(self.current)
 
+    def close(self):
+        pass
+
     def import_controller_recording(self, status, raw_root, session_id):
         self.imports.append((status, raw_root, session_id))
         (raw_root / "episode0").mkdir(parents=True)
@@ -80,6 +84,151 @@ def recording_status(**changes):
         "controller_owned": True,
         **changes,
     }
+
+
+def selection_body(**changes):
+    data = body()
+    data.pop("idempotency_key")
+    return {**data, **changes}
+
+
+def test_selected_dataset_creates_new_sessions_after_save_and_discard(settings_factory):
+    service, adapter, bridge = controller(settings_factory)
+    selected = bridge.select(selection_body())
+    assert selected["data"]["dataset_name"] == "controller dataset"
+    assert service.store.all("capture") == []
+
+    for index, phase in enumerate(["saved", "cancelled", "saved"]):
+        adapter.current = recording_status(session_id=f"controller-session-{index}")
+        assert bridge.tick() is True
+        rows = service.store.all("capture")
+        assert len(rows) == index + 1
+        current = next(r for r in rows if r["state"] == "RECORDING")
+        assert current["dataset_name"] == "controller dataset"
+        assert bridge.tick() is False
+        assert len(service.store.all("capture")) == index + 1
+        adapter.current.update(
+            phase=phase,
+            data_state="closed",
+            video_state="closed",
+            path=str(Path(current["raw_root"]).parent / "source"),
+        )
+        assert bridge.tick() is True
+        finished = service.store.get("capture", current["id"])
+        assert finished["state"] == ("SEALING" if phase == "saved" else "DISCARDED")
+        assert bridge.selection() == selected
+        assert bridge.tick() is False
+    assert len(adapter.imports) == 2
+    assert (adapter.starts, adapter.stops) == (0, 0)
+
+
+def test_selection_survives_restart_and_does_not_readopt_a_known_session(
+    settings_factory,
+):
+    service, adapter, bridge = controller(settings_factory)
+    adapter.current = recording_status(phase="saved", session_id="previous-recording")
+    bridge.select(selection_body())
+    service = CaptureService(service.settings, adapter=adapter)
+    bridge = ControllerCaptureCoordinator(service)
+    adapter.current.update(phase="recording")
+    assert bridge.tick() is False
+    adapter.current = recording_status(session_id="new-recording")
+    assert bridge.tick() is True
+    row = service.store.all("capture")[0]
+    adapter.current.update(phase="cancelled")
+    assert bridge.tick() is True
+    # Even if the adapter repeats a stale recording status, never recreate it.
+    adapter.current.update(phase="recording")
+    assert bridge.tick() is False
+    assert len(service.store.all("capture")) == 1
+    assert service.store.get("capture", row["id"])["state"] == "DISCARDED"
+
+
+def test_switch_and_clear_selection(settings_factory):
+    service, adapter, bridge = controller(settings_factory)
+    legacy = bridge.arm(body())
+    bridge.select(selection_body(dataset_name="second dataset"))
+    assert service.store.get("capture", legacy["id"])["controller_armed"] is False
+    adapter.current = recording_status()
+    assert bridge.tick() is True
+    current = next(r for r in service.store.all("capture") if r["state"] == "RECORDING")
+    assert current["dataset_name"] == "second dataset"
+    with pytest.raises(DomainError, match="切换"):
+        bridge.select(selection_body(dataset_name="third dataset"))
+    # Clearing affects the next start; the current session still gets finalized.
+    bridge.clear_selection()
+    adapter.current.update(phase="cancelled")
+    assert bridge.tick() is True
+    adapter.current = recording_status(session_id="next-session")
+    assert bridge.tick() is False
+
+
+def test_selection_respects_manual_capture_replay_and_session_ownership(
+    settings_factory,
+):
+    service, adapter, bridge = controller(settings_factory)
+    bridge.select(selection_body())
+    adapter.current = recording_status(controller_owned=False)
+    assert bridge.tick() is False
+    adapter.current["controller_owned"] = True
+    service.replay = SimpleNamespace(row={"state": "RUNNING"})
+    assert bridge.tick() is False
+    service.replay.row["state"] = "STOPPED"
+    manual = service.create(body())
+    manual["state"] = "RECOVERY_REQUIRED"
+    service.save(manual)
+    assert bridge.tick() is False
+    assert len(service.store.all("capture")) == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"local_root": "unknown"},
+        {"local_prefix": "../escape"},
+        {"remote_prefix": "../escape"},
+    ],
+)
+def test_invalid_selection_does_not_create_or_replace_context(
+    settings_factory, changes
+):
+    service, _, bridge = controller(settings_factory)
+    with pytest.raises(DomainError):
+        bridge.select(selection_body(**changes))
+    assert bridge.selection() is None
+    assert service.store.all("capture") == []
+
+
+def test_selection_api_persists_without_creating_a_draft(settings_factory):
+    settings = settings_factory(controller_trigger={"enabled": True})
+    app = create_app(settings, background=False)
+    app.state.service.adapter = FakeControllerAdapter()
+    with TestClient(app) as http:
+        headers = {"Authorization": "Bearer " + settings.token}
+        assert (
+            http.put("/api/controller/selection", json=selection_body()).status_code
+            == 401
+        )
+        response = http.put(
+            "/api/controller/selection", json=selection_body(), headers=headers
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["dataset_name"] == "controller dataset"
+        assert http.get("/api/captures", headers=headers).json() == []
+        assert (
+            http.get("/api/controller/selection", headers=headers).json()
+            == response.json()
+        )
+        assert (
+            http.put(
+                "/api/controller/selection", json=selection_body(), headers=headers
+            ).json()
+            == response.json()
+        )
+        assert (
+            http.delete("/api/controller/selection", headers=headers).json()["data"]
+            is None
+        )
 
 
 def test_arm_adopt_stop_and_auto_upload(settings_factory):
