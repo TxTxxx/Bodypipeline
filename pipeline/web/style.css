@@ -275,3 +275,23 @@ footer { display: flex; justify-content: space-between; gap: 16px; color: #9aa2a
 .client-replay-log { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; margin-top: 12px; }
 #client-replay-panel summary { color: var(--muted); cursor: pointer; }
 @media (max-width: 1100px) { .client-replay-grid { grid-template-columns: 1fr; } }
+
+/* Automatic annotation (Argus review) */
+.annotation-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 4px 0 14px; }
+.annotation-summary > div { min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #8197b50d; overflow-wrap: anywhere; }
+.annotation-summary .progress { min-width: 0; }
+.annotation-meta { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.annotation-note { margin: 0 0 12px; line-height: 1.75; }
+.annotation-error { white-space: pre-wrap; }
+.annotation-actions { margin: 0 0 8px; }
+.annotation-episodes, .annotation-log { margin-top: 20px; }
+.annotation-episodes .episode-toolbar { padding-left: 0; padding-right: 0; }
+.annotation-log pre { max-height: 320px; }
+.annotation-log select { max-width: 260px; }
+.annotation-episode-detail { margin-top: 16px; }
+.annotation-episode-detail summary { cursor: pointer; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.annotation-episode-detail pre { max-height: 520px; }
+a.secondary { display: inline-flex; align-items: center; text-decoration: none; }
+a.secondary:hover:not(:disabled) { text-decoration: none; }
+.action-row a { padding: 6px 9px; font-size: 11px; }
+.annotation-log-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }

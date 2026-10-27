@@ -26,6 +26,7 @@ from pipeline.shared.core import DomainError, atomic_json, executable_path
 from ..conversion_options import normalize_options
 from ..episode_validation import EpisodeValidationError
 from ..quality import robot_profile_blockers, validate_robot_policy
+from .base import annotation_rig
 
 TIANJI_RAW_FORMAT = "tianji_mcap_v1"
 TIANJI_RAW_FORMAT_ALIASES = (TIANJI_RAW_FORMAT, "tianji_ros2_mcap_v1")
@@ -414,6 +415,9 @@ class TianjiProvider:
             "output_fps": profile.get("output_fps"),
             "control_mode": profile.get("control_mode"),
         }
+
+    def annotation_context(self, profile: dict) -> dict:
+        return {"rig": annotation_rig(profile), **self.analysis_context(profile)}
 
 
 __all__ = [

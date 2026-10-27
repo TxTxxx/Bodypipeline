@@ -26,6 +26,7 @@ BodyPipeline 在机器人端提供 Web 数采工作台，在服务器端统一�
 | 已有数据集版本转换 | 从已转换、已导入或已合并的数据集中选择来源，使用 LeTools 在 v2.1 与 v3.0 之间双向转换并生成独立结果 |
 | 时间对齐 | 固定输出帧率、有界相机最近帧、因果关节保持和逐 episode 诊断 |
 | 质量检查 | 转换结构检查、LeRobot deep validate、11 项 LeRobot Doctor 检查 |
+| 自动标注 | 用固定版本 Argus `review` 为已登记数据集生成逐 Episode 任务描述、事件与完成情况；独立队列、费用上限、取消与续跑 |
 | 数据预览 | Server 页面直接启动无鉴权只读 Visualizer，支持多相机视频 Range |
 | 历史数据导入 | 原地登记旧原始采集或已有 LeRobot 数据集，不复制、不移动、不改写 |
 | 文件持久化 | 业务状态保存为 JSON，原始数据、对齐结果、转换结果和报告按目录组织 |
@@ -82,7 +83,7 @@ flowchart LR
 | --- | --- |
 | Client | 采集会话状态机、预览、HDF5 封存、上传队列、失败恢复 |
 | Adapter / Bridge | 把统一采集接口映射到机器人 ROS2 service、topic 和消息 |
-| Server | 设备鉴权、上传接收、Runtime/Provider 路由、数据集分组、转换任务、Doctor 与预览调度 |
+| Server | 设备鉴权、上传接收、Runtime/Provider 路由、数据集分组、转换任务、Doctor、自动标注与预览调度 |
 | letools | 原始输入读取、LeRobot 转换、deep validate、Doctor 和 Visualizer |
 | 内容分析（Argus） | 独立工具链：确定性检查（跨模态、画面质量、传感器）与可选的语义标注 |
 | Viewer 网关 | 代理 Visualizer UI、数据桥与视频流；页面入口不要求登录 |
@@ -235,12 +236,16 @@ Server 当前白名单示例：
 <data_root>/<robot_type>/
 ├── incoming/                       # 上传暂存
 ├── raw/<target>/<prefix>/collections/<collection_id>/episodes/<upload_id>/data/episode.hdf5
-└── work/<job_id>/
-    ├── aligned/episodeN.hdf5       # 对齐后的 Letools 输入，不解包目录
-    ├── letools-hdf5-preset.json    # 本任务生成、可审计的字段映射
-    ├── dataset/                    # LeRobot v2.1 / v3.0 结果
-    ├── checks/<check_id>/          # 独立质检日志与报告
-    └── *.json / *.log              # lineage、对齐、Doctor 与运行日志
+├── work/<job_id>/
+│   ├── aligned/episodeN.hdf5       # 对齐后的 Letools 输入，不解包目录
+│   ├── letools-hdf5-preset.json    # 本任务生成、可审计的字段映射
+│   ├── dataset/                    # LeRobot v2.1 / v3.0 结果
+│   ├── checks/<check_id>/          # 独立质检日志与报告
+│   └── *.json / *.log              # lineage、对齐、Doctor 与运行日志
+└── annotations/<annotation_id>/
+    ├── argus/                      # Argus review 原始输出与 qa
+    ├── context.json                # 来源、模型、预算与 Provider 上下文
+    └── logs/run.log                # 执行日志
 ```
 
 服务状态独立保存在 `root/state/`，采用临时文件、`fsync` 和原子替换。每个服务的数据根只允许一个写进程，不支持多个 Uvicorn worker 或 NFS 多写者并发操作。imported LeRobot 数据继续保留在源目录，Server 只保存引用。

@@ -266,7 +266,7 @@ class JobRunner:
         job.update(**updates, updated_at=now())
         self.store.put("job", job["id"], job)
 
-    def command(self, args, work, name, allocation=None):
+    def command(self, args, work, name, allocation=None, *, timeout=None, cancel_event=None):
         stdout, stderr = work / f"{name}.json", work / f"{name}.stderr.log"
         # An allocation reused across one job's steps avoids paying the Slurm
         # queue latency three times for convert / validate / doctor.
@@ -279,8 +279,12 @@ class JobRunner:
                 argv, stdout=out, stderr=err, start_new_session=True, cwd=work, env=env
             )
             try:
-                deadline = time.monotonic() + self.settings.command_timeout
+                deadline = time.monotonic() + (
+                    self.settings.command_timeout if timeout is None else timeout
+                )
                 while process.poll() is None:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError("命令已取消")
                     if self.shutdown_requested.wait(0.25):
                         raise InterruptedError("Worker 收到停止请求")
                     if time.monotonic() >= deadline:

@@ -12,6 +12,7 @@ from pipeline.shared.core import DomainError, atomic_json, digest
 from ..conversion_options import normalize_options
 from ..episode_validation import EpisodeValidationError
 from ..quality import robot_profile_blockers, validate_robot_policy
+from .base import annotation_rig
 from .g1_sonic_raw import (
     ACTION_NAMES,
     ACTION_PADDING,
@@ -330,3 +331,6 @@ class G1SONICProvider:
             "output_fps": profile["output_fps"],
             "control_mode": profile.get("control_mode"),
         }
+
+    def annotation_context(self, profile: dict) -> dict:
+        return {"rig": annotation_rig(profile), **self.analysis_context(profile)}

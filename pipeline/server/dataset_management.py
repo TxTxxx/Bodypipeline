@@ -50,7 +50,7 @@ class DatasetManager:
     def _safety_context(self):
         roots = [root.resolve() for root in _dataset_roots(self.settings)]
         protected = [*roots, self.store.path.resolve()]
-        for area in ("raw", "work", "incoming", "analyses", "reports"):
+        for area in ("raw", "work", "incoming", "analyses", "annotations", "reports"):
             protected.append(self.settings.root.resolve() / area)
         if self.settings.data_root is not None:
             if not self.settings.data_root.is_dir():
@@ -62,7 +62,13 @@ class DatasetManager:
                         child,
                         *(
                             child / area
-                            for area in ("raw", "work", "incoming", "analyses")
+                            for area in (
+                                "raw",
+                                "work",
+                                "incoming",
+                                "analyses",
+                                "annotations",
+                            )
                         ),
                     ]
                 )
@@ -165,6 +171,7 @@ class DatasetManager:
                 "job",
                 "check",
                 "analysis",
+                "annotation",
                 "dataset_deletion",
                 "recycle",
             )
@@ -232,14 +239,14 @@ class DatasetManager:
                 raise DomainError(
                     "删除范围与另一个已登记数据集重叠，请先核对重复登记", 409
                 )
-        for kind in ("check", "analysis"):
+        for kind in ("check", "analysis", "annotation"):
             for row in snapshot[kind]:
                 ref = row.get("dataset_path")
                 if row["state"] in ACTIVE and (
                     row.get("job_id") in job_ids
                     or (ref and any(overlaps(p, Path(ref).resolve()) for p in paths))
                 ):
-                    raise DomainError("数据集正在质检或分析，请等待任务完成", 409)
+                    raise DomainError("数据集正在质检、分析或自动标注，请等待任务完成", 409)
         for deletion in snapshot["dataset_deletion"]:
             if deletion["state"] == "COMPLETED":
                 continue

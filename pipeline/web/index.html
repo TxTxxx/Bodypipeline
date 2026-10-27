@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/assets/theme.css" />
     <script src="/assets/client-replay.js" defer></script>
     <script src="/assets/app.js" defer></script>
+    <script src="/assets/annotations.js" defer></script>
   </head>
   <body>
     <div id="login-view" class="login-shell">
@@ -60,6 +61,7 @@
           <button class="nav-item" type="button" data-server-tab="convert" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>数据转换</span><span class="nav-count" id="nav-job-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="results" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg><span>预览与质检</span><span class="nav-count" id="nav-result-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="merge" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h8M8 16h5"/></svg><span>数据集管理</span><span class="nav-count" id="nav-merge-count">0</span></button>
+          <button class="nav-item" type="button" data-server-tab="annotations" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h7"/><path d="m15 16 2 2 4-4"/></svg><span>自动标注</span><span class="nav-count" id="nav-annotation-count">0</span></button>
         </nav>
         <div class="sidebar-bottom"><strong><span class="dot"></span> 文件目录存储</strong><p>原始数据保留<br />转换与质检记录可追溯</p><span class="version">BodyPipeline / 0.1</span></div>
       </aside>
@@ -379,6 +381,98 @@
               <section class="panel">
                 <div class="panel-heading"><h2>合并任务与结果</h2><span class="step">MERGE QUEUE</span></div>
                 <div class="table-scroll"><table><thead><tr><th>新数据集 / 任务</th><th>来源 / 数据规模</th><th>进度</th><th>状态</th><th>操作</th></tr></thead><tbody id="merge-job-list"></tbody></table></div>
+              </section>
+            </div>
+            <div data-server-panel="annotations" hidden>
+              <section class="panel">
+                <div class="panel-heading"><h2>创建自动标注任务</h2><span class="step">ARGUS REVIEW</span></div>
+                <p class="panel-note small muted">调用 Argus review 对已登记的可读 LeRobot 数据集逐 Episode 生成任务描述、事件时间线、关键动作、状态变化与完成情况。数据集只读，标注结果保存在独立的 annotations 目录，不修改 Doctor 质检结果。</p>
+                <div id="annotation-unavailable" class="warning" hidden></div>
+                <form id="annotation-form" class="conversion-form">
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="annotation-dataset">数据集 <span class="required">*</span></label>
+                      <select id="annotation-dataset" required disabled><option value="">正在读取可用数据集…</option></select>
+                      <div id="annotation-dataset-summary" class="source-summary small muted">请选择机器人类型和已登记的数据集。</div>
+                    </div>
+                    <div>
+                      <label for="annotation-model">标注模型 <span class="required">*</span></label>
+                      <select id="annotation-model" required disabled></select>
+                      <p class="small muted">模型选择由服务器允许列表约束；实际费用以 Argus 结算为准。</p>
+                    </div>
+                  </div>
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="annotation-cap">本次费用上限（USD）</label>
+                      <input id="annotation-cap" type="number" min="0.01" step="0.01" required disabled />
+                      <p class="small muted" id="annotation-budget" aria-live="polite">正在读取预算…</p>
+                    </div>
+                    <div>
+                      <label for="annotation-concurrency">并发 Episode 数</label>
+                      <input id="annotation-concurrency" type="number" min="1" max="64" step="1" required disabled />
+                      <p class="small muted">并发越高，模型网关负载和峰值费用越高。</p>
+                    </div>
+                  </div>
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="annotation-reasoning">推理强度</label>
+                      <select id="annotation-reasoning" disabled>
+                        <option value="">使用模型默认</option>
+                        <option value="none">none</option>
+                        <option value="minimal">minimal</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="xhigh">xhigh</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label for="annotation-inspection">证据检查</label>
+                      <select id="annotation-inspection" disabled>
+                        <option value="auto">auto · 按数据自动选择</option>
+                        <option value="all">all · 使用全部记录字段</option>
+                        <option value="off">off · 仅使用相机</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="annotation-sample-fps">采样帧率（留空使用 Argus 默认）</label>
+                      <input id="annotation-sample-fps" type="number" min="0.1" max="10" step="0.1" disabled />
+                    </div>
+                    <div>
+                      <label for="annotation-max-tokens">单 Episode 输出 token 上限</label>
+                      <input id="annotation-max-tokens" type="number" min="256" max="200000" step="1" required disabled />
+                    </div>
+                  </div>
+                  <label class="check-label" for="annotation-field-dictionary"><input id="annotation-field-dictionary" type="checkbox" disabled />允许模型解释来源字段的含义</label>
+                  <label for="annotation-note">任务说明（可选）</label>
+                  <textarea id="annotation-note" maxlength="4000" rows="3" disabled placeholder="例如：这是双臂衣物折叠示教，关注抓取、对折和放置阶段。"></textarea>
+                  <div class="conversion-submit"><button id="annotation-submit" class="primary" type="submit" disabled>提交自动标注</button><span id="annotation-help" class="small muted">正在读取 Argus 配置…</span></div>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><h2>标注任务</h2><span class="step">ANNOTATION QUEUE</span></div>
+                <div class="table-scroll"><table>
+                  <thead><tr><th>数据集 / 任务</th><th>模型</th><th>进度</th><th>费用</th><th>状态</th><th>操作</th></tr></thead>
+                  <tbody id="annotation-list"></tbody>
+                </table></div>
+              </section>
+              <section class="panel" id="annotation-detail-panel" hidden>
+                <div class="panel-heading"><h2 id="annotation-detail-title">标注详情</h2><button type="button" class="text-button" id="annotation-detail-close">关闭</button></div>
+                <div id="annotation-detail"></div>
+                <div class="annotation-episodes">
+                  <div class="episode-toolbar"><strong>逐 Episode 结果</strong><span id="annotation-episode-count" class="small muted"></span></div>
+                  <div class="table-scroll"><table>
+                    <thead><tr><th>Episode</th><th>任务描述</th><th>完成情况</th><th>事件 / 关键动作</th><th>模型</th><th>结果</th></tr></thead>
+                    <tbody id="annotation-episode-list"></tbody>
+                  </table></div>
+                </div>
+                <div class="annotation-log">
+                  <div class="episode-toolbar"><strong>执行日志</strong><span class="annotation-log-tools"><select id="annotation-log-select"></select><button class="text-button" type="button" data-annotation-log-refresh>刷新日志</button></span></div>
+                  <pre id="annotation-log-output">选择日志查看 Argus 执行过程。</pre>
+                </div>
+                <details id="annotation-episode-detail" class="annotation-episode-detail" hidden><summary>Episode 原始结果</summary><pre id="annotation-episode-json"></pre></details>
               </section>
             </div>
             <section class="panel" id="job-detail-panel" hidden>

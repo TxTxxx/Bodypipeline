@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import Body, FastAPI, Request
+from fastapi import Body, FastAPI, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from pipeline.shared.collections import collection_metadata, group_uploads
@@ -15,6 +15,7 @@ from pipeline.shared.security import install_security
 from pipeline.shared.web import mount_ui
 
 from .analyses import AnalysisRunner
+from .annotations import AnnotationRunner
 from .checks import QualityRunner
 from .conversion_options import ConversionOptions
 from .dataset_management import DELETION_STATES, DatasetManager
@@ -56,6 +57,22 @@ class AnalysisRequest(BaseModel):
     episodes: list[int] | None = Field(default=None, max_length=1000)
 
 
+class AnnotationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=4000)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    cap_usd: float | None = Field(default=None, gt=0, le=1_000_000)
+    concurrency: int | None = Field(default=None, ge=1, le=64)
+    reasoning: (
+        Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None
+    ) = None
+    sample_fps: float | None = Field(default=None, gt=0, le=10)
+    inspection: Literal["auto", "all", "off"] | None = None
+    field_dictionary: StrictBool | None = None
+    max_tokens: int | None = Field(default=None, ge=256, le=200000)
+
+
 class MergeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_job_ids: list[str] = Field(min_length=2, max_length=100)
@@ -93,10 +110,11 @@ def create_app(settings, background=True):
         close_allocation=runner._close_allocation,
     )
     analyses = AnalysisRunner(settings, ingest.store, runner.command)
+    annotations = AnnotationRunner(settings, ingest.store, runtimes)
     viewer = ViewerManager(settings, ingest.store)
     datasets = DatasetManager(settings, runner, viewer)
     # Enqueueing consumers and marking deletions share one admission lock.
-    checks.lock = analyses.lock = runner.lock
+    checks.lock = analyses.lock = annotations.lock = runner.lock
     lock = ProcessLock(settings.root / "server.lock")
     stopping = asyncio.Event()
 
@@ -129,6 +147,19 @@ def create_app(settings, background=True):
             except asyncio.TimeoutError:
                 pass
 
+    async def annotation_loop():
+        # Automatic annotation is a long model-driven run. It gets its own
+        # queue so a slow review never delays conversions, checks or analyses.
+        while not stopping.is_set():
+            try:
+                await asyncio.to_thread(annotations.tick)
+            except Exception:
+                log.exception("annotation worker tick failed")
+            try:
+                await asyncio.wait_for(stopping.wait(), settings.poll_seconds)
+            except asyncio.TimeoutError:
+                pass
+
     @asynccontextmanager
     async def lifespan(app):
         lock.acquire()
@@ -136,10 +167,15 @@ def create_app(settings, background=True):
         runner.recover()
         checks.recover()
         analyses.recover()
+        annotations.recover()
         viewer.recover()
         datasets.recover()
         tasks = (
-            [asyncio.create_task(loop()), asyncio.create_task(viewer_loop())]
+            [
+                asyncio.create_task(loop()),
+                asyncio.create_task(annotation_loop()),
+                asyncio.create_task(viewer_loop()),
+            ]
             if background
             else []
         )
@@ -148,6 +184,7 @@ def create_app(settings, background=True):
         finally:
             stopping.set()
             runner.shutdown_requested.set()
+            annotations.shutdown_requested.set()
             if tasks:
                 await asyncio.gather(*tasks)
             viewer.stop()
@@ -158,6 +195,7 @@ def create_app(settings, background=True):
     app.state.imports = imports
     app.state.checks = checks
     app.state.analyses = analyses
+    app.state.annotations = annotations
     app.state.runtimes = runtimes
     app.state.datasets = datasets
     install_security(app, settings, device_prefix="/device/")
@@ -461,6 +499,88 @@ def create_app(settings, background=True):
     def analysis_budget(aid: str):
         row = ingest.store.get("analysis", aid)
         return analyses.budget(row["job_id"], row["episode_count"], "full")
+
+    @app.get("/api/annotations/options")
+    def annotation_options():
+        return annotations.options()
+
+    @app.get("/api/annotations/candidates")
+    def annotation_candidates():
+        return {"datasets": annotations.candidates()}
+
+    @app.get("/api/annotations")
+    def annotation_list():
+        rows = sorted(
+            ingest.store.all("annotation"),
+            key=lambda row: float(row.get("created_at") or 0),
+            reverse=True,
+        )
+        return rows
+
+    @app.post("/api/annotations", status_code=202)
+    def annotation_start(body: AnnotationRequest):
+        return annotations.enqueue(
+            body.job_id,
+            note=body.note,
+            model=body.model,
+            cap_usd=body.cap_usd,
+            concurrency=body.concurrency,
+            reasoning=body.reasoning,
+            sample_fps=body.sample_fps,
+            inspection=body.inspection,
+            field_dictionary=body.field_dictionary,
+            max_tokens=body.max_tokens,
+        )
+
+    @app.get("/api/annotations/{aid}")
+    def annotation(aid: str):
+        return ingest.store.get("annotation", aid)
+
+    @app.get("/api/annotations/{aid}/budget")
+    def annotation_budget(aid: str):
+        row = ingest.store.get("annotation", aid)
+        return annotations.budget(
+            row["job_id"], int(row.get("input_episode_count") or 1)
+        )
+
+    @app.post("/api/annotations/{aid}/cancel")
+    def annotation_cancel(aid: str):
+        return annotations.cancel(aid)
+
+    @app.post("/api/annotations/{aid}/resume")
+    def annotation_resume(aid: str):
+        return annotations.resume(aid)
+
+    @app.get("/api/annotations/{aid}/episodes")
+    def annotation_episodes(aid: str):
+        ingest.store.get("annotation", aid)
+        return {"episodes": annotations.episodes(aid)}
+
+    @app.get("/api/annotations/{aid}/episodes/{episode_id}")
+    def annotation_episode(aid: str, episode_id: str):
+        return annotations.episode(aid, episode_id)
+
+    @app.get("/api/annotations/{aid}/logs")
+    def annotation_log_list(aid: str):
+        ingest.store.get("annotation", aid)
+        return {"logs": annotations.log_names(aid)}
+
+    @app.get("/api/annotations/{aid}/logs/{name}")
+    def annotation_logs(aid: str, name: str):
+        return {"text": annotations.log(aid, name)}
+
+    @app.get("/api/annotations/{aid}/export")
+    def annotation_export(aid: str):
+        payload = annotations.export(aid)
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="annotation-{aid[:12]}.json"'
+                )
+            },
+        )
 
     @app.get("/api/checks/{cid}/logs/{name}")
     def check_logs(cid: str, name: str):

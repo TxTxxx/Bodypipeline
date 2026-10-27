@@ -57,6 +57,16 @@ class Settings:
     argus_daily_budget_usd: float = 100.0
     argus_per_episode_budget_usd: float = 1.0
     argus_max_tokens: int = 12000
+    argus_models: list[str] = field(
+        default_factory=lambda: ["openai/gpt-6-astra", "openai/gpt-6.1-sol"]
+    )
+    argus_annotation_timeout: int = 24 * 3600
+    argus_annotation_concurrency: int = 8
+    argus_annotation_reasoning: str = ""
+    argus_annotation_sample_fps: float = 0.0
+    argus_annotation_inspection: str = "auto"
+    argus_annotation_field_dictionary: bool = False
+    argus_annotation_note: str = ""
     slurm: dict = field(default_factory=dict)
     devices: list[dict] = field(default_factory=list)
     accepted_capture_profile_hashes: list[str] = field(default_factory=list)
@@ -108,6 +118,35 @@ class Settings:
             raise ValueError("Bridge 密钥必须与用户及设备密钥不同")
         if not 65536 <= settings.chunk_bytes <= 16 * 1024**2:
             raise ValueError("chunk_bytes 应在 64 KiB 到 16 MiB 之间")
+        if not isinstance(settings.argus_models, list) or not all(
+            isinstance(value, str) and value.strip()
+            for value in settings.argus_models
+        ):
+            raise ValueError("argus_models 必须是模型标识符列表")
+        if settings.argus_annotation_timeout < 60:
+            raise ValueError("argus_annotation_timeout 不能小于 60 秒")
+        if not 1 <= settings.argus_annotation_concurrency <= 64:
+            raise ValueError("argus_annotation_concurrency 应在 1 到 64 之间")
+        if settings.argus_annotation_inspection not in {"auto", "all", "off"}:
+            raise ValueError("argus_annotation_inspection 必须为 auto、all 或 off")
+        if not 0 <= settings.argus_annotation_sample_fps <= 10:
+            raise ValueError("argus_annotation_sample_fps 应在 0 到 10 之间")
+        if not isinstance(settings.argus_annotation_field_dictionary, bool):
+            raise ValueError("argus_annotation_field_dictionary 必须为布尔值")
+        if not isinstance(settings.argus_annotation_note, str):
+            raise ValueError("argus_annotation_note 必须为字符串")
+        if len(settings.argus_annotation_note) > 4000:
+            raise ValueError("argus_annotation_note 不能超过 4000 个字符")
+        if settings.argus_annotation_reasoning not in {
+            "",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        }:
+            raise ValueError("argus_annotation_reasoning 无效")
         if role == "server" and settings.devices:
             identities, credentials = set(), set()
             for device in settings.devices:

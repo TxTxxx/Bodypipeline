@@ -409,7 +409,56 @@ bash scripts/install_argus.sh
 {"id": "left", "topic": "...", "mounting": "wrist_left"}
 ```
 
-未声明时该检查为"未评估"，不会被当作通过。
+未声明时该检查为"未评估"，不会被当作通过。安装补丁会把声明按 Argus 的视角槽位
+（`left` / `right` / `exo` / `extraN`）或录制相机名匹配，匹配时会去掉
+`observation.images.` 前缀并按 `_` 分段，因此 Profile 的相机 id
+（如 `left_wrist`、`head_left`、`egocentric`）也能对应到实际视频流。
+
+### 6.4.1 自动标注任务
+
+侧栏“自动标注”直接用同一个 Argus 环境调用官方 `review` 流程，由 Server
+子进程执行，不需要在浏览器配置模型密钥。安装脚本会在安装结束时执行
+`python -m review --help`，确认 `--rig`、`--inspection` 等开关存在；若检出目录
+中的集成补丁版本过旧，脚本会重置到固定提交并重新应用，不会叠加补丁。
+
+```json
+{
+  "argus_model": "openai/gpt-6-astra",
+  "argus_models": ["openai/gpt-6-astra", "openai/gpt-6.1-sol"],
+  "argus_task_budget_usd": 20.0,
+  "argus_daily_budget_usd": 100.0,
+  "argus_per_episode_budget_usd": 1.0,
+  "argus_annotation_concurrency": 8,
+  "argus_annotation_timeout": 86400,
+  "argus_annotation_reasoning": "",
+  "argus_annotation_sample_fps": 0,
+  "argus_annotation_inspection": "auto",
+  "argus_annotation_field_dictionary": false,
+  "argus_annotation_note": ""
+}
+```
+
+- 提交单位是整个已登记数据集；候选只包含可读取的 LeRobot v2.1 / v3.0
+  结果，包括转换、导入、合并和版本转换产物。
+- `argus_models` 是页面可选模型的允许列表；`argus_model` 不在其中时，页面默认
+  选中列表第一项，提交时再次校验。`argus_annotation_sample_fps` 取 0–10，0 表示
+  使用 Argus 默认采样。
+- 标注使用独立后台队列，不占用转换、Doctor 或内容分析的队列。任务产物写入
+  `annotations/<annotation_id>/`，Argus 原始输出保留在其中的 `argus*` 子目录；
+  数据集本身只读。
+- 取消会终止整个 Argus 进程组。Server 重启时运行中的任务标记为中断，排队任务
+  保留；失败、中断、取消和部分完成均可续跑，已完成的 Episode 和费用保留。
+  若续跑时 Argus 拒绝上一轮的准备产物，旧输出会归档到 `argus-attempt-*` 后
+  重新开始，已结算费用仍计入任务与每日账本。
+- Argus 退出码非 0 但已产生部分标注时记为“部分完成”，逐 Episode 结果仍可查看
+  和导出。费用账本与内容分析共用每日预算，按已结算费用统计。
+- 机器人差异只来自 Provider / Profile：`annotation_context()` 提供 Argus rig 与
+  相机安装关系，页面和 API 不按机器人型号分支。当前 Profile 默认使用
+  `teleop_arms`；其他采集方式应在 Profile 中声明 `annotation_rig`
+  （`teleop_arms` / `handheld_gripper` / `ego_head`）。声明了不支持的值时提交会
+  直接报错，不会静默按遥操作标注。
+- 标注任务运行期间不能永久删除来源数据集；任务结束后标注结果独立保留，不随
+  数据集删除而移除。Doctor 质检逻辑和结论不受影响。
 
 ## 6.5 Slurm 转换资源（可选）
 
@@ -449,7 +498,7 @@ Slurm 可以把作业调度到任意分区节点，而转换依赖的路径必�
 | `letools_bin` 指向的独立工具环境 | 每个可能被调度的节点都必须可见 |
 | `data_root` | 同上 |
 | Server 安装目录（`.venv`、`configs`） | 只需 Server 所在节点可见，但若作业读取其中文件则同样要求 |
-| `argus_src` / `argus_python` | 用到内容分析时同样要求 |
+| `argus_src` / `argus_python` | 用到内容分析或自动标注时同样要求 |
 
 **典型故障**：节点级共享目录只挂载在一部分节点上，作业被调度到其余节点后报
 

@@ -27,7 +27,7 @@ import os
 import re
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 MARKER = "# pipeline-argus-integration:v1"
 
 
@@ -141,19 +141,21 @@ def patch_label_module(root: Path) -> None:
     path.write_text(text + "\n" + MARKER + "\n")
 
 
-MOUNTING_MARKER = "# pipeline-argus-mounting:v1"
+MOUNTING_MARKER = "# pipeline-argus-mounting:v2"
 
 MOUNTING_BLOCK = '''
 # BodyPipeline: let the dataset publisher declare where each camera is mounted.
 # Argus otherwise infers mounting from the camera's name alone, so a camera
 # called "left" is treated as unspecified even when the dataset metadata (or the
-# robot profile) states it is mounted on the wrist. The declaration arrives as a
-# sidecar next to the dataset: {"left": "wrist", "front": "scene", ...}. Camera
+# robot profile) states it is mounted on the wrist. The declaration arrives in
+# PIPELINE_ARGUS_CAMERA_MOUNTING as {"left_wrist": "wrist_left", ...}. Camera
 # names are presentation slots; mounting is a separate, explicitly stated fact.
 MOUNTING_WORDS = {
     "wrist": "actor", "wrist_left": "actor", "wrist_right": "actor",
     "gripper": "actor", "hand": "actor", "actor": "actor",
-    "fixed": "fixed", "scene": "fixed", "head": "head",
+    "head": "head", "head_left": "head", "head_right": "head",
+    "ego": "head", "egocentric": "head",
+    "fixed": "fixed", "scene": "fixed",
 }
 
 
@@ -168,6 +170,34 @@ def _pipeline_mounting() -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _mounting_camera(cameras: dict, view: str):
+    cam = cameras.get(view)
+    if isinstance(cam, dict):
+        return cam
+    # Profiles name their own cameras (left_wrist, head_left, egocentric); Argus
+    # names presentation slots (left, right, exo, extra1). Match the declared id
+    # against the recorded camera key, whole or as a name segment, after the same
+    # normalisation Argus applies (observation.images.<name> -> <name>).
+    wanted = str(view).lower()
+    if not wanted:
+        return None
+    for candidate in cameras.values():
+        if not isinstance(candidate, dict):
+            continue
+        base = str(candidate.get("key") or candidate.get("name") or "")
+        base = base.rsplit("/", 1)[-1]
+        base = re.sub(r"^observation\.images?\.", "", base)
+        base = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_").lower()
+        if base and (
+            base == wanted
+            or base.startswith(wanted + "_")
+            or base.endswith("_" + wanted)
+            or f"_{wanted}_" in base
+        ):
+            return candidate
+    return None
+
+
 def apply_declared_mounting(ep: dict) -> None:
     """Overwrite presentation-only camera entries with the publisher's stated mounting."""
 
@@ -176,7 +206,7 @@ def apply_declared_mounting(ep: dict) -> None:
         return
     cameras = ep.get("cameras") or {}
     for view, spec in declared.items():
-        cam = cameras.get(view)
+        cam = _mounting_camera(cameras, view)
         if not isinstance(cam, dict):
             continue
         mounting = MOUNTING_WORDS.get(str(spec).lower())

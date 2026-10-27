@@ -155,11 +155,16 @@ class AnalysisRunner:
 
         midnight = time.time() - (time.time() % 86400)
         total = 0.0
-        for row in self.store.all("analysis"):
-            if float(row.get("cost_usd") or 0.0) <= 0:
-                continue
-            if float(row.get("finished_at") or row.get("created_at") or 0) >= midnight:
-                total += float(row["cost_usd"])
+        # Automatic annotation and content analysis share one daily allowance.
+        for kind in ("analysis", "annotation"):
+            for row in self.store.all(kind):
+                if float(row.get("cost_usd") or 0.0) <= 0:
+                    continue
+                if (
+                    float(row.get("finished_at") or row.get("created_at") or 0)
+                    >= midnight
+                ):
+                    total += float(row["cost_usd"])
         return total
 
     def budget(self, jid: str, episodes: int, mode: str) -> dict:

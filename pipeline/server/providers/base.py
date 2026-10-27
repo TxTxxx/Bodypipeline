@@ -5,7 +5,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from pipeline.shared.core import DomainError
 from pipeline.shared.runtime import RobotRuntime
+
+# Argus names recordings by how they were made, not by robot model. Profiles
+# currently describe leader/follower teleoperation; a robot with another
+# capture mode may set "annotation_rig" once that mode is supported.
+ANNOTATION_RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
+
+
+def annotation_rig(profile: dict) -> str:
+    rig = profile.get("annotation_rig") or "teleop_arms"
+    if rig not in ANNOTATION_RIGS:
+        # A typo must not silently label an ego-head recording as teleoperation.
+        raise DomainError(
+            f"Profile 的 annotation_rig 无效：{rig}；"
+            f"可选值为 {' / '.join(ANNOTATION_RIGS)}",
+            400,
+        )
+    return rig
 
 
 class RobotProvider(Protocol):
@@ -74,5 +92,20 @@ class RobotProvider(Protocol):
         """
         return {}
 
+    def annotation_context(self, profile: dict) -> dict:
+        """Recording context for the automatic annotation pipeline.
 
-__all__ = ["RobotProvider", "RobotRuntime"]
+        The model-facing review needs the recording rig and the camera mounting
+        facts the dataset itself does not state. Robots with a different capture
+        mode say so in their Provider/Profile; the page and API never branch on
+        a robot model.
+        """
+        return {"rig": annotation_rig(profile), "cameras": {}}
+
+
+__all__ = [
+    "ANNOTATION_RIGS",
+    "RobotProvider",
+    "RobotRuntime",
+    "annotation_rig",
+]

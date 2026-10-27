@@ -249,6 +249,15 @@ configs/agilex-aloha*.json
 
 它们是 `AgileXProvider` 的内部实现，不是通用 JobRunner 的全局假设。新增 Provider 必须显式注册到静态注册表，不能被 Manifest、设备输入或环境变量动态导入。
 
+内容分析与自动标注共用 Provider 的上下文扩展点：
+
+```text
+analysis_context(profile)    # 相机安装关系、关节/单位、控制方式等确定性信息
+annotation_context(profile)  # Argus rig（annotation_rig，缺省 teleop_arms）+ 上述相机信息
+```
+
+Profile 只声明确知事实；未声明相机的安装位置时，Argus 会把依赖它的检查标为"未评估"，不会按型号猜。采集方式不是遥操作时，在 Profile 中声明 `annotation_rig`（`teleop_arms` / `handheld_gripper` / `ego_head`），不要在上层页面或 API 里按型号分支。
+
 ### 4.4 质检与预览
 
 | 差异 | 文件 |

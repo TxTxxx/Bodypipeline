@@ -31,6 +31,7 @@ let config = null,
   serverVersionConversionCandidates = [],
   serverDatasets = [],
   serverDeletions = [],
+  serverAnnotations = [],
   deletingDataset = null,
   selectedMergeDatasets = new Set(),
   activeVersionConversionSource = null,
@@ -144,6 +145,7 @@ async function api(path, method = "GET", body) {  const controller = new AbortCo
 }
 function showLogin() {
   window.ClientReplay.deactivate();
+  window.AnnotationUI?.hide();
   clearTimeout(timer);
   clearTimeout(frameTimer);
   clearTimeout(healthTimer);
@@ -266,6 +268,7 @@ async function boot() {
       ? `允许导入路径：${roots.join("、")}`
       : "管理员尚未配置 import_roots；配置后重启 Server 才能导入历史目录。";
     $("import-submit").disabled = !roots.length;
+    window.AnnotationUI?.configure({ api, notice, esc, bytes });
     setServerTab(location.hash.slice(1) || serverTab, false);
   }
   void poll();
@@ -663,18 +666,20 @@ async function refresh() {
       const rows = await api("/api/capture-status");
       if (config?.role === "client") acceptCaptures(rows);
     } else {
-      const [uploads, jobs, v, mergeCandidates, versionConversionCandidates] = await Promise.all([
+      const [uploads, jobs, v, mergeCandidates, versionConversionCandidates, annotationRows] = await Promise.all([
         api("/api/collections"),
         api("/api/jobs"),
         api("/api/viewer"),
         api("/api/merge-candidates"),
         api("/api/version-conversion-candidates"),
+        api("/api/annotations"),
       ]);
       serverCollections = uploads;
       serverUploads = uploads.flatMap((c) => c.uploads);
       serverJobs = jobs;
       serverMergeCandidates = mergeCandidates;
       serverVersionConversionCandidates = versionConversionCandidates;
+      serverAnnotations = annotationRows;
       renderServer(serverUploads, jobs);
       renderViewerStatus(v);
       void refreshDatasetManagement();
@@ -749,7 +754,7 @@ function setClientTab(value, updateHistory = true) {
   setSidebarOpen(false, wasOpen);
 }
 function setServerTab(tab, updateHistory = true) {
-  if (!["uploads", "convert", "results", "merge"].includes(tab)) tab = "convert";
+  if (!["uploads", "convert", "results", "merge", "annotations"].includes(tab)) tab = "convert";
   serverTab = tab;
   if (location.hash === "#replay") history.replaceState(null, "", "#" + tab);
   if (updateHistory && location.hash !== "#" + tab) location.hash = tab;
@@ -763,20 +768,23 @@ function setServerTab(tab, updateHistory = true) {
     if (active) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
-  const title = { uploads: "原始数据", convert: "数据转换", results: "预览与质检", merge: "数据集管理" }[tab];
+  const title = { uploads: "原始数据", convert: "数据转换", results: "预览与质检", merge: "数据集管理", annotations: "自动标注" }[tab];
   $("page-title").textContent = $("current-page").textContent = title;
   $("page-description").textContent = {
     uploads: "按任务组织原始采集，同一数据集持续接收新的 episodes。",
     convert: "填写 instruction，批量转换所选 episodes 为一个 LeRobot 数据集。",
     results: "浏览转换结果、预览多路视频，并查看数据质量报告。",
     merge: "按机器人管理原始数据与转换结果，或合并生成新的 LeRobot 数据集。",
+    annotations: "调用 Argus review 为已登记的数据集生成逐 Episode 标注，并跟踪费用与结果。",
   }[tab];
   document.title = title + " · BodyPipeline";
   $("job-detail-panel").hidden = !selectedJob || tab !== "results";
-  $("demo-warning").hidden = config?.processing_mode !== "demo" || tab === "merge";
+  $("demo-warning").hidden = config?.processing_mode !== "demo" || ["merge", "annotations"].includes(tab);
   $("mode-badge").textContent = config?.processing_mode === "demo" ? "DEMO · 演示处理" : "SERVER · 中心服务";
   const wasOpen = $("app-view").classList.contains("sidebar-open");
   setSidebarOpen(false, wasOpen);
+  if (tab === "annotations") window.AnnotationUI?.show();
+  else window.AnnotationUI?.hide();
   void refreshDatasetManagement();
 }
 function selectJob(id) {
@@ -1036,6 +1044,7 @@ function renderServer(uploads, jobs) {
   $("nav-job-count").textContent = conversions.length;
   $("nav-merge-count").textContent = serverDatasets.filter((d) => rowRobotType(d) === type).length;
   $("nav-result-count").textContent = jobs.filter((j) => j.dataset_available).length;
+  $("nav-annotation-count").textContent = serverAnnotations.filter((a) => ["QUEUED", "RUNNING"].includes(a.state)).length;
   $("metric-completed").textContent = jobs.filter((x) => x.dataset_available).length;
   const collections = serverCollections.filter((c) => rowRobotType(c) === type);
   $("nav-upload-count").textContent = collections.length;

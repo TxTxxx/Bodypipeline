@@ -25,6 +25,7 @@ from pipeline.shared.hdf5 import AGILEX_ALIGNED_SCHEMA, ALOHA_HDF5_FORMAT
 from ..conversion_options import normalize_options
 from ..episode_validation import EpisodeValidationError
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
+from .base import annotation_rig
 from .gripper_closure import capabilities, correct_actions
 from .hdf5_preset import write_hdf5_preset
 
@@ -372,3 +373,6 @@ class AlohaHDF5Provider:
             "output_fps": profile.get("output_fps"),
             "control_mode": profile.get("control_mode"),
         }
+
+    def annotation_context(self, profile: dict) -> dict:
+        return {"rig": annotation_rig(profile), **self.analysis_context(profile)}

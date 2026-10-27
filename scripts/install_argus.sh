@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARGUS_ROOT="${ARGUS_ROOT:-$ROOT/.runtime/argus}"
 SRC="$ARGUS_ROOT/src"
 REPO="https://github.com/Pantheon-Industries-Inc/argus"
-REV="e1d2f678ffd1cbb51a8cb7bf949f34913bce4281"
+REV="383ca11cf260e2db6da7ba901b8d60cfa8fc68fb"
 PATCH="$ROOT/patches/argus/0001-pipeline-gateway.py"
 
 command -v uv >/dev/null || { echo "Install uv before running this script" >&2; exit 1; }
@@ -29,28 +29,69 @@ command -v ffprobe >/dev/null || {
 [[ -f "$PATCH" ]] || { echo "patch not found: $PATCH" >&2; exit 1; }
 
 mkdir -p "$ARGUS_ROOT"
+INTEGRATION_SUBJECT="integration: BodyPipeline gateway, mounting and pricing hooks"
 if [[ ! -d "$SRC/.git" ]]; then
   git clone --filter=blob:none "$REPO" "$SRC"
+else
+  # The checkout is managed by this script. Refuse to replace one that carries
+  # work of its own instead of silently orphaning a commit or losing edits.
+  HEAD_REV="$(git -C "$SRC" rev-parse HEAD)"
+  HEAD_SUBJECT="$(git -C "$SRC" log -1 --format=%s)"
+  if [[ "$HEAD_REV" != "$REV" && "$HEAD_SUBJECT" != "$INTEGRATION_SUBJECT" ]]; then
+    echo "Refusing to reset $SRC: HEAD is not the pinned commit or the BodyPipeline integration commit" >&2
+    exit 1
+  fi
+  if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]]; then
+    echo "Refusing to reset $SRC: tracked files have local changes" >&2
+    exit 1
+  fi
 fi
 git -C "$SRC" fetch origin "$REV" --depth 1 || true
 git -C "$SRC" checkout --detach "$REV"
 git -C "$SRC" submodule update --init --depth 1 || true
 
 # Apply the integration patch and commit it, so `git status` is clean and Argus
-# will accept a paid run.
-if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py"; then
+# will accept a paid run. An older patch version is replaced rather than stacked:
+# the checkout is managed by this script, so resetting to the pinned commit is
+# safe as long as nobody added work on top of it.
+if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
+   || ! grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py"; then
+  git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
-    commit -am "integration: BodyPipeline gateway, mounting and pricing hooks"
+    commit -am "$INTEGRATION_SUBJECT"
 fi
+
+grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py" || {
+  echo "Argus mounting hook was not applied" >&2
+  exit 1
+}
 
 UV_PROJECT_ENVIRONMENT="$ARGUS_ROOT/venv" uv sync \
   --project "$SRC" --frozen --python "${ARGUS_PYTHON:-3.11}"
 
-"$ARGUS_ROOT/venv/bin/python" - <<'PY'
+(
+  cd "$SRC"
+  "$ARGUS_ROOT/venv/bin/python" - <<'PY'
 import av, numpy, pandas, pyarrow, scipy  # noqa: F401
+import board, checks, label, prepare, review  # noqa: F401
 print("argus imports ok")
 PY
+)
+
+# The automatic annotation page calls the official `python -m review` entry
+# point.  Resolve it once here so a missing stage or option fails at install
+# time rather than after a paid task is queued.
+REVIEW_HELP="$(cd "$SRC" && "$ARGUS_ROOT/venv/bin/python" -m review --help)"
+grep -q -- '--rig' <<<"$REVIEW_HELP" || {
+  echo "Argus review does not expose --rig" >&2
+  exit 1
+}
+grep -q -- '--inspection' <<<"$REVIEW_HELP" || {
+  echo "Argus review does not expose --inspection" >&2
+  exit 1
+}
+echo "argus review ok"
 
 cat <<EOF
 
@@ -64,8 +105,13 @@ Add these to the Server config:
   "argus_src": "$SRC",
   "argus_python": "$ARGUS_ROOT/venv/bin/python",
   "argus_model": "openai/gpt-6-astra",
+  "argus_models": ["openai/gpt-6-astra", "openai/gpt-6.1-sol"],
   "argus_per_episode_budget_usd": 1.0,
-  "argus_max_tokens": 12000
+  "argus_max_tokens": 12000,
+  "argus_annotation_concurrency": 8,
+  "argus_annotation_timeout": 86400
 
 Paid labelling needs PIPELINE_ARGUS_API_KEY in the Server environment.
+The automatic annotation page resolves the `review` module above; it must stay
+on the pinned commit so its stage names and sidecar layout match the parser.
 EOF
