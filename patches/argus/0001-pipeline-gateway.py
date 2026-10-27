@@ -144,6 +144,7 @@ def patch_label_module(root: Path) -> None:
 MOUNTING_MARKER = "# pipeline-argus-mounting:v2"
 
 MOUNTING_BLOCK = '''
+# pipeline-argus-mounting:v2
 # BodyPipeline: let the dataset publisher declare where each camera is mounted.
 # Argus otherwise infers mounting from the camera's name alone, so a camera
 # called "left" is treated as unspecified even when the dataset metadata (or the
