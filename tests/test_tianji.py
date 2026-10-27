@@ -199,6 +199,32 @@ def test_writer_not_drained_cannot_seal(settings_factory, tmp_path):
     assert not (raw / "episode0").exists()
 
 
+def test_controller_saved_recording_is_imported_without_recorder_mutation(
+    settings_factory, tmp_path
+):
+    adapter, settings, state, calls, original = setup_apex(settings_factory, tmp_path)
+    state.update(
+        phase="saved",
+        session_id="apex-controller-owned",
+        request_id=None,
+        data_state="closed",
+        video_state="closed",
+        path=str(original),
+        ended_at=123.0,
+    )
+    raw = tmp_path / "controller-managed"
+    result = adapter.import_controller_recording(state, raw, "client-session")
+    assert result["imported"] is True
+    assert result["apex_session_id"] == "apex-controller-owned"
+    for path in recording_files(original):
+        relative = path.relative_to(original)
+        assert (raw / "episode0" / relative).read_bytes() == path.read_bytes()
+    source = json.loads((raw / "episode0/bodypipeline-source.json").read_text())
+    assert source["session_id"] == "client-session"
+    assert source["apex_session_id"] == "apex-controller-owned"
+    assert calls == []
+
+
 def test_disabled_health_and_close_are_read_only(settings_factory, tmp_path):
     adapter, s, state, calls, original = setup_apex(settings_factory, tmp_path)
     s.capture_options["allow_recording"] = False

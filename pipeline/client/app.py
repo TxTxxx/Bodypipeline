@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -15,6 +16,7 @@ from pipeline.shared.core import DomainError, ProcessLock
 from pipeline.shared.security import install_security
 from pipeline.shared.web import mount_ui
 
+from .controller import ControllerCaptureCoordinator
 from .replay import ReplayService
 from .service import CaptureService
 from .upload import UploadAgent
@@ -38,8 +40,12 @@ class ReplayRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=128)
 
 
+log = logging.getLogger("pipeline.client")
+
+
 def create_app(settings, background=True):
     service = CaptureService(settings)
+    controller = ControllerCaptureCoordinator(service)
     replay = ReplayService(settings, service)
     service.replay = replay
     uploader = UploadAgent(service)
@@ -85,6 +91,17 @@ def create_app(settings, background=True):
             except asyncio.TimeoutError:
                 pass
 
+    async def controller_loop():
+        while not stopping.is_set():
+            try:
+                await asyncio.to_thread(controller.tick)
+            except Exception:
+                log.exception("controller capture synchronization failed")
+            try:
+                await asyncio.wait_for(stopping.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+
     @asynccontextmanager
     async def lifespan(app):
         lock.acquire()
@@ -94,6 +111,7 @@ def create_app(settings, background=True):
                 asyncio.create_task(upload_loop()),
                 asyncio.create_task(health_loop()),
                 asyncio.create_task(seal_loop()),
+                asyncio.create_task(controller_loop()),
             ]
             if background
             else []
@@ -110,6 +128,7 @@ def create_app(settings, background=True):
 
     app = FastAPI(title="Embodied Pipeline Client", lifespan=lifespan)
     app.state.service = service
+    app.state.controller = controller
     app.state.replay = replay
     app.state.uploader = uploader
     install_security(app, settings)
@@ -154,6 +173,7 @@ def create_app(settings, background=True):
                 {"id": k, "path": str(v)} for k, v in service.roots.items()
             ],
             "server_url": settings.server_url,
+            "controller_trigger": settings.controller_trigger,
         }
 
     @app.get("/api/health")
@@ -203,13 +223,24 @@ def create_app(settings, background=True):
         row = create(body)
         return service.start(row["id"])
 
-    @app.post("/api/captures", status_code=201)
-    def create(body: CaptureRequest):
+    def capture_data(body: CaptureRequest):
         data = body.model_dump(exclude_none=True)
         data["instruction"] = data["instruction"].strip()
         if not (data.get("dataset_name") or data["instruction"]):
             raise DomainError("请填写数据集名称", 400)
-        return service.create(data)
+        return data
+
+    @app.post("/api/captures", status_code=201)
+    def create(body: CaptureRequest):
+        return service.create(capture_data(body))
+
+    @app.post("/api/controller/arm", status_code=201)
+    def controller_arm(body: CaptureRequest):
+        return controller.arm(capture_data(body))
+
+    @app.post("/api/controller/disarm/{cid}")
+    def controller_disarm(cid: str):
+        return controller.disarm(cid)
 
     @app.get("/api/captures/{cid}")
     def get(cid: str):

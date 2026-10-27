@@ -10,6 +10,9 @@
     "storage_root": "/var/lib/bodypipeline/tianji/recordings",
     "preview_root": "/var/lib/bodypipeline/tianji/preview"
   },
+  "controller_trigger": {
+    "enabled": true
+  },
   "robot_id": "marvin-pro-001",
   "project_id": "bodypipeline-tianji",
   "profile_path": "configs/tianji-marvin-pro-v1.json",

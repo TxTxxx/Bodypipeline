@@ -105,6 +105,17 @@ class ApexAdapter:
             recorder=status,
         )
 
+    def controller_status(self):
+        """Expose a hand-controller recorder session without claiming it."""
+
+        status = self._call("GET", "status")
+        request_id = status.get("request_id")
+        return dict(
+            **status,
+            controller_owned=isinstance(request_id, str)
+            and request_id.startswith("controller-"),
+        )
+
     def _wait(self, predicate):
         deadline = time.monotonic() + self.options.get("timeout_s", 30)
         while True:
@@ -194,34 +205,61 @@ class ApexAdapter:
                     and s.get("video_state") == "closed"
                 )
             )
-            source = Path(status["path"])
-            storage = Path(self.options["storage_root"]).resolve()
-            if (
-                source.resolve() != source
-                or not source.is_relative_to(storage)
-                or source == storage
-            ):
-                raise DomainError("Apex output is outside the dedicated storage root")
-            recording_files(source)
-            # Apex owns its original. Only our managed copy can be discarded/uploaded.
-            target = Path(self.row["raw_root"]) / "episode0"
-            temporary = target.with_name(".copying")
-            if target.exists() or temporary.exists():
-                raise DomainError("Existing copy requires review; refusing overwrite")
-            shutil.copytree(source, temporary)
-            recording_files(temporary)
-            atomic_json(
-                temporary / "bodypipeline-source.json",
-                dict(
-                    source_path=str(source),
-                    apex_session_id=self.row["apex_session_id"],
-                    session_id=session_id,
-                    writer_status=status,
-                ),
+            source = self._copy_closed_recording(
+                status, Path(self.row["raw_root"]), session_id
             )
-            temporary.rename(target)
             self._save(phase="STOPPED", source_path=str(source))
             return dict(stopped=True, session_id=session_id, writer_closed=True)
+
+    def _copy_closed_recording(
+        self, status: dict, raw_root: Path, session_id: str
+    ) -> Path:
+        if (
+            status.get("phase") != "saved"
+            or status.get("data_state") != "closed"
+            or status.get("video_state") != "closed"
+        ):
+            raise DomainError("Apex recording is not fully saved and closed")
+        source = Path(status.get("path", ""))
+        storage = Path(self.options["storage_root"]).resolve()
+        if (
+            source.resolve() != source
+            or not source.is_relative_to(storage)
+            or source == storage
+        ):
+            raise DomainError("Apex output is outside the dedicated storage root")
+        recording_files(source)
+        # Apex owns its original. Only our managed copy can be discarded/uploaded.
+        target = raw_root / "episode0"
+        temporary = target.with_name(".copying")
+        if target.exists() or temporary.exists():
+            raise DomainError("Existing copy requires review; refusing overwrite")
+        shutil.copytree(source, temporary)
+        recording_files(temporary)
+        atomic_json(
+            temporary / "bodypipeline-source.json",
+            dict(
+                source_path=str(source),
+                apex_session_id=status.get("session_id"),
+                session_id=session_id,
+                writer_status=status,
+            ),
+        )
+        temporary.rename(target)
+        return source
+
+    def import_controller_recording(
+        self, status: dict, raw_root: Path, session_id: str
+    ) -> dict:
+        """Import a hand-controller-owned Apex session after it has saved."""
+
+        source = self._copy_closed_recording(status, raw_root, session_id)
+        return dict(
+            imported=True,
+            source_path=str(source),
+            apex_session_id=status.get("session_id"),
+            writer_closed=True,
+        )
 
     def frame(self, camera_id):
         if camera_id not in CAMERAS or not self.options.get("preview_root"):

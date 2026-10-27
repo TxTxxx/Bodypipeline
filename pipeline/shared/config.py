@@ -17,6 +17,7 @@ class Settings:
     capture_adapter: str = "ros2"
     capture_packager: str = "agilex"
     capture_options: dict = field(default_factory=dict)
+    controller_trigger: dict = field(default_factory=dict)
     root: Path = field(default_factory=lambda: Path(".runtime/client").resolve())
     data_root: Path | None = None
     import_roots: list[Path] = field(default_factory=list)
@@ -100,6 +101,10 @@ class Settings:
             "real",
         }:
             raise ValueError("mode / processing_mode 配置无效")
+        if not isinstance(settings.controller_trigger, dict):
+            raise ValueError("controller_trigger 必须是对象")
+        if not isinstance(settings.controller_trigger.get("enabled", False), bool):
+            raise ValueError("controller_trigger.enabled 必须是布尔值")
         if (
             (settings.mode == "ros2" and settings.capture_adapter == "ros2")
             or role == "bridge"

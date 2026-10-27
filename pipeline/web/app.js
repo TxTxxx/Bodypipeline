@@ -357,9 +357,11 @@ function currentCapture() {
     captures.find((c) =>
       ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(c.state),
     ) ||
+    captures.find((c) => c.state === "DRAFT" && c.controller_armed) ||
     captures.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id))
   );
 }
+const controllerTriggerEnabled = () => config?.controller_trigger?.enabled === true;
 function updateCaptureClock() {
   const current = currentCapture();
   if (["STARTING", "STOPPING"].includes(current?.state)) {
@@ -440,14 +442,19 @@ $("capture-form").onsubmit = (e) => {
       remote_prefix: $("remote-prefix").value.trim(),
     };
     $("start-button").disabled = true;
-    notice("正在请求开始采集，等待机器人确认…");
-    const c = await api("/api/captures/start", "POST", data);
+    const controller = controllerTriggerEnabled();
+    notice(controller ? "正在准备手柄采集会话…" : "正在请求开始采集，等待机器人确认…");
+    const c = await api(controller ? "/api/controller/arm" : "/api/captures/start", "POST", data);
     acceptCaptures([c]);
     sessionCaptures.add(c.id);
     requestKey = null;
-    if (c.state !== "RECORDING")
+    if (controller && (c.state !== "DRAFT" || !c.controller_armed))
+      throw Error(c.error || "手柄采集准备未确认");
+    if (!controller && c.state !== "RECORDING")
       throw Error(c.error || "启动未确认，请查看会话状态，勿重复启动");
-    notice("采集已开始。保留后作为一个 episode 加入当前数据集并上传。");
+    notice(controller
+      ? "会话已准备。按右手柄 B 开始，再按一次结束；上传仍需在页面确认。"
+      : "采集已开始。保留后作为一个 episode 加入当前数据集并上传。");
   });
 };
 document.addEventListener("click", (e) => {
@@ -471,6 +478,14 @@ document.addEventListener("click", (e) => {
       $("capture-form").scrollIntoView({behavior: "smooth", block: "center"});
     }
   }
+  const disarm = e.target.closest("[data-controller-disarm]");
+  if (disarm)
+    action(async () => {
+      const row = await api(`/api/controller/disarm/${disarm.dataset.controllerDisarm}`, "POST");
+      acceptCaptures([row]);
+      sessionCaptures.delete(row.id);
+      notice("已取消等待手柄启动。");
+    });
   const b = e.target.closest("[data-op]");
   if (b)
     action(async () => {
@@ -588,6 +603,7 @@ function renderClientCaptures() {
       c.state,
     ),
   );
+  const armed = rows.find((c) => c.state === "DRAFT" && c.controller_armed);
   for (const row of rows)
     if (
       ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(
@@ -600,8 +616,13 @@ function renderClientCaptures() {
   // else stays in the list below, where keep/discard still work.
   const current =
     active ||
+    armed ||
     rows.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id));
-  $("start-button").disabled = !!active || busy;
+  $("start-button").disabled = !!active || !!armed || busy;
+  $("start-button").textContent = controllerTriggerEnabled()
+    ? "● 准备手柄采集"
+    : "● 采集下一个 episode";
+  $("controller-capture-hint").hidden = !controllerTriggerEnabled();
   $("health-label").textContent = active
     ? "● " + (names[active.state] || active.state)
     : clientHealth?.ready
@@ -609,12 +630,14 @@ function renderClientCaptures() {
       : clientHealth ? "○ 适配器尚未就绪" : "○ 健康检查待更新";
   $("capture-state").textContent = !current
     ? "就绪"
+    : armed
+      ? "等待手柄开始"
     : current.capture_failed
       ? "采集失败，只能丢弃"
       : names[current.state];
   updateCaptureClock();
   $("session-actions").innerHTML = current
-    ? `<span class="small muted">当前会话 ${esc(current.id.slice(0, 8))}</span>${controls(current)}`
+    ? `<span class="small muted">当前会话 ${esc(current.id.slice(0, 8))}</span>${armed ? `<button class="secondary" data-controller-disarm="${esc(armed.id)}" type="button"${busy ? " disabled" : ""}>取消准备</button>` : controls(current)}`
     : "";
   $("capture-list").innerHTML = rows.length
     ? rows
