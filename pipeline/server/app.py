@@ -81,6 +81,12 @@ class AnnotationResumeRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
 
 
+class AnnotationModelsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str | None = Field(default=None, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=4096)
+
+
 class MergeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_job_ids: list[str] = Field(min_length=2, max_length=100)
@@ -515,6 +521,10 @@ def create_app(settings, background=True):
     @app.get("/api/annotations/candidates")
     def annotation_candidates():
         return {"datasets": annotations.candidates()}
+
+    @app.post("/api/annotations/models")
+    def annotation_models(body: AnnotationModelsRequest):
+        return annotations.models(base_url=body.base_url, api_key=body.api_key)
 
     @app.get("/api/annotations")
     def annotation_list():

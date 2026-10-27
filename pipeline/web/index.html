@@ -397,8 +397,11 @@
                     </div>
                     <div>
                       <label for="annotation-model">标注模型 <span class="required">*</span></label>
-                      <select id="annotation-model" required disabled></select>
-                      <p class="small muted">模型选择由服务器允许列表约束；实际费用以 Argus 结算为准。</p>
+                      <div class="action-row">
+                        <select id="annotation-model" required disabled></select>
+                        <button id="annotation-model-refresh" class="secondary" type="button" disabled>获取模型列表</button>
+                      </div>
+                      <p class="small muted" id="annotation-model-status">填写 baseURL 与 API Key 后自动获取网关模型；未填写时使用服务器允许列表。</p>
                     </div>
                   </div>
                   <div class="conversion-grid">

@@ -460,6 +460,12 @@ Server 内存中，任务结束、取消或 Server 重启后清除；不会写�
   根地址，不能包含用户名、密码、查询参数或片段；填写后会启用
   `PIPELINE_ARGUS_GENERIC_GATEWAY=1`。未填写且服务器也没有默认值的 baseURL 时，
   Argus 使用其上游默认地址。
+- 填写 baseURL 与 API Key 后，页面会自动请求 `<baseURL>/models` 获取模型列表；
+  也可点“获取模型列表”手动刷新。`/models` 只用于读取目录，返回的模型 ID 直接作为
+  Argus 的 `--model`。使用按任务填写的 baseURL 时，模型不受 `argus_models`
+  允许列表限制；使用服务器默认上游时仍按允许列表校验。
+- `/api/annotations/models` 在 Server 侧代理该请求：密钥只作为
+  `Authorization: Bearer` 发送，不写入日志或响应，错误信息也会脱敏。
 - Argus 退出码非 0 但已产生部分标注时记为“部分完成”，逐 Episode 结果仍可查看
   和导出。费用账本与内容分析共用每日预算，按已结算费用统计。
 - 机器人差异只来自 Provider / Profile：`annotation_context()` 提供 Argus rig 与

@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -79,6 +81,9 @@ def source_path(settings) -> Path:
 
 MAX_BASE_URL = 2048
 MAX_API_KEY = 4096
+MAX_MODELS_BYTES = 2_000_000
+MAX_MODELS = 2000
+MODEL_LIST_TIMEOUT = 20
 # Argus can also read its upstream key variables directly.  They survive
 # tool_environment() because it only filters PIPELINE_* names.
 NATIVE_KEY_ENVS = ("OPENROUTER_API_KEYS", "OPENAI_API_KEY")
@@ -159,6 +164,89 @@ def redact(text: str, secret: str) -> str:
     if not secret:
         return text
     return text.replace(secret, "[redacted]")
+
+
+def _model_ids(payload) -> list[str]:
+    """Read the common ``/models`` shapes without assuming one gateway."""
+
+    items = payload
+    if isinstance(payload, dict):
+        items = payload.get("data")
+        if items is None:
+            items = payload.get("models")
+        if isinstance(items, dict):
+            items = items.get("data") or list(items.values())
+    if not isinstance(items, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = item.get("id") or item.get("model") or item.get("name")
+        else:
+            continue
+        if not isinstance(name, str):
+            continue
+        name = name.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= MAX_MODELS:
+            break
+    return names
+
+
+def list_models(settings, base_url=None, api_key=None) -> dict:
+    """List models offered by the configured Chat Completions gateway.
+
+    The key is only sent as a request header and is removed from any error
+    detail before it can reach the page.
+    """
+
+    credentials = resolve_credentials(settings, base_url, api_key)
+    endpoint = credentials["base_url"]
+    if not endpoint:
+        raise DomainError("请填写模型 baseURL 后再获取模型列表", 400)
+    key = credentials["api_key"]
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "BodyPipeline annotation model discovery",
+    }
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    request = urllib.request.Request(
+        endpoint + "/models", headers=headers, method="GET"
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=MODEL_LIST_TIMEOUT
+        ) as response:
+            raw = response.read(MAX_MODELS_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read(2048).decode(errors="replace").strip()
+        except OSError:
+            pass
+        detail = redact(detail, key)[:400]
+        suffix = f" · {detail}" if detail else ""
+        raise DomainError(
+            f"模型列表获取失败：HTTP {exc.code}{suffix}", 502
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        message = redact(str(reason), key)[:500]
+        raise DomainError(f"模型列表获取失败：{message}", 502) from exc
+    if len(raw) > MAX_MODELS_BYTES:
+        raise DomainError("模型列表响应过大", 502)
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise DomainError("模型列表不是有效 JSON", 502) from exc
+    return {"models": _model_ids(payload), "base_url": endpoint}
 
 
 def environment(

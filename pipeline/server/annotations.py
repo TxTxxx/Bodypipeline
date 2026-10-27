@@ -97,6 +97,9 @@ class AnnotationRunner:
     def available(self) -> tuple[bool, str]:
         return argus_annotation.available(self.settings)
 
+    def models(self, *, base_url: str | None = None, api_key: str | None = None):
+        return argus_annotation.list_models(self.settings, base_url, api_key)
+
     def catalog_for(self):
         if self.catalog is None:
             self.catalog = self.settings.runtime_registry()
@@ -261,7 +264,14 @@ class AnnotationRunner:
             explicit_model = model is not None
             model = (model or self.settings.argus_model or "").strip()
             allowed_models = list(self.settings.argus_models or [])
-            if allowed_models and model not in allowed_models:
+            # A per-task gateway publishes its own catalogue, so the server
+            # allowlist only governs the server's default upstream.
+            custom_gateway = bool(str(base_url or "").strip())
+            if (
+                allowed_models
+                and model not in allowed_models
+                and not custom_gateway
+            ):
                 if explicit_model:
                     raise DomainError("标注模型不在服务器允许列表中", 400)
                 # A configured default outside the allowlist is a server

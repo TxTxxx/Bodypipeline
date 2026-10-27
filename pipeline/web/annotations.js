@@ -54,6 +54,10 @@
   let listSignature = "";
   let detailSignature = "";
   let resumeTarget = null;
+  let modelFetching = false;
+  let modelFetchTimer = null;
+  let modelFetchPromise = null;
+  let modelFetchedFor = "";
 
   const esc = (value) => ui?.esc(value) ?? String(value ?? "");
   const money = (value) => {
@@ -77,6 +81,115 @@
   }
   function activeCount() {
     return rows.filter((row) => ACTIVE.has(row.state)).length;
+  }
+
+  function modelInputs() {
+    return {
+      baseUrl: $("annotation-base-url").value.trim(),
+      apiKey: $("annotation-api-key").value.trim(),
+    };
+  }
+
+  function modelSignature() {
+    const { baseUrl, apiKey } = modelInputs();
+    return baseUrl + "\n" + apiKey;
+  }
+
+  function canFetchModels() {
+    if (!options?.available) return false;
+    const { baseUrl, apiKey } = modelInputs();
+    return Boolean(
+      (baseUrl || options.gateway_configured) &&
+        (apiKey || options.api_key_configured),
+    );
+  }
+
+  function setModelStatus(text) {
+    $("annotation-model-status").textContent = text;
+  }
+
+  function updateModelControls() {
+    const button = $("annotation-model-refresh");
+    const enabled = Boolean(options?.available) && canFetchModels() && !modelFetching;
+    button.disabled = !enabled;
+    button.textContent = modelFetching ? "正在获取…" : "获取模型列表";
+    updateSubmit();
+  }
+
+  function renderModelOptions(models) {
+    const select = $("annotation-model");
+    const previous = select.value;
+    select.innerHTML = models.length
+      ? models
+          .map((model) => `<option value="${esc(model)}">${esc(model)}</option>`)
+          .join("")
+      : '<option value="">网关未返回模型</option>';
+    if (models.includes(previous)) {
+      select.value = previous;
+    } else {
+      select.value = models[0] || "";
+    }
+    updateSubmit();
+  }
+
+  async function fetchModels(force = false) {
+    if (!canFetchModels()) return null;
+    if (modelFetching) return modelFetchPromise;
+    const signature = modelSignature();
+    if (!force && signature === modelFetchedFor) return null;
+    const { baseUrl, apiKey } = modelInputs();
+    modelFetching = true;
+    updateModelControls();
+    setModelStatus("正在从网关获取模型列表…");
+    modelFetchPromise = (async () => {
+      try {
+        const result = await ui.api("/api/annotations/models", "POST", {
+          base_url: baseUrl || null,
+          api_key: apiKey || null,
+        });
+        if (signature !== modelSignature()) return;
+        const models = Array.isArray(result.models)
+          ? result.models.filter((model) => typeof model === "string" && model.trim())
+          : [];
+        renderModelOptions(models);
+        modelFetchedFor = signature;
+        setModelStatus(
+          models.length
+            ? `已从网关获取 ${models.length} 个模型。`
+            : "网关未返回模型；请确认 baseURL 指向网关根地址。",
+        );
+      } catch (error) {
+        if (signature === modelSignature()) {
+          modelFetchedFor = "";
+          setModelStatus("获取模型列表失败：" + error.message);
+        }
+      } finally {
+        modelFetching = false;
+        modelFetchPromise = null;
+        updateModelControls();
+        if (signature !== modelSignature() && canFetchModels()) {
+          scheduleModelFetch();
+        }
+      }
+    })();
+    return modelFetchPromise;
+  }
+
+  function scheduleModelFetch() {
+    clearTimeout(modelFetchTimer);
+    modelFetchTimer = null;
+    updateModelControls();
+    if (!options?.available) return;
+    const { baseUrl, apiKey } = modelInputs();
+    if (!(baseUrl || options.gateway_configured) || !(apiKey || options.api_key_configured)) {
+      setModelStatus("填写 baseURL 与 API Key 后自动获取网关模型；未填写时使用服务器允许列表。");
+      return;
+    }
+    setModelStatus("准备从网关获取模型列表…");
+    modelFetchTimer = setTimeout(() => {
+      modelFetchTimer = null;
+      void fetchModels(false);
+    }, 400);
   }
 
   function configure({ api, notice, esc: escFn, bytes }) {
@@ -103,8 +216,13 @@
     $("annotation-cap").addEventListener("input", () => {
       capTouched = true;
     });
-    $("annotation-api-key").addEventListener("input", updateSubmit);
-    $("annotation-base-url").addEventListener("input", updateSubmit);
+    $("annotation-api-key").addEventListener("input", updateModelControls);
+    $("annotation-base-url").addEventListener("input", updateModelControls);
+    $("annotation-api-key").addEventListener("change", scheduleModelFetch);
+    $("annotation-base-url").addEventListener("change", scheduleModelFetch);
+    $("annotation-model-refresh").addEventListener("click", () => {
+      void fetchModels(true);
+    });
     $("annotation-resume-form").addEventListener("submit", submitResume);
     $("annotation-resume-close").addEventListener("click", closeResume);
     $("annotation-resume-cancel").addEventListener("click", closeResume);
@@ -188,6 +306,7 @@
       $(id).disabled = !enabled;
     });
     updateSubmit();
+    updateModelControls();
   }
 
   function applyOptions() {
@@ -223,6 +342,15 @@
       showUnavailable(options.reason || "服务器未找到可用的 Argus");
     }
     renderBudget();
+    updateModelControls();
+    if (
+      available &&
+      options.gateway_configured &&
+      options.api_key_configured &&
+      !modelFetchedFor
+    ) {
+      scheduleModelFetch();
+    }
   }
 
   function showUnavailable(reason) {
@@ -231,6 +359,7 @@
     box.hidden = false;
     box.textContent = "自动标注暂不可用：" + reason;
     $("annotation-help").textContent = "部署 Argus 后重启 Server 即可使用。";
+    setModelStatus("自动标注不可用，无法获取模型列表。");
   }
 
   function renderDatasetOptions() {
@@ -314,6 +443,7 @@
       Boolean($("annotation-dataset").value) &&
       Boolean($("annotation-model").value) &&
       (!needsKey || Boolean($("annotation-api-key").value.trim())) &&
+      !modelFetching &&
       !submitting;
     button.disabled = !usable;
     button.textContent = submitting ? "正在提交…" : "提交自动标注";
@@ -574,6 +704,14 @@
       ui.notice("请先选择数据集。", true);
       return;
     }
+    if (canFetchModels() && modelFetchedFor !== modelSignature()) {
+      // Do not submit a model from a previous gateway or a stale field value.
+      await fetchModels(false);
+    }
+    if (!$("annotation-model").value) {
+      ui.notice("请先获取并选择标注模型。", true);
+      return;
+    }
     const sample = $("annotation-sample-fps").value;
     const sampleFps = sample === "" ? null : Number(sample);
     const baseUrl = $("annotation-base-url").value.trim();
@@ -599,6 +737,7 @@
       // The key is not part of the task record; do not keep it in the page
       // either once the server has accepted the run.
       $("annotation-api-key").value = "";
+      updateModelControls();
       selectedId = row.id;
       ui.notice(`已提交「${row.dataset_name}」自动标注：${row.model}，费用上限 ${money(row.cap_usd)}。`);
       await refresh();

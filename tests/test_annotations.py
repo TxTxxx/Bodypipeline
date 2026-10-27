@@ -1,7 +1,9 @@
 """Tests for the automatic annotation queue, Argus adaptation and deletion guard."""
 
+import io
 import json
 import time
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -274,6 +276,88 @@ def test_native_argus_keys_still_work_without_a_task_key(service, monkeypatch):
     assert env["OPENROUTER_API_KEYS"] == "sk-or-native"
     assert "PIPELINE_ARGUS_API_KEY" not in env
     assert runner.options()["api_key_configured"] is True
+
+
+def test_custom_gateway_can_use_a_model_outside_the_server_allowlist(service):
+    runner, _store, _src, _data = service
+    runner.settings.argus_models = ["openai/gpt-6-astra"]
+    with pytest.raises(DomainError, match="允许列表"):
+        runner.enqueue("job-1", model="acme/vision")
+    row = runner.enqueue(
+        "job-1",
+        model="acme/vision",
+        base_url="https://gateway.example/v1",
+        api_key="task-secret",
+    )
+    assert row["model"] == "acme/vision"
+    assert row["base_url"] == "https://gateway.example/v1"
+
+
+def test_gateway_model_list_uses_task_credentials(service, monkeypatch):
+    runner, _store, _src, _data = service
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size=-1):
+            return json.dumps(
+                {
+                    "data": [
+                        {"id": "acme/vision"},
+                        {"id": "acme/fast"},
+                        {"id": "acme/vision"},
+                    ]
+                }
+            ).encode()
+
+    def fake_urlopen(request, timeout=0):
+        seen["url"] = request.full_url
+        seen["auth"] = request.headers.get("Authorization")
+        seen["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(argus_annotation.urllib.request, "urlopen", fake_urlopen)
+    result = runner.models(
+        base_url="https://gateway.example/v1/", api_key="task-secret"
+    )
+    assert result == {
+        "models": ["acme/vision", "acme/fast"],
+        "base_url": "https://gateway.example/v1",
+    }
+    assert seen["url"] == "https://gateway.example/v1/models"
+    assert seen["auth"] == "Bearer task-secret"
+
+
+def test_gateway_model_list_errors_never_echo_the_key(service, monkeypatch):
+    runner, _store, _src, _data = service
+
+    def fake_urlopen(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":"incorrect key task-secret"}'),
+        )
+
+    monkeypatch.setattr(argus_annotation.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(DomainError) as info:
+        runner.models(base_url="https://gateway.example/v1", api_key="task-secret")
+    assert info.value.code == 502
+    assert "401" in str(info.value)
+    assert "task-secret" not in str(info.value)
+    assert "[redacted]" in str(info.value)
+
+
+def test_gateway_model_list_needs_a_base_url(service):
+    runner, _store, _src, _data = service
+    with pytest.raises(DomainError, match="baseURL"):
+        runner.models(api_key="task-secret")
 
 
 def test_budget_is_shared_with_analyses(service):
@@ -692,6 +776,44 @@ def test_api_accepts_task_credentials_without_persisting_them(service):
         legacy = http.post(f"/api/annotations/{aid}/resume", headers=headers)
         assert legacy.status_code == 200, legacy.text
         assert legacy.json()["state"] == "QUEUED"
+
+
+def test_api_model_list_returns_gateway_catalogue(service, monkeypatch):
+    _runner, _store, _src, _data = service
+    settings = _runner.settings
+    app = create_app(settings, background=False)
+    headers = {"Authorization": "Bearer " + settings.token}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size=-1):
+            return json.dumps({"models": [{"name": "acme/vision"}]}).encode()
+
+    monkeypatch.setattr(
+        argus_annotation.urllib.request,
+        "urlopen",
+        lambda request, timeout=0: FakeResponse(),
+    )
+    with TestClient(app) as http:
+        response = http.post(
+            "/api/annotations/models",
+            headers=headers,
+            json={
+                "base_url": "https://gateway.example/v1",
+                "api_key": "api-secret",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "models": ["acme/vision"],
+            "base_url": "https://gateway.example/v1",
+        }
+        assert "api-secret" not in response.text
 
 
 def test_unavailable_toolchain_disables_enqueue(settings_factory, tmp_path):
