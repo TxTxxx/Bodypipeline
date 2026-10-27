@@ -674,6 +674,12 @@ document.addEventListener("click", (e) => {
 });
 function renderClientCaptures() {
   const rows = captures;
+  const captureReady = controllerTriggerEnabled()
+    ? (clientHealth?.controller_ready ?? clientHealth?.ready)
+    : clientHealth?.ready;
+  const readinessReasons = controllerTriggerEnabled()
+    ? (clientHealth?.controller_reasons ?? clientHealth?.reasons)
+    : clientHealth?.reasons;
   renderClientDatasets();
   const active = rows.find((c) =>
     ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(
@@ -696,11 +702,11 @@ function renderClientCaptures() {
     armed ||
     rows.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id));
   $("start-button").disabled =
-    !!active || !!armed || busy || clientHealth?.ready !== true;
+    !!active || !!armed || busy || captureReady !== true;
   $("start-button").title =
-    clientHealth?.ready === true
+    captureReady === true
       ? ""
-      : (clientHealth?.reasons || []).join("; ") || "采集适配器尚未就绪";
+      : (readinessReasons || []).join("; ") || "采集适配器尚未就绪";
   $("start-button").textContent = controllerTriggerEnabled()
     ? "重试保存数据集"
     : "● 采集下一个 episode";
@@ -717,7 +723,7 @@ function renderClientCaptures() {
         : "选定数据集后自动等待手柄开始，无需逐次准备会话。";
   $("health-label").textContent = active
     ? "● " + (names[active.state] || active.state)
-    : clientHealth?.ready
+    : captureReady
       ? "● 采集适配器就绪"
       : clientHealth ? "○ 适配器尚未就绪" : "○ 健康检查待更新";
   $("capture-state").textContent = !current

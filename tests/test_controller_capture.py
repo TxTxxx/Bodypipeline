@@ -37,7 +37,11 @@ class FakeControllerAdapter:
         self.imports = []
 
     def health(self):
-        return {"ready": True}
+        idle = self.current["phase"] in {"idle", "saved", "cancelled"}
+        return {
+            "ready": idle,
+            "controller_ready": idle or self.current.get("controller_owned") is True,
+        }
 
     def start(self, *args):
         self.starts += 1
@@ -120,6 +124,41 @@ def test_selected_dataset_creates_new_sessions_after_save_and_discard(settings_f
         assert bridge.tick() is False
     assert len(adapter.imports) == 2
     assert (adapter.starts, adapter.stops) == (0, 0)
+
+
+def test_controller_start_racing_selection_is_adopted_without_another_start(
+    settings_factory,
+):
+    service, adapter, bridge = controller(settings_factory)
+    # The hand-controller starts before the debounced dataset selection arrives.
+    adapter.current = recording_status()
+    assert adapter.health()["ready"] is False
+    selected = bridge.select(selection_body())
+    assert bridge.tick() is True
+    row = service.store.all("capture")[0]
+    assert row["state"] == "RECORDING"
+    assert row["controller_session_id"] == adapter.current["session_id"]
+    assert row["dataset_name"] == "controller dataset"
+    assert bridge.select(selection_body()) == selected
+    adapter.current.update(
+        phase="saved",
+        data_state="closed",
+        video_state="closed",
+        path=str(Path(row["raw_root"]).parent / "source"),
+    )
+    assert bridge.tick() is True
+    assert service.store.get("capture", row["id"])["state"] == "SEALING"
+    assert (adapter.starts, adapter.stops) == (0, 0)
+
+
+def test_controller_selection_still_rejects_readiness_failure(settings_factory):
+    service, adapter, bridge = controller(settings_factory)
+    adapter.current = recording_status()
+    adapter.health = lambda: {"ready": False, "controller_ready": False}
+    with pytest.raises(DomainError, match="采集前检查失败"):
+        bridge.select(selection_body())
+    assert bridge.selection() is None
+    assert service.store.all("capture") == []
 
 
 def test_selection_survives_restart_and_does_not_readopt_a_known_session(

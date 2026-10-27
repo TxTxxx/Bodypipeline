@@ -56,14 +56,19 @@ class ControllerCaptureCoordinator:
             if any(row["state"] in BUSY for row in self.service.store.all("capture")):
                 raise DomainError("请先结束或恢复当前采集，再切换手柄数据集", 409)
             health = self.service.adapter.health()
-            if not health.get("ready"):
+            if not health.get("controller_ready", health.get("ready")):
                 raise DomainError(f"采集前检查失败：{health}")
             status = status_fn()
             row = {
                 "id": "selection",
                 "data": data,
                 "selected_at": now(),
-                "excluded_session_id": status.get("session_id"),
+                # A hand-controller start can race the selection request. It is
+                # already recording, so adopt it rather than requiring idle or
+                # issuing another start. Closed/unrelated sessions stay excluded.
+                "excluded_session_id": None
+                if status.get("phase") == "recording" and status.get("controller_owned")
+                else status.get("session_id"),
             }
             self.service.store.put("controller", "selection", row)
             self._disarm_drafts()

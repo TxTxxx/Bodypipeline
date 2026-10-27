@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from pipeline.client.adapters.apex import ApexAdapter
 from pipeline.client.adapters.registry import create_adapter
+from pipeline.client.controller import ControllerCaptureCoordinator
 from pipeline.client.packagers import TianjiMCAPPackager
 from pipeline.client.service import CaptureService
 from pipeline.client.upload import UploadAgent
@@ -58,7 +59,7 @@ def setup_apex(settings_factory, tmp_path, *, timeout=False, drain=True):
             timeout_s=0.01,
         ),
     )
-    state = dict(phase="idle")
+    state = dict(phase="idle", project_id="dedicated")
     calls = []
 
     def handler(request):
@@ -244,10 +245,89 @@ def test_legacy_controller_session_without_request_id_is_detected(
     assert calls == [("GET", "status")]
 
 
+def test_controller_selection_accepts_active_apex_recording(settings_factory, tmp_path):
+    adapter, settings, state, calls, original = setup_apex(settings_factory, tmp_path)
+    settings.controller_trigger.update(enabled=True, accept_missing_request_id=True)
+    state.update(
+        phase="recording",
+        session_id="already-recording",
+        request_id=None,
+        data_state="recording",
+        video_state="recording",
+        path=str(original),
+    )
+    health = adapter.health()
+    assert health["ready"] is False
+    assert health["reasons"] == ["Apex recorder is occupied"]
+    assert health["controller_ready"] is True
+    service = CaptureService(settings, adapter=adapter)
+    coordinator = ControllerCaptureCoordinator(service)
+    coordinator.select(
+        dict(
+            dataset_name="racing selection",
+            instruction="",
+            local_root="default",
+            local_prefix="",
+            remote_target="default",
+            remote_prefix="",
+        )
+    )
+    assert coordinator.tick() is True
+    row = service.store.all("capture")[0]
+    assert row["controller_session_id"] == "already-recording"
+    state.update(phase="saved", data_state="closed", video_state="closed")
+    assert coordinator.tick() is True
+    assert service.store.get("capture", row["id"])["state"] == "SEALING"
+    assert all(method == "GET" for method, route in calls)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"request_id": "another-client-recording"},
+        {"project_id": "another-project"},
+        {"phase": "error"},
+    ],
+)
+def test_controller_readiness_rejects_unrelated_or_failed_apex_session(
+    settings_factory,
+    tmp_path,
+    changes,
+):
+    adapter, settings, state, calls, original = setup_apex(settings_factory, tmp_path)
+    settings.controller_trigger.update(enabled=True, accept_missing_request_id=True)
+    state.update(
+        phase="recording",
+        session_id="some-session",
+        request_id=None,
+        data_state="recording",
+        video_state="recording",
+        path=str(original),
+    )
+    state.update(changes)
+    assert adapter.health()["controller_ready"] is False
+    service = CaptureService(settings, adapter=adapter)
+    coordinator = ControllerCaptureCoordinator(service)
+    with pytest.raises(DomainError, match="采集前检查失败"):
+        coordinator.select(
+            dict(
+                dataset_name="selected dataset",
+                instruction="",
+                local_root="default",
+                local_prefix="",
+                remote_target="default",
+                remote_prefix="",
+            )
+        )
+    assert service.store.all("capture") == []
+    assert all(method == "GET" for method, route in calls)
+
+
 def test_disabled_health_and_close_are_read_only(settings_factory, tmp_path):
     adapter, s, state, calls, original = setup_apex(settings_factory, tmp_path)
     s.capture_options["allow_recording"] = False
     assert not adapter.health()["ready"]
+    assert not adapter.health()["controller_ready"]
     with pytest.raises(DomainError, match="disabled"):
         adapter.start("blocked", tmp_path / "managed", "task")
     adapter.close()

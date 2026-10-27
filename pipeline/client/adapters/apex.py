@@ -83,11 +83,19 @@ class ApexAdapter:
             reasons.append(
                 "Dedicated Apex project path differs from configured storage root"
             )
+        controller_reasons = list(reasons)
         if status.get("phase") not in {"idle", "saved", "cancelled"}:
             reasons.append("Apex recorder is occupied")
+            if not (
+                self._controller_owned(status)
+                and status.get("phase") in {"recording", "saving"}
+            ):
+                controller_reasons.append("Apex recorder is occupied")
         return dict(
             ready=not reasons,
             reasons=reasons,
+            controller_ready=not controller_reasons,
+            controller_reasons=controller_reasons,
             mode="ros2",
             recorder=status,
             motion_control=False,
@@ -106,20 +114,23 @@ class ApexAdapter:
             recorder=status,
         )
 
-    def controller_status(self):
-        """Expose a hand-controller recorder session without claiming it."""
-
-        status = self._call("GET", "status")
+    def _controller_owned(self, status: dict) -> bool:
         request_id = status.get("request_id")
         missing_request_allowed = (
             self.controller_trigger.get("accept_missing_request_id") is True
         )
+        return status.get("project_id") == self.options.get("project_id") and (
+            (isinstance(request_id, str) and request_id.startswith("controller-"))
+            or (request_id is None and missing_request_allowed)
+        )
+
+    def controller_status(self):
+        """Expose a hand-controller session in the configured recording project."""
+
+        status = self._call("GET", "status")
         return dict(
             **status,
-            controller_owned=(
-                isinstance(request_id, str) and request_id.startswith("controller-")
-            )
-            or (request_id is None and missing_request_allowed),
+            controller_owned=self._controller_owned(status),
         )
 
     def _wait(self, predicate):
