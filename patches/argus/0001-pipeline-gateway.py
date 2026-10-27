@@ -8,8 +8,9 @@ What it changes:
 
 1. ``label.harness.OPENROUTER_URL`` / ``OPENAI_URL`` can be pointed at any
    Chat Completions compatible gateway through ``PIPELINE_ARGUS_BASE_URL``.
-2. ``label.harness._post`` uses ``PIPELINE_ARGUS_API_KEY`` when the gateway
-   wants a single key instead of the upstream per-provider keys.
+2. ``PIPELINE_ARGUS_API_KEY`` authenticates a run directly, as an alternative to
+   ``OPENROUTER_API_KEYS`` / ``OPENAI_API_KEY``. With
+   ``PIPELINE_ARGUS_BASE_URL`` set it is the single key for that gateway.
 3. Request bodies drop provider-specific fields that a generic gateway rejects
    (``reasoning``, ``usage.include``, ``provider.max_price``) when
    ``PIPELINE_ARGUS_GENERIC_GATEWAY=1``.
@@ -27,8 +28,9 @@ import os
 import re
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
 MARKER = "# pipeline-argus-integration:v1"
+GATEWAY_MARKER = "# pipeline-argus-gateway-key:v3"
 
 
 def _insert_after(text: str, anchor: str, addition: str) -> str:
@@ -107,6 +109,73 @@ def patch_harness(path: Path) -> None:
             1,
         )
 
+    path.write_text(text)
+
+
+GATEWAY_BLOCK = '''    if _GENERIC:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+        }
+        return _post(OPENROUTER_URL, body, _gateway_key() or api_key, timeout, attempts=attempts)
+'''
+
+
+def patch_gateway_key(path: Path) -> None:
+    """Let PIPELINE_ARGUS_API_KEY authenticate a run without upstream keys.
+
+    Upstream Argus reads only OPENROUTER_API_KEYS / OPENAI_API_KEY, so the key
+    the Server already passes for paid labelling was ignored.  A gateway key is
+    not necessarily shaped like an OpenRouter key either, so a generic gateway
+    must be selected before the key-type branch, not after it.
+    """
+
+    text = path.read_text()
+    if GATEWAY_MARKER in text:
+        return
+
+    anchor = "    def split(var):\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError("unexpected Argus layout: get_keys() split() missing")
+    text = text.replace(
+        anchor,
+        "    " + GATEWAY_MARKER + "\n"
+        + "    if _gateway_key():\n"
+        + "        return [_gateway_key()]\n"
+        + anchor,
+        1,
+    )
+
+    # The same block is added by patch_harness() when it first applies the
+    # integration, inside the OpenRouter branch.  A gateway key may not look
+    # like an OpenRouter key, so move the generic branch before that check.
+    generic = (
+        '    if _GENERIC:\n'
+        '        body = {\n'
+        '            "model": model,\n'
+        '            "messages": [{"role": "user", "content": content}],\n'
+        '            "max_tokens": max_tokens,\n'
+        '            "response_format": {"type": "json_object"},\n'
+        '        }\n'
+        '        return _post(OPENROUTER_URL, body, _gateway_key() or api_key, timeout, attempts=attempts)\n'
+    )
+    if text.count(generic) != 1:
+        raise RuntimeError("unexpected Argus layout: generic call block missing")
+    text = text.replace(generic, "", 1)
+
+    signature = (
+        "def call_model(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,\n"
+        "               *, attempts: int = 6, pricing_quote=None) -> dict:\n"
+    )
+    if text.count(signature) != 1:
+        raise RuntimeError("unexpected Argus layout: call_model() signature missing")
+    text = text.replace(
+        signature,
+        signature + "    " + GATEWAY_MARKER + "\n" + GATEWAY_BLOCK,
+        1,
+    )
     path.write_text(text)
 
 
@@ -256,6 +325,7 @@ def patch_mounting(root: Path) -> None:
 
 def apply(root: Path) -> dict:
     patch_harness(root / "label" / "harness.py")
+    patch_gateway_key(root / "label" / "harness.py")
     patch_pricing(root / "label" / "pricing.py")
     patch_label_module(root)
     patch_mounting(root)

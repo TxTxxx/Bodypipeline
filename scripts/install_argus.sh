@@ -55,7 +55,8 @@ git -C "$SRC" submodule update --init --depth 1 || true
 # the checkout is managed by this script, so resetting to the pinned commit is
 # safe as long as nobody added work on top of it.
 if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
-   || ! grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py"; then
+   || ! grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py" \
+   || ! grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py"; then
   git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
@@ -64,6 +65,10 @@ fi
 
 grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py" || {
   echo "Argus mounting hook was not applied" >&2
+  exit 1
+}
+grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py" || {
+  echo "Argus gateway key hook was not applied" >&2
   exit 1
 }
 
@@ -111,7 +116,10 @@ Add these to the Server config:
   "argus_annotation_concurrency": 8,
   "argus_annotation_timeout": 86400
 
-Paid labelling needs PIPELINE_ARGUS_API_KEY in the Server environment.
-The automatic annotation page resolves the `review` module above; it must stay
-on the pinned commit so its stage names and sidecar layout match the parser.
+Paid labelling needs a model key in the Server environment: either
+PIPELINE_ARGUS_API_KEY, or OPENROUTER_API_KEYS / OPENAI_API_KEY as upstream
+Argus reads them. With argus_base_url set, PIPELINE_ARGUS_API_KEY is sent to
+that gateway. The automatic annotation page resolves the `review` module above;
+it must stay on the pinned commit so its stage names and sidecar layout match
+the parser.
 EOF
