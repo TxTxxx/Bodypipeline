@@ -1,0 +1,17 @@
+{
+  "root": ".runtime/server",
+  "processing_mode": "real",
+  "auto_process": false,
+  "letools_bin": ".runtime/letools-venv/bin/letools",
+  "tianji_provider_bin": ".runtime/letools-venv/bin/tianji-provider",
+  "profiles": {
+    "tianji_thor": {
+      "profile_path": "configs/tianji-thor-v1.json",
+      "provider": "tianji",
+      "raw_formats": ["tianji_mcap_v1", "tianji_ros2_mcap_v1"],
+      "accepted_capture_profile_hashes": []
+    }
+  },
+  "default_profile": "tianji_thor",
+  "viewer_origin": "http://127.0.0.1:8082"
+}

@@ -220,19 +220,38 @@ function renderMeta(job, report) {
       ? "模拟数据"
       : job.capture_mode === "imported"
         ? "历史导入"
-        : "实机采集";
+        : job.operation === "version_conversion"
+          ? "LeRobot 版本转换"
+          : "实机采集";
   return `<dl class="report-meta">
     ${metaItem("数据集", esc(job.dataset_name || job.instruction || "未命名数据集"))}
     ${metaItem("机器人类型", esc(job.robot_type || "未标注"))}
     ${metaItem("目标格式", "LeRobot " + esc(job.target_format || "v3.0"))}
+    ${
+      job.operation === "version_conversion"
+        ? metaItem(
+            "来源版本",
+            `LeRobot ${esc(job.source_format || "—")} → ${esc(job.target_format || "—")}`,
+          )
+        : ""
+    }
     ${metaItem("来源模式", esc(mode))}
     ${metaItem("Episodes", esc(report?.total_episodes ?? job.episode_count ?? job.source_count ?? "—"))}
-    ${metaItem("总帧数", esc(report?.total_frames ?? "—"))}
+    ${metaItem("总帧数", esc(report?.total_frames ?? job.frame_count ?? "—"))}
     ${metaItem("任务状态", badge_state(job.state))}
     ${metaItem("FPS", esc(report?.fps ?? "—"))}
     ${metaItem("创建时间", esc(timeText(job.created_at)))}
     ${metaItem("完成时间", esc(timeText(job.finished_at)))}
     ${metaItem("Instruction", esc(job.instruction || "—"))}
+    ${job.conversion_options?.gripper_closure ? metaItem("夹持阶段最小闭合度", `${esc(job.conversion_options.gripper_closure.minimum_percent)}%（电机名义行程）`) : ""}
+    ${
+      job.operation === "version_conversion"
+        ? metaItem(
+            "来源数据集",
+            `${esc(job.source_dataset_name || "—")} · ${esc(job.source_job_id || "—")}`,
+          )
+        : ""
+    }
     ${metaItem("任务 ID", esc(job.id), "mono")}
     ${
       job.dataset_path
@@ -324,15 +343,20 @@ function renderRuns(job, checks, active) {
       </button>`,
     ),
   ];
+  const sourceValidate = job.operation === "version_conversion"
+    ? '<button class="secondary" type="button" data-log="environment">环境日志</button><button class="secondary" type="button" data-log="source-validate">来源验证日志</button>'
+    : "";
   const logButtons = active.row
     ? `<div class="log-actions">
         <button class="secondary" type="button" data-log="doctor" data-check="${esc(active.row.id)}">质检日志</button>
         <button class="secondary" type="button" data-log="validate" data-check="${esc(active.row.id)}">验证日志</button>
+        ${sourceValidate}
         <button class="secondary" type="button" data-log="convert">转换日志</button>
       </div>`
     : `<div class="log-actions">
         <button class="secondary" type="button" data-log="doctor">自动质检日志</button>
         <button class="secondary" type="button" data-log="validate">验证日志</button>
+        ${sourceValidate}
         <button class="secondary" type="button" data-log="convert">转换日志</button>
       </div>`;
   const stateLabel = active.row
@@ -461,9 +485,11 @@ function renderRaw(job, active) {
           JSON.stringify(
             {
               alignment_report: job.alignment_report || null,
+              conversion_options: job.conversion_options || {},
               robot_report: job.robot_report || null,
               quality_gate: job.quality_gate || null,
               episode_diagnostics: job.episode_diagnostics || null,
+              selection_report: job.selection_report || null,
             },
             null,
             2,
@@ -472,6 +498,13 @@ function renderRaw(job, active) {
       </details>
     </div>
   </section>`;
+}
+
+function renderEpisodeSelection(job) {
+  const selection = job.selection_report;
+  if (!selection) return "";
+  const rejected = (job.episode_diagnostics || []).filter((row) => !row.passed);
+  return `<section class="panel"><h2>采集筛选结果</h2><p>${job.invalid_episode_policy === "skip" ? "跳过不合格采集" : "全部通过才转换"} · 输入 ${esc(selection.input_count)} · 通过 ${esc(selection.accepted_count)} · 跳过 ${esc(selection.skipped_count)} · 失败 ${esc(selection.failed_count)}</p>${rejected.length ? `<ul>${rejected.map((row) => `<li>输入 episode ${esc(row.episode_index)} · <code>${esc(row.upload_id)}</code> · ${row.skippable && job.invalid_episode_policy === "skip" ? "已跳过" : "任务失败"}：${esc(row.error)}</li>`).join("")}</ul>` : ""}</section>`;
 }
 
 function renderBlocked(job) {
@@ -648,6 +681,7 @@ function renderReport(job, checks) {
   $("report-content").innerHTML = `
     ${renderMeta(job, report)}
     ${renderBlocked(job)}
+    ${renderEpisodeSelection(job)}
     ${renderHero(report, active.gate)}
     ${renderRuns(job, checks, active)}
     ${

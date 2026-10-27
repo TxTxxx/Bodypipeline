@@ -162,6 +162,7 @@ PIPELINE_BRIDGE_TOKEN
   "auto_process": false,
   "viewer_origin": "http://127.0.0.1:8082",
   "letools_bin": "/opt/bodypipeline/.runtime/letools-venv/bin/letools",
+  "tianji_provider_bin": "/opt/bodypipeline/.runtime/letools-venv/bin/tianji-provider",
   "viewer_bun": "/opt/bodypipeline/.runtime/viewer-toolchain/node_modules/.bin/bun"
 }
 ```
@@ -177,11 +178,12 @@ PIPELINE_BRIDGE_TOKEN
 | `auto_process` | 是否自动处理单个上传；批量工作流建议 `false` |
 | `viewer_origin` | 浏览器可访问的 Viewer 根地址 |
 | `letools_bin` | letools CLI |
+| `tianji_provider_bin` | Tianji MCAP inspect CLI，与 `letools_bin` 使用同一 Python 环境 |
 | `viewer_bun` | Bun 可执行文件，留空时从 `PATH` 查找 |
 
 旧版单 Profile 配置仍兼容：未提供 `profiles` 时，`profile_path` 会生成 Runtime `default`。新部署应使用显式 `profiles`，这样后续新增机器人只需注册新 Runtime，不需要替换所有机器人共用的 Profile。
 
-内置 Provider：`agilex`（AgileX 时间戳流与 HDF5 采集包）与 `aloha_hdf5`（上游 ALOHA 风格逐 episode HDF5，按 Profile 声明的字段做 schema 翻译）。`provider` 必须是这些已注册的 ID；未注册的取值会在启动时直接报错。
+内置 Provider：`agilex`（AgileX 时间戳流与 HDF5 采集包）、`aloha_hdf5`（上游 ALOHA 风格逐 episode HDF5，按 Profile 声明的字段做 schema 翻译）和 `tianji`（Tianji/Marvin Pro MCAP 录制）。`provider` 必须是这些已注册的 ID；未注册的取值会在启动时直接报错。
 
 `import_roots` 也会被加入数据集预览的允许根。不要配置 `/` 或包含敏感数据的父目录。
 
@@ -364,9 +366,15 @@ Server 管理员可在页面导入：
 
 ```text
 letools convert <aligned> <dataset> --source-format hdf5 --preset <generated-preset> --to v2.1|v3.0
+letools convert <source> <dataset> --source-format lerobot --to v2.1|v3.0
 letools validate <dataset>
 letools doctor check <dataset> --json ...
 ```
+
+第二行用于“已有 LeRobot 版本转换”。该路径不读取机器人 Profile，不执行 HDF5 对齐；
+来源必须是已登记的 v2.1 / v3.0 数据集，来源和目标版本必须不同。已有 MP4 只做 Letools
+版本 remux / 切片，不传额外视频编码参数。来源文件保持只读，结果写入新的
+`work/<job_id>/dataset` 并应用共享权限。
 
 Server 固定排除 Doctor 的 kinematics 检查，执行其余 11 项非运动学检查。关节限位不参与转换准入。
 

@@ -139,6 +139,10 @@ class RecycleBin:
     def change(self, repo, action, episodes, revision):
         key, path = self.resolve(repo)
         with dataset_lock(self.store, key):
+            # A whole-dataset deletion may revoke the preview after resolve but
+            # before we acquire the lock. Never operate using that stale handle.
+            if self.registry.lookup(repo) is None:
+                raise DomainError("预览已关闭或数据集正在删除", 409)
             row = self._recover(self._load(key, path))
             if (row.get("operation") or {}).get("state") in {"running", "pending"}:
                 raise DomainError("正在永久清理，请等待完成", 409)

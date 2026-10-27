@@ -1,0 +1,16 @@
+{
+  "root": ".runtime/server-g1-sonic",
+  "processing_mode": "real",
+  "auto_process": false,
+  "letools_bin": ".runtime/letools-venv/bin/letools",
+  "profiles": {
+    "g1_sonic11_brainco": {
+      "profile_path": "configs/g1-sonic11-brainco-v1.json",
+      "provider": "g1_sonic",
+      "raw_formats": ["g1_sonic_raw_v1"],
+      "accepted_capture_profile_hashes": []
+    }
+  },
+  "default_profile": "g1_sonic11_brainco",
+  "viewer_origin": "http://127.0.0.1:8082"
+}

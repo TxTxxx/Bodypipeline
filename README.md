@@ -23,6 +23,7 @@ BodyPipeline 在机器人端提供 Web 数采工作台，在服务器端统一�
 | 机器人接口隔离 | `CaptureAdapter` 统一采集契约，ROS2 Bridge 对接机器人现有采集服务 |
 | 单文件 HDF5 上传 | AgileX ALOHA 采集封存为 `episode.hdf5`，分块传输、字节级断点续传、SHA-256、失败重试和持久化回执 |
 | Server 批量转换 | 按机器人类型和数据集选择多个 episode，统一填写 instruction，一次转换成一个 LeRobot v2.1 / v3.0 数据集 |
+| 已有数据集版本转换 | 从已转换、已导入或已合并的数据集中选择来源，使用 LeTools 在 v2.1 与 v3.0 之间双向转换并生成独立结果 |
 | 时间对齐 | 固定输出帧率、有界相机最近帧、因果关节保持和逐 episode 诊断 |
 | 质量检查 | 转换结构检查、LeRobot deep validate、11 项 LeRobot Doctor 检查 |
 | 数据预览 | Server 页面直接启动无鉴权只读 Visualizer，支持多相机视频 Range |
@@ -167,6 +168,7 @@ Server 页面分为三个侧边栏工作区：
 - 选择目标格式：LeRobot `v2.1` 或 `v3.0`。
 - 为整个批次填写 instruction。
 - 可选转换完成后自动运行 Doctor。
+- 在“已有 LeRobot 版本转换”中选择现有 v2.1 / v3.0 数据集，转换为另一版本；来源数据保持不变，Task、特征、统计信息和视频内容沿用 LeTools 的语义转换结果。
 - 同一批次的每个 HDF5 episode 先生成独立的 `aligned/episodeN.hdf5`，再一次性转换成一个包含 N 个 episode 的 LeRobot 数据集。
 - 批量任务要求所有来源属于同一 Runtime、Profile、collection 和采集模式；只要任一 episode 失败，任务不会生成正式可预览数据集，但会保留逐 episode 诊断。
 - 查看对齐帧数、相机偏差、关节保持年龄、转换日志和逐 episode 诊断。

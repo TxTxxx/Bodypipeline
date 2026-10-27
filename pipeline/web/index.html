@@ -59,7 +59,7 @@
           <button class="nav-item" type="button" data-server-tab="uploads" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg><span>原始数据</span><span class="nav-count" id="nav-upload-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="convert" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>数据转换</span><span class="nav-count" id="nav-job-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="results" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg><span>预览与质检</span><span class="nav-count" id="nav-result-count">0</span></button>
-          <button class="nav-item" type="button" data-server-tab="merge" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v3c0 3 8 3 8 6v7M20 4v3c0 3-8 3-8 6m-4 3 4 4 4-4"/></svg><span>数据集合并</span><span class="nav-count" id="nav-merge-count">0</span></button>
+          <button class="nav-item" type="button" data-server-tab="merge" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h8M8 16h5"/></svg><span>数据集管理</span><span class="nav-count" id="nav-merge-count">0</span></button>
         </nav>
         <div class="sidebar-bottom"><strong><span class="dot"></span> 文件目录存储</strong><p>原始数据保留<br />转换与质检记录可追溯</p><span class="version">BodyPipeline / 0.1</span></div>
       </aside>
@@ -210,7 +210,7 @@
             </div>
           <section id="server-view" hidden>
             <div class="warning" id="demo-warning" hidden>
-              演示模式只验证上传与时间对齐。真实格式转换、Doctor 和 Visualizer 需部署真实工具环境。
+              演示模式只影响原始采集转换；已有 LeRobot 版本转换与数据集合并仍执行真实处理。
             </div>
             <section class="panel robot-scope" data-server-overview aria-label="选择机器人类型">
               <div>
@@ -279,10 +279,48 @@
                     <div class="episode-toolbar"><label class="check-label"><input id="episode-all" type="checkbox" />全选已接收采集</label><span id="episode-selection-count" class="small muted"></span></div>
                     <div class="table-scroll"><table><thead><tr><th>选择</th><th>采集 / 设备</th><th>数据规模</th><th>状态</th></tr></thead><tbody id="episode-list"></tbody></table></div>
                   </div>
+                  <div id="conversion-closure" hidden>
+                    <label class="check-label" for="conversion-closure-enabled"><input id="conversion-closure-enabled" type="checkbox" />启用夹爪闭合度修正</label>
+                    <div id="conversion-closure-fields" class="field-block" hidden>
+                      <label for="conversion-closure-percent">夹持阶段最小闭合度（名义行程 %）</label>
+                      <input id="conversion-closure-percent" type="number" min="0" max="100" step="0.1" value="90" disabled />
+                      <p class="small muted">仅提高识别出的稳定夹持阶段的夹爪动作目标，保留已经更闭合的动作。百分比表示配置中的电机名义行程，不代表夹持力。</p>
+                    </div>
+                  </div>
+                  <label for="conversion-invalid-policy">不合格采集处理</label>
+                  <select id="conversion-invalid-policy">
+                    <option value="fail">全部通过才转换</option>
+                    <option value="skip">跳过不合格采集，转换合格部分</option>
+                  </select>
+                  <p class="small muted">跳过的采集保留原始数据和原因；全部不合格时任务失败。工具或系统错误仍会终止任务。</p>
                   <label class="check-label" for="conversion-doctor"><input id="conversion-doctor" type="checkbox" checked />转换后自动运行 LeRobot Doctor</label>
                   <p class="small muted">自动质检仅生成质量报告，不改变转换结果。取消勾选时仅转换与结构验证，之后仍可直接预览或单独质检。</p>
                   <div id="conversion-warning" class="warning" hidden></div>
                   <div class="conversion-submit"><button id="conversion-submit" class="primary" type="submit" disabled>提交批量转换</button><span id="conversion-help" class="small muted">请选择数据集并填写 instruction。</span></div>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><h2>已有 LeRobot 版本转换</h2><span class="step">VERSION ROUND-TRIP</span></div>
+                <form id="version-conversion-form" class="conversion-form">
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="version-conversion-source">选择已有数据集 <span class="required">*</span></label>
+                      <select id="version-conversion-source" required disabled><option value="">请先选择机器人类型</option></select>
+                      <div id="version-conversion-source-summary" class="source-summary small muted">选择已转换、已导入或已合并的 LeRobot v2.1 / v3.0 数据集。</div>
+                    </div>
+                    <div>
+                      <label for="version-conversion-target">目标版本</label>
+                      <select id="version-conversion-target" disabled><option value="">选择来源后自动确定</option></select>
+                      <p class="small muted">仅支持 v2.1 ↔ v3.0 双向转换；来源数据集保持不变。</p>
+                    </div>
+                  </div>
+                  <label for="version-conversion-name">新数据集名称 <span class="required">*</span></label>
+                  <input id="version-conversion-name" required maxlength="2000" autocomplete="off" placeholder="选择来源后自动填写，也可以修改" />
+                  <p class="small muted">Episodes、Task 文本、特征、统计信息与视频内容由 LeTools 转换，不会要求重新填写 instruction。</p>
+                  <label class="check-label" for="version-conversion-doctor"><input id="version-conversion-doctor" type="checkbox" checked />转换后自动运行 LeRobot Doctor</label>
+                  <p class="small muted">转换和深度结构验证始终执行；Doctor 仅生成质量报告，不修改结果。</p>
+                  <div id="version-conversion-warning" class="warning" hidden></div>
+                  <div class="conversion-submit"><button id="version-conversion-submit" class="primary" type="submit" disabled>创建版本转换任务</button><span id="version-conversion-help" class="small muted">请选择一个可用的 LeRobot 数据集。</span></div>
                 </form>
               </section>
               <section class="panel">
@@ -308,6 +346,19 @@
               </section>
             </div>
             <div data-server-panel="merge" hidden>
+              <section class="panel">
+                <div class="panel-heading"><h2>已有数据集</h2><span class="step">DATASET MANAGEMENT</span></div>
+                <p class="panel-note small muted">管理当前机器人下的原始数据和 LeRobot 数据集。删除会永久移除服务器上的实际文件；原始数据与转换结果分别删除，已经生成的独立合并结果会保留。</p>
+                <div class="dataset-filters">
+                  <label>数据类型<select id="dataset-kind"><option value="">全部数据</option><option value="raw">原始数据</option><option value="result">LeRobot 数据集</option></select></label>
+                  <label>搜索数据集<input id="dataset-search" type="search" placeholder="输入名称或 ID" /></label>
+                </div>
+                <div class="table-scroll"><table><thead><tr><th>数据集 / 类型</th><th>数据规模</th><th>实际删除范围</th><th>状态</th><th>操作</th></tr></thead><tbody id="dataset-list"></tbody></table></div>
+              </section>
+              <section class="panel" id="dataset-deletion-panel" hidden>
+                <div class="panel-heading"><h2>删除记录</h2><span class="step">DELETION HISTORY</span></div>
+                <div class="table-scroll"><table><thead><tr><th>数据集</th><th>类型</th><th>状态</th><th>结果 / 操作</th></tr></thead><tbody id="dataset-deletion-list"></tbody></table></div>
+              </section>
               <section class="panel">
                 <div class="panel-heading"><h2>合并为新数据集</h2><span class="step">MERGE DATASETS</span></div>
                 <p class="panel-note small muted">选择至少两个已转换或已导入的 LeRobot 数据集。按勾选顺序拼接 Episodes，保留各自的 instruction，生成独立的新数据集；相同片段不会自动去重。</p>
@@ -342,6 +393,19 @@
         </main>
       </div>
     </div>
+    <dialog id="dataset-delete-dialog" class="dataset-delete-dialog" aria-labelledby="dataset-delete-title" aria-describedby="dataset-delete-warning">
+      <form id="dataset-delete-form">
+        <div class="panel-heading"><h2 id="dataset-delete-title">永久删除数据集</h2><button type="button" class="text-button" id="dataset-delete-close" aria-label="关闭删除确认">关闭</button></div>
+        <div class="dataset-delete-body">
+          <p class="warning" id="dataset-delete-warning">此操作会永久删除服务器上的实际文件，无法恢复。原始数据与转换结果独立管理。</p>
+          <p id="dataset-delete-description" class="small"></p>
+          <div id="dataset-delete-paths" class="path-hint"></div>
+          <label for="dataset-delete-confirmation">请输入完整的数据集名称以确认删除</label>
+          <input id="dataset-delete-confirmation" required autocomplete="off" />
+          <div class="conversion-submit"><button type="button" class="secondary" id="dataset-delete-cancel">取消</button><button class="danger" id="dataset-delete-submit" type="submit" disabled>永久删除</button></div>
+        </div>
+      </form>
+    </dialog>
     <button type="button" class="theme-toggle login-theme-toggle" data-theme-toggle aria-label="切换深夜与浅色模式"><span class="theme-label-light">浅色模式</span><span class="theme-label-dark">深夜模式</span></button>
   </body>
 </html>

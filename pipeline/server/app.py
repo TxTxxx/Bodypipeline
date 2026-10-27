@@ -16,7 +16,10 @@ from pipeline.shared.web import mount_ui
 
 from .analyses import AnalysisRunner
 from .checks import QualityRunner
+from .conversion_options import ConversionOptions
+from .dataset_management import DELETION_STATES, DatasetManager
 from .datasets import TARGET_FORMATS, dataset_for_job
+from .episode_validation import InvalidEpisodePolicy
 from .imports import ImportService
 from .ingest import IngestService
 from .jobs import JobRunner
@@ -31,6 +34,8 @@ class ConversionRequest(BaseModel):
     target_format: Literal["v3.0", "v2.1"] = "v3.0"
     run_doctor: StrictBool = True
     instruction: str | None = Field(default=None, min_length=1, max_length=2000)
+    conversion_options: ConversionOptions = Field(default_factory=ConversionOptions)
+    invalid_episode_policy: InvalidEpisodePolicy = "fail"
 
 
 class BatchConversionRequest(ConversionRequest):
@@ -57,6 +62,21 @@ class MergeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=2000)
 
 
+class VersionConversionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_job_id: str = Field(min_length=1, max_length=128)
+    target_format: Literal["v3.0", "v2.1"]
+    name: str | None = Field(default=None, min_length=1, max_length=2000)
+    run_doctor: StrictBool = True
+
+
+class DatasetDeletionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["raw", "result"]
+    id: str = Field(min_length=1, max_length=128)
+    confirmation: str = Field(min_length=1, max_length=2000)
+
+
 log = logging.getLogger("pipeline.server")
 
 
@@ -74,6 +94,9 @@ def create_app(settings, background=True):
     )
     analyses = AnalysisRunner(settings, ingest.store, runner.command)
     viewer = ViewerManager(settings, ingest.store)
+    datasets = DatasetManager(settings, runner, viewer)
+    # Enqueueing consumers and marking deletions share one admission lock.
+    checks.lock = analyses.lock = runner.lock
     lock = ProcessLock(settings.root / "server.lock")
     stopping = asyncio.Event()
 
@@ -81,7 +104,7 @@ def create_app(settings, background=True):
         while not stopping.is_set():
             # One failing worker must not stop the shared loop: a dead loop means
             # every later job, check and analysis silently stops being picked up.
-            for worker in (runner.tick, checks.tick, analyses.tick):
+            for worker in (datasets.tick, runner.tick, checks.tick, analyses.tick):
                 if stopping.is_set():
                     break
                 try:
@@ -114,6 +137,7 @@ def create_app(settings, background=True):
         checks.recover()
         analyses.recover()
         viewer.recover()
+        datasets.recover()
         tasks = (
             [asyncio.create_task(loop()), asyncio.create_task(viewer_loop())]
             if background
@@ -135,6 +159,7 @@ def create_app(settings, background=True):
     app.state.checks = checks
     app.state.analyses = analyses
     app.state.runtimes = runtimes
+    app.state.datasets = datasets
     install_security(app, settings, device_prefix="/device/")
     mount_ui(app, report=True)
 
@@ -163,9 +188,25 @@ def create_app(settings, background=True):
 
     @app.post("/api/imports", status_code=201)
     def import_dataset(body: ImportRequest):
-        return imports.import_path(
-            body.path, body.robot_type, runtime_id=body.runtime_id
-        )
+        with runner.lock, ingest.lock:
+            datasets.check_import(body.path)
+            return imports.import_path(
+                body.path, body.robot_type, runtime_id=body.runtime_id
+            )
+
+    @app.get("/api/datasets")
+    def managed_datasets():
+        # Listing is advisory; enqueue revalidates under both admission locks.
+        # Filesystem reads must not hold up uploads or new conversion requests.
+        return datasets.listing()
+
+    @app.post("/api/dataset-deletions", status_code=202)
+    def delete_dataset(body: DatasetDeletionRequest):
+        return datasets.enqueue(body.kind, body.id, body.confirmation)
+
+    @app.post("/api/dataset-deletions/{identifier}/retry", status_code=202)
+    def retry_deletion(identifier: str):
+        return datasets.retry(identifier)
 
     def authorize_upload(uid, request):
         row = ingest.store.get("upload", uid)
@@ -246,6 +287,8 @@ def create_app(settings, background=True):
     def uploads():
         rows = []
         for row in ingest.store.all("upload"):
+            if row["state"] in DELETION_STATES:
+                continue
             result = {**row, "conversion_blockers": []}
             blockers = result["conversion_blockers"]
             try:
@@ -345,11 +388,26 @@ def create_app(settings, background=True):
 
     @app.get("/api/jobs")
     def jobs():
-        return [job_response(row) for row in ingest.store.all("job")]
+        return [job_response(row) for row in ingest.store.all("job") if row["state"] not in DELETION_STATES]
 
     @app.get("/api/merge-candidates")
     def merge_candidates():
         return runner.merges.candidates()
+
+    @app.get("/api/version-conversion-candidates")
+    def version_conversion_candidates():
+        return runner.version_conversions.candidates()
+
+    @app.post("/api/version-conversions", status_code=202)
+    def convert_version(body: VersionConversionRequest):
+        return job_response(
+            runner.version_conversions.enqueue(
+                body.source_job_id,
+                body.target_format,
+                name=body.name,
+                run_doctor=body.run_doctor,
+            )
+        )
 
     @app.post("/api/merges", status_code=202)
     def merge(body: MergeRequest):
@@ -424,7 +482,14 @@ def create_app(settings, background=True):
 
     @app.get("/api/jobs/{jid}/logs/{name}")
     def logs(jid: str, name: str):
-        if name not in {"convert", "validate", "doctor", "merge"}:
+        if name not in {
+            "convert",
+            "validate",
+            "doctor",
+            "merge",
+            "source-validate",
+            "environment",
+        }:
             raise DomainError("日志不存在", 404)
         row = ingest.store.get("job", jid)
         p = storage_path(settings, row, "work", row["id"]) / f"{name}.stderr.log"
@@ -434,7 +499,8 @@ def create_app(settings, background=True):
 
     @app.post("/api/jobs/{jid}/viewer")
     def open_viewer(jid: str):
-        return viewer.open(ingest.store.get("job", jid))
+        with runner.lock:
+            return viewer.open(ingest.store.get("job", jid))
 
     @app.delete("/api/jobs/{jid}/viewer")
     def close_viewer(jid: str):

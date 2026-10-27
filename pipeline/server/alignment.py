@@ -11,6 +11,8 @@ from PIL import Image
 
 from pipeline.shared.core import DomainError, atomic_json, fsync_dir
 
+from .episode_validation import EpisodeValidationError
+
 
 def series(path: Path, ext: str):
     files = list(path.glob("*" + ext))
@@ -19,13 +21,13 @@ def series(path: Path, ext: str):
         try:
             t = float(p.stem)
         except ValueError as exc:
-            raise DomainError(f"无效时间戳：{p.name}") from exc
+            raise EpisodeValidationError(f"无效时间戳：{p.name}") from exc
         if not math.isfinite(t) or p.is_symlink():
             raise DomainError("原始时间序列有非法时间戳或符号链接")
         pairs.append((t, p))
     pairs.sort()
     if not pairs or len({t for t, _ in pairs}) != len(pairs):
-        raise DomainError(f"空或重复时间序列：{path.name}")
+        raise EpisodeValidationError(f"空或重复时间序列：{path.name}")
     return [t for t, _ in pairs], [p for _, p in pairs]
 
 
@@ -68,7 +70,7 @@ def prepare_agilex(raw: Path, dest: Path, profile: dict):
     stop = min(v[0][-1] for v in streams.values())
     n = math.floor((stop - start) * fps + 1e-5) + 1
     if n < profile["minimum_frames"] or n > 10_000_000:
-        raise DomainError(f"有效公共区间过短/过大：{n} 帧")
+        raise EpisodeValidationError(f"有效公共区间过短/过大：{n} 帧")
     dest.mkdir(parents=True)
     report = {
         "fps": fps,
@@ -96,24 +98,39 @@ def prepare_agilex(raw: Path, dest: Path, profile: dict):
             else:
                 j = bisect.bisect_right(times, t) - 1
                 if j < 0:
-                    raise DomainError("没有因果前置关节样本")
+                    raise EpisodeValidationError("没有因果前置关节样本")
                 offset, bound = t - times[j], joint_bound
             if offset > bound:
-                raise DomainError(
+                raise EpisodeValidationError(
                     f"时间对齐越界：{rel} frame={i} error={offset * 1000:.3f}ms limit={bound * 1000:.3f}ms"
                 )
             source = paths[j]
             # Decode/validate every selected source once. Corrupt media cannot pass by filename alone.
             if j not in used:
                 if camera:
-                    with Image.open(source) as image:
-                        image.load()
-                        if shape is None:
-                            shape = image.size
-                        if image.size != shape or image.mode != "RGB":
-                            raise DomainError(f"相机分辨率或颜色模式不一致：{rel}")
+                    # File reads stay outside decoding so filesystem failures
+                    # cannot become skippable image-content rejections.
+                    encoded = source.read_bytes()
+                    try:
+                        with Image.open(io.BytesIO(encoded)) as image:
+                            image.load()
+                            if shape is None:
+                                shape = image.size
+                            if image.size != shape or image.mode != "RGB":
+                                raise EpisodeValidationError(
+                                    f"相机分辨率或颜色模式不一致：{rel}"
+                                )
+                    except (OSError, ValueError) as exc:
+                        raise EpisodeValidationError(f"相机图像损坏：{rel}") from exc
                 else:
-                    values = json.loads(source.read_text()).get("position")
+                    text = source.read_text()
+                    try:
+                        document = json.loads(text)
+                    except json.JSONDecodeError as exc:
+                        raise EpisodeValidationError(f"关节 JSON 无效：{rel}") from exc
+                    values = (
+                        document.get("position") if isinstance(document, dict) else None
+                    )
                     if (
                         not isinstance(values, list)
                         or len(values) != 7
@@ -121,7 +138,9 @@ def prepare_agilex(raw: Path, dest: Path, profile: dict):
                             type(v) in (float, int) and math.isfinite(v) for v in values
                         )
                     ):
-                        raise DomainError(f"关节数据要求 7 个有限 position：{rel}")
+                        raise EpisodeValidationError(
+                            f"关节数据要求 7 个有限 position：{rel}"
+                        )
                 used.add(j)
             repeats += previous == j
             previous = j
@@ -188,7 +207,7 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
     joint_files = []
     with h5py.File(raw, "r") as source:
         if source.attrs.get("schema") != AGILEX_HDF5_SCHEMA:
-            raise DomainError("HDF5 原始包 schema 不兼容")
+            raise EpisodeValidationError("HDF5 原始包 schema 不兼容")
         streams = {}
         for camera in profile["cameras"]:
             camera_id = camera["id"]
@@ -198,7 +217,7 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
             width = int(group.attrs["width"])
             height = int(group.attrs["height"])
             if len(times) != len(group["jpeg"]):
-                raise DomainError(f"HDF5 相机流长度不一致：{camera_id}")
+                raise EpisodeValidationError(f"HDF5 相机流长度不一致：{camera_id}")
             camera_files.append((camera_id, width, height))
             streams[f"camera/color/{camera_id}"] = {
                 "times": times,
@@ -212,11 +231,13 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
             times = np.asarray(group["timestamps"], dtype=np.float64)
             positions = np.asarray(group["position"], dtype=np.float32)
             if positions.ndim != 2 or positions.shape[0] != len(times):
-                raise DomainError(f"HDF5 关节流维度不一致：{role}")
+                raise EpisodeValidationError(f"HDF5 关节流维度不一致：{role}")
+            if not np.isfinite(positions).all():
+                raise EpisodeValidationError(f"HDF5 关节流包含非有限值：{role}")
             if dimensions_per_role is None:
                 dimensions_per_role = positions.shape[1]
             if positions.shape[1] != dimensions_per_role:
-                raise DomainError(f"HDF5 各机械臂关节维度不一致：{role}")
+                raise EpisodeValidationError(f"HDF5 各机械臂关节维度不一致：{role}")
             joint_files.append(role)
             streams[f"arm/jointState/{role}"] = {
                 "times": times,
@@ -232,14 +253,14 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
                 or not np.isfinite(times).all()
                 or np.any(np.diff(times) <= 0)
             ):
-                raise DomainError(f"HDF5 时间序列无效：{label}")
+                raise EpisodeValidationError(f"HDF5 时间序列无效：{label}")
         if dimensions_per_role is None:
-            raise DomainError("HDF5 采集包缺少关节流")
+            raise EpisodeValidationError("HDF5 采集包缺少关节流")
         start = max(float(stream["times"][0]) for stream in streams.values())
         stop = min(float(stream["times"][-1]) for stream in streams.values())
         n = math.floor((stop - start) * fps + 1e-5) + 1
         if n < profile["minimum_frames"] or n > 10_000_000:
-            raise DomainError(f"有效公共区间过短/过大：{n} 帧")
+            raise EpisodeValidationError(f"有效公共区间过短/过大：{n} 帧")
         dest.parent.mkdir(parents=True, exist_ok=True)
         temporary = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
         temporary.unlink(missing_ok=True)
@@ -306,11 +327,11 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
                         else:
                             j = bisect.bisect_right(times, t) - 1
                             if j < 0:
-                                raise DomainError("没有因果前置关节样本")
+                                raise EpisodeValidationError("没有因果前置关节样本")
                             offset = t - float(times[j])
                             bound = joint_bound
                         if offset > bound:
-                            raise DomainError(
+                            raise EpisodeValidationError(
                                 f"时间对齐越界：{label} frame={i} "
                                 f"error={offset * 1000:.3f}ms limit={bound * 1000:.3f}ms"
                             )
@@ -325,14 +346,16 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
                                 with Image.open(io.BytesIO(data)) as image:
                                     image.load()
                                     if image.mode != "RGB":
-                                        raise DomainError(
+                                        raise EpisodeValidationError(
                                             f"相机颜色模式不一致：{label}"
                                         )
                                     shape = image.size
                             except DomainError:
                                 raise
-                            except Exception as exc:
-                                raise DomainError(f"相机图像损坏：{label}") from exc
+                            except (OSError, ValueError) as exc:
+                                raise EpisodeValidationError(
+                                    f"相机图像损坏：{label}"
+                                ) from exc
                             images[stream["index"]][i] = np.frombuffer(
                                 data, dtype=np.uint8
                             )
@@ -347,7 +370,7 @@ def prepare_agilex_hdf5(raw: Path, dest: Path, profile: dict):
                             if camera_id == stream["index"]
                         )
                         if shape != expected_dimensions:
-                            raise DomainError(
+                            raise EpisodeValidationError(
                                 f"相机分辨率与 HDF5 元数据不一致：{label}"
                             )
                     offsets.sort()

@@ -87,6 +87,15 @@ select { margin-bottom: 9px; }
 .secondary { background: #fff; border-color: #dce0e6; color: #515b6b; }
 .secondary:hover:not(:disabled) { background: #f2f5fb; border-color: #b5c4e2; }
 .danger { background: #fff0f0; color: #b7424a; border-color: #f4d3d6; }
+.dataset-filters { display: flex; flex-wrap: wrap; gap: 16px; padding: 0 20px 18px; }
+.dataset-filters label { flex: 1; min-width: 180px; max-width: 360px; margin: 0; }
+.dataset-filters input, .dataset-filters select { display: block; margin: 8px 0 0; }
+.dataset-paths { max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
+.dataset-paths details { margin-top: 5px; }
+.dataset-delete-dialog { width: min(620px, calc(100vw - 32px)); padding: 0; max-height: 85vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: #fff; }
+.dataset-delete-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.dataset-delete-body { padding: 20px; }
+.dataset-delete-body .path-hint { max-height: 170px; overflow-y: auto; white-space: pre-wrap; }
 .text-button { background: none; border: 0; color: #647083; padding: 6px; font-size: 12px; }
 .text-button:hover { color: var(--accent); }
 .action-row { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -180,7 +189,9 @@ footer { display: flex; justify-content: space-between; gap: 16px; color: #9aa2a
   .breadcrumb { padding-left: 24px; }
   .capture-layout { grid-template-columns: minmax(0, 1fr) 280px; }
   .panel-heading .small { display: none; }
-  .robot-scope { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .robot-scope { grid-template-columns: 1fr; gap: 8px; }
+  .robot-scope p { margin-top: 0; }
+  .conversion-grid { grid-template-columns: 1fr; gap: 18px; }
 }
 @media (max-width: 850px) {
   .mobile-only { display: grid; }

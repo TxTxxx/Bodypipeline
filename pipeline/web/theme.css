@@ -21,7 +21,7 @@ html[data-theme="dark"] .theme-label-dark, html[data-theme="light"] .theme-label
 .login-theme-toggle { position: fixed; top: 20px; right: 24px; z-index: 60; }
 .standalone-theme-toggle { position: fixed; top: 18px; right: 24px; z-index: 60; }
 #app-view:not([hidden]) ~ .login-theme-toggle { display: none; }
-html[data-theme="dark"] :is(.topbar, .sidebar, .breadcrumb, .panel, .metric, .login-card, .report-meta > div, .report-hero, .report-toolbar, .check-card, .raw-grid details, .run-row) { background: var(--night-surface); border-color: var(--line); }
+html[data-theme="dark"] :is(.topbar, .sidebar, .breadcrumb, .panel, .metric, .login-card, .report-meta > div, .report-hero, .report-toolbar, .check-card, .raw-grid details, .run-row, .dataset-delete-dialog) { background: var(--night-surface); border-color: var(--line); }
 html[data-theme="dark"] :is(.brand, .breadcrumb strong, .sidebar-bottom strong, .metric strong, label, .telemetry strong, .import-capabilities strong, .preview-list li span, .report-meta dd, .raw-grid summary, .empty-report h2, .report-footer-note strong) { color: #e3eaf4; }
 html[data-theme="dark"] :is(.product-label, .nav-item, .metric span, th, td, .text-button, .report-meta dd.mono, .report-hero p, .message, .run-row, .analysis-run, .analysis-na code, .dataset-location code) { color: #b0bfd2; }
 html[data-theme="dark"] :is(.workspace-mark, .icon-button, .secondary, .filter-button) { background: var(--night-raised); border-color: #34445c; color: #c5d3e6; }

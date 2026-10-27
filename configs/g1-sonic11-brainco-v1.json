@@ -1,0 +1,46 @@
+{
+  "id": "g1_sonic11_brainco_v1",
+  "version": 1,
+  "control_mode": "teleoperation",
+  "robot_type": "g1_brainco",
+  "semantics_approved": false,
+  "clock_verified": false,
+  "joint_names": [
+    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
+    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+    "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
+    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint", "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint",
+    "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+    "left_thumb", "left_thumb_aux", "left_index", "left_middle", "left_ring", "left_pinky",
+    "right_thumb", "right_thumb_aux", "right_index", "right_middle", "right_ring", "right_pinky"
+  ],
+  "joint_units": [
+    "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad",
+    "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad",
+    "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad", "rad",
+    "normalized", "normalized", "normalized", "normalized", "normalized", "normalized",
+    "normalized", "normalized", "normalized", "normalized", "normalized", "normalized"
+  ],
+  "output_fps": 30,
+  "minimum_frames": 2,
+  "cameras": [
+    {"id": "egocentric", "source_key": "ego_view", "width": 640, "height": 480, "mounting": "head"},
+    {"id": "left_wrist", "source_key": "left_wrist", "width": 640, "height": 480, "mounting": "wrist_left"},
+    {"id": "right_wrist", "source_key": "right_wrist", "width": 640, "height": 480, "mounting": "wrist_right"}
+  ],
+  "g1_sonic": {
+    "sonic_version": "1.1",
+    "hand_type": "brainco",
+    "model_layout": "native",
+    "robot_max_age_ms": 100.0,
+    "camera_max_age_ms": 150.0,
+    "camera_time_fallback": "mapped_wall",
+    "max_frames": 1000000
+  },
+  "notes": "Server-owned SONIC 1.1 / BrainCo schema. Source parsing is verified separately from site acceptance. Keep approval flags false until action semantics and clocks have been verified at the deployment."
+}

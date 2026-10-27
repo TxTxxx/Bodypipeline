@@ -179,7 +179,8 @@ pipeline/server/
 ├── providers/
 │   ├── base.py
 │   ├── registry.py
-│   └── agilex.py
+│   ├── agilex.py
+│   └── tianji.py
 ├── alignment.py
 ├── datasets.py
 ├── checks.py
@@ -197,6 +198,7 @@ pipeline/server/
 | `jobs.py` | 通用任务编排：Runtime 路由、幂等、Provider 调用、letools 子进程和任务状态 |
 | `providers/registry.py` | 静态 Provider 注册表与 `RuntimeCatalog`；设备不能动态选择代码 |
 | `providers/agilex.py` | AgileX Provider：Profile 校验、对齐、质量、转换参数和 feature 修补 |
+| `providers/tianji.py` | Tianji MCAP Provider：客户端目录 staging、官方 inspect、`--source-format tianji` 和 feature 修补 |
 | `shared/runtime.py` | `RobotRuntime` 不可变路由记录 |
 | `alignment.py` | AgileX 三相机、四路关节的 30 Hz 有界对齐 |
 | `datasets.py` | 从任务记录解析可预览数据集和格式 |

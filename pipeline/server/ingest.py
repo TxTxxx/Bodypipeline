@@ -20,14 +20,9 @@ from pipeline.shared.core import (
     now,
     safe_relative,
 )
-from pipeline.shared.hdf5 import (
-    AGILEX_HDF5_FILENAME,
-    AGILEX_HDF5_FORMAT,
-    ALOHA_HDF5_FORMAT,
-    is_hdf5_path,
-)
 
 from .providers import RobotRuntime, RuntimeCatalog
+from .providers.raw_contract import raw_file_contract
 from .storage import (
     ROBOT_LAYOUT,
     data_directory,
@@ -98,31 +93,22 @@ class IngestService:
         ):
             raise DomainError("无效文件清单", 400)
         names, total = set(), 0
-        hdf5_capture = m.get("raw_format") == AGILEX_HDF5_FORMAT
-        aloha_hdf5 = m.get("raw_format") == ALOHA_HDF5_FORMAT
-        if (hdf5_capture or aloha_hdf5) and len(files) != 1:
+        provider = self.catalog.provider(runtime) if runtime is not None else None
+        contract = raw_file_contract(m.get("raw_format"), provider)
+        if contract.single_file and len(files) != 1:
             raise DomainError("HDF5 采集包必须且只能包含一个文件", 400)
         for f in files:
             if not isinstance(f, dict) or set(f) != {"path", "size_bytes", "sha256"}:
                 raise DomainError("无效文件字段", 400)
             path = safe_relative(f["path"])
-            if hdf5_capture:
-                if path != AGILEX_HDF5_FILENAME or path in names:
-                    raise DomainError(
-                        f"HDF5 采集包文件必须为 {AGILEX_HDF5_FILENAME}", 400
-                    )
-            elif aloha_hdf5:
-                # An imported upstream episode keeps its own file name; the
-                # file itself is the whole capture.
-                if not is_hdf5_path(Path(path)) or path in names:
-                    raise DomainError("HDF5 episode 文件必须是 .hdf5 或 .h5", 400)
-            elif not path.startswith("episode0/") or path in names:
-                raise DomainError("文件必须位于 episode0 且不能重复", 400)
+            contract.validate_path(path)
+            if path in names:
+                raise DomainError("文件不能重复", 400)
             names.add(path)
             if (
                 type(f["size_bytes"]) is not int
                 or f["size_bytes"] < 0
-                or ((hdf5_capture or aloha_hdf5) and f["size_bytes"] == 0)
+                or (contract.single_file and f["size_bytes"] == 0)
                 or not re.fullmatch(r"[0-9a-f]{64}", str(f["sha256"]))
             ):
                 raise DomainError("无效文件大小或摘要", 400)
@@ -161,6 +147,8 @@ class IngestService:
                 if exc.code != 404:
                     raise
             else:
+                if row["state"] in {"DELETING", "DELETE_FAILED", "DELETED"}:
+                    raise DomainError("该采集已删除或正在删除；请使用新的采集 ID", 409)
                 if (
                     row["manifest_hash"] != manifest_hash
                     or row["target"] != target
@@ -175,7 +163,7 @@ class IngestService:
             reserved = sum(
                 r["total_bytes"]
                 for r in self.store.all("upload")
-                if r["state"] != "COMMITTED"
+                if r["state"] in {"UPLOADING", "COMMITTING"}
             )
             storage = {"robot_type": robot_type(m["profile"].get("robot_type"))}
             if runtime is not None:
@@ -245,6 +233,8 @@ class IngestService:
                 if exc.code != 404:
                     raise
             else:
+                if row["state"] in {"DELETING", "DELETE_FAILED", "DELETED"}:
+                    raise DomainError("该原始采集已删除或正在删除", 409)
                 return row
             storage = {"robot_type": robot_type(manifest["profile"].get("robot_type"))}
             if runtime is not None:
@@ -324,6 +314,8 @@ class IngestService:
     def offsets(self, uid):
         with self.lock:
             row = self.store.get("upload", uid)
+            if row["state"] in {"DELETING", "DELETE_FAILED", "DELETED"}:
+                raise DomainError("原始采集已删除或正在删除", 410)
             root = self.root(row) / "data"
             return {
                 "id": uid,
@@ -402,6 +394,8 @@ class IngestService:
     def complete(self, uid):
         with self.lock:
             row = self.store.get("upload", uid)
+            if row["state"] in {"DELETING", "DELETE_FAILED", "DELETED"}:
+                raise DomainError("原始采集已删除或正在删除", 410)
             if row["state"] == "COMMITTED":
                 return row
             root = self.root(row)
@@ -416,6 +410,13 @@ class IngestService:
                     or file_hash(p) != f["sha256"]
                 ):
                     raise DomainError(f"文件不完整或摘要不符：file_index={i}", 422)
+            if row.get("runtime_id"):
+                runtime = self.catalog.get(row["runtime_id"])
+                validate = getattr(
+                    self.catalog.provider(runtime), "validate_upload", None
+                )
+                if validate is not None:
+                    validate(root / "data", manifest, runtime.profile)
             for d in sorted(
                 (p for p in root.rglob("*") if p.is_dir()),
                 key=lambda p: len(p.parts),

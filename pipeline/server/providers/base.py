@@ -21,7 +21,23 @@ class RobotProvider(Protocol):
 
     def profile_blockers(self, profile: dict) -> list[dict]: ...
 
-    def prepare(self, raw: Path, dest: Path, profile: dict) -> dict: ...
+    # Optional hooks: raw_file_contract(raw_format) declares the upload container;
+    # validate_upload(raw, manifest, profile) validates bytes before COMMITTED.
+    # Providers without these hooks retain the legacy upload behavior.
+
+    def conversion_capabilities(self, profile: dict) -> dict:
+        """Describe supported per-job options from trusted Profile configuration."""
+        return {}
+
+    def prepare(
+        self, raw: Path, dest: Path, profile: dict, *, options: dict | None = None
+    ) -> dict:
+        """Raise EpisodeValidationError only for identified recording defects.
+
+        Other errors must remain distinct so batch policies cannot hide tool,
+        deployment, integrity or implementation failures.
+        """
+        ...
 
     def quality(
         self, aligned: Path, profile: dict, synthetic: bool = False

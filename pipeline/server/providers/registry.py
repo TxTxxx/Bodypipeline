@@ -5,13 +5,20 @@ from __future__ import annotations
 from pipeline.shared.core import DomainError
 from pipeline.shared.runtime import RobotRuntime
 
+from ..conversion_options import provider_capabilities
 from .agilex import AgileXProvider
 from .aloha_hdf5 import AlohaHDF5Provider
+from .arx_direct_teaching import ARXDirectTeachingProvider
 from .base import RobotProvider
+from .g1_sonic import G1SONICProvider
+from .tianji import TianjiProvider
 
 _PROVIDERS: dict[str, RobotProvider] = {
     "agilex": AgileXProvider(),
     "aloha_hdf5": AlohaHDF5Provider(),
+    "arx_direct_teaching": ARXDirectTeachingProvider(),
+    "g1_sonic": G1SONICProvider(),
+    "tianji": TianjiProvider(),
 }
 
 
@@ -46,7 +53,10 @@ class RuntimeCatalog:
         self.settings = settings
         self.runtimes = settings.runtime_registry()
         for runtime in self.runtimes.values():
-            get_provider(runtime.provider)
+            provider = get_provider(runtime.provider)
+            configure = getattr(provider, "configure", None)
+            if configure is not None:
+                configure(settings)
         identities = set()
         for _, device in settings.device_registry():
             self.for_device(device)
@@ -62,7 +72,15 @@ class RuntimeCatalog:
         return [self.runtimes[key] for key in sorted(self.runtimes)]
 
     def public(self) -> list[dict]:
-        return [runtime.public() for runtime in self.all()]
+        return [
+            {
+                **runtime.public(),
+                "conversion_capabilities": provider_capabilities(
+                    self.provider(runtime), runtime.profile
+                ),
+            }
+            for runtime in self.all()
+        ]
 
     def default(self) -> RobotRuntime:
         runtime_id = self.settings.default_profile

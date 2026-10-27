@@ -3,7 +3,7 @@ name = "embodied-pipeline-letools"
 version = "0.1.0"
 description = "Isolated conversion, Doctor and Visualizer toolchain"
 requires-python = ">=3.12"
-dependencies = ["letools", "letools-native==0.2.0"]
+dependencies = ["letools", "letools-native==0.2.0", "msgpack>=1.1,<2", "pillow>=10,<13"]
 
 [tool.uv]
 package = false

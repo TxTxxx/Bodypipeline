@@ -385,3 +385,10 @@ PR 至少包含：
 ## Client 数据回放适配
 
 需要运动回放时，另行实现 [ReplayProvider 契约](replay-adaptation.md)。它与 CaptureAdapter、Server 转换 Provider 分开注册、共用机器人 Profile；采集或格式转换支持某型号不代表它已能执行回放。通用 Client 页面、任务、鉴权、上传和 Server 不新增型号判断。
+## 不合格采集的批量处理契约
+
+Server 的 `invalid_episode_policy=fail|skip` 是通用任务策略，不应在 Client 或通用业务流程中增加机器人型号分支。
+Provider 在 `prepare` / `quality` 中确认单条录制的数据不合格时，应抛出
+`pipeline.server.episode_validation.EpisodeValidationError`，可附带 `code` 和 JSON 可序列化的 `details`。
+配置、部署、文件完整性、I/O、未知程序异常应保留其普通异常类型，不能统一包装成可跳过的数据错误。
+外部工具须通过结构化诊断区分数据拒绝和工具故障，不能仅依赖非零退出码或错误文本。

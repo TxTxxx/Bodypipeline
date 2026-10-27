@@ -54,6 +54,8 @@ def _recorded_dataset(settings, job):
 
 def dataset_for_job(settings, job):
     state = job["state"]
+    if state in {"DELETING", "DELETE_FAILED", "DELETED"}:
+        raise DomainError("数据集正在删除或已删除，不能继续使用", 409)
     if state not in DATA_READY_STATES and job.get("dataset_ready") is not True:
         raise DomainError("尚无完成转换和结构验证的数据集；请先完成转换")
     data = storage_path(settings, job, "work", job["id"]) / "dataset"

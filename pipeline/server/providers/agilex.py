@@ -19,6 +19,7 @@ from pipeline.shared.hdf5 import (
 )
 
 from ..alignment import prepare_agilex, prepare_agilex_hdf5
+from ..conversion_options import normalize_options
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
 from .hdf5_preset import write_hdf5_preset
 
@@ -64,7 +65,13 @@ class AgileXProvider:
             )
         return blockers
 
-    def prepare(self, raw: Path, dest: Path, profile: dict) -> dict:
+    def conversion_capabilities(self, profile: dict) -> dict:
+        return {}
+
+    def prepare(
+        self, raw: Path, dest: Path, profile: dict, *, options: dict | None = None
+    ) -> dict:
+        normalize_options(options, self.conversion_capabilities(profile))
         package = find_hdf5_capture(raw)
         if package is not None:
             aligned = dest.with_suffix(".hdf5")

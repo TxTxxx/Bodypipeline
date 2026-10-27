@@ -18,7 +18,9 @@ from pipeline.shared.core import (
     now,
 )
 
+from .conversion_options import normalize_options, provider_capabilities
 from .datasets import TARGET_FORMATS
+from .episode_validation import EpisodeValidationError, validate_episode_policy
 from .merges import MergeRunner
 from .providers import RuntimeCatalog
 from .quality import DOCTOR_CHECK_IDS, doctor_gate
@@ -29,6 +31,7 @@ from .storage import (
     share_data_tree,
     storage_path,
 )
+from .version_conversions import VersionConversionRunner
 
 
 class JobRunner:
@@ -38,6 +41,7 @@ class JobRunner:
         self.lock = threading.RLock()
         self.shutdown_requested = threading.Event()
         self.merges = MergeRunner(settings, self)
+        self.version_conversions = VersionConversionRunner(settings, self)
 
     def recover(self):
         for job in self.store.all("job"):
@@ -49,8 +53,23 @@ class JobRunner:
                 )
                 self.store.put("job", job["id"], job)
 
-    def enqueue(self, uid, target_format="v3.0", run_doctor=True, instruction=None):
-        return self._enqueue([uid], target_format, run_doctor, instruction)
+    def enqueue(
+        self,
+        uid,
+        target_format="v3.0",
+        run_doctor=True,
+        instruction=None,
+        conversion_options=None,
+        invalid_episode_policy="fail",
+    ):
+        return self._enqueue(
+            [uid],
+            target_format,
+            run_doctor,
+            instruction,
+            conversion_options=conversion_options,
+            invalid_episode_policy=invalid_episode_policy,
+        )
 
     def enqueue_collection(
         self,
@@ -59,6 +78,8 @@ class JobRunner:
         target_format="v3.0",
         run_doctor=True,
         upload_ids=None,
+        conversion_options=None,
+        invalid_episode_policy="fail",
     ):
         if upload_ids is None:
             upload_ids = []
@@ -74,12 +95,27 @@ class JobRunner:
                 if metadata["collection_id"] == collection_id:
                     upload_ids.append(row["id"])
         return self._enqueue(
-            upload_ids, target_format, run_doctor, instruction, collection_id
+            upload_ids,
+            target_format,
+            run_doctor,
+            instruction,
+            collection_id,
+            conversion_options=conversion_options,
+            invalid_episode_policy=invalid_episode_policy,
         )
 
     def _enqueue(
-        self, upload_ids, target_format, run_doctor, instruction, collection_id=None
+        self,
+        upload_ids,
+        target_format,
+        run_doctor,
+        instruction,
+        collection_id=None,
+        *,
+        conversion_options=None,
+        invalid_episode_policy="fail",
     ):
+        policy = validate_episode_policy(invalid_episode_policy)
         if target_format not in TARGET_FORMATS or type(run_doctor) is not bool:
             raise DomainError(
                 "目标格式必须为 v3.0 / v2.1，run_doctor 必须为布尔值", 400
@@ -110,6 +146,9 @@ class JobRunner:
                 )
             runtime = self.catalog.get(runtime_ids[0])
             provider = self.catalog.provider(runtime)
+            options = normalize_options(
+                conversion_options, provider_capabilities(provider, runtime.profile)
+            )
             cid = collection_id or metadata[0]["collection_id"]
             if any(m["collection_id"] != cid for m in metadata):
                 raise DomainError(
@@ -138,6 +177,8 @@ class JobRunner:
                     "mode": self.settings.processing_mode,
                     "target_format": target_format,
                     "run_doctor": run_doctor,
+                    **({"conversion_options": options} if options else {}),
+                    **({"invalid_episode_policy": policy} if policy != "fail" else {}),
                     "pipeline": "runtime-provider-v2",
                     "encoding": "libx264-yuv420p",
                     "letools": "1c417cc9c205f85cd01a5e5860646f1594738354",
@@ -149,6 +190,9 @@ class JobRunner:
                     "INTERRUPTED",
                     "QUARANTINED",
                     "BLOCKED",
+                    "DELETING",
+                    "DELETE_FAILED",
+                    "DELETED",
                 }:
                     return row
             job = {
@@ -162,6 +206,7 @@ class JobRunner:
                 "collection_id": cid,
                 "dataset_name": metadata[0]["dataset_name"],
                 "source_count": len(uploads),
+                "invalid_episode_policy": policy,
                 "state": "QUEUED",
                 "stage": "等待 Worker",
                 "created_at": now(),
@@ -182,6 +227,7 @@ class JobRunner:
                 "target_format": target_format,
                 "run_doctor": run_doctor,
                 "instruction": instruction,
+                "conversion_options": options,
                 "capture_mode": manifests[0]["capture_mode"],
                 "error": None,
             }
@@ -450,6 +496,9 @@ class JobRunner:
         if job.get("operation") == "merge":
             self.merges.run(job)
             return
+        if job.get("operation") == "version_conversion":
+            self.version_conversions.run(job)
+            return
         self.save(
             job,
             state="RUNNING",
@@ -489,14 +538,21 @@ class JobRunner:
                 return
             if not synthetic:
                 provider.validate_profile(profile)
+            options = normalize_options(
+                job.get("conversion_options"), provider_capabilities(provider, profile)
+            )
             from pipeline.shared.core import confined, file_hash
 
             ids = job.get("upload_ids", [job["upload_id"]])
+            policy = validate_episode_policy(job.get("invalid_episode_policy", "fail"))
             reports, robot_reports, sources = [], [], []
             episode_diagnostics = []
             aligned = work / "aligned"
             aligned.mkdir()
             dimensions = None
+            # Readers sort episode paths lexically. Preserve numeric ordering
+            # for batches containing ten or more output episodes.
+            index_width = len(str(len(ids) - 1))
             for index, uid in enumerate(ids):
                 if self.shutdown_requested.is_set():
                     raise InterruptedError("Worker 收到停止请求")
@@ -559,7 +615,12 @@ class JobRunner:
                     for f in manifest["files"]:
                         if file_hash(confined(raw_root, f["path"])) != f["sha256"]:
                             raise DomainError(f"原始文件摘要变化：{f['path']}")
-                    prepared = provider.prepare(raw, source_work / "aligned", profile)
+                    prepared = provider.prepare(
+                        raw,
+                        source_work / "aligned",
+                        profile,
+                        **({"options": options} if options else {}),
+                    )
                     aligned_path = Path(
                         prepared.pop("aligned_path", source_work / "aligned/episode0")
                     )
@@ -573,23 +634,38 @@ class JobRunner:
                         if v["dimensions"]
                     }
                     if dimensions is not None and shapes != dimensions:
-                        raise DomainError("批量采集的相机分辨率不一致")
+                        raise EpisodeValidationError(
+                            "批量采集的数据维度不一致", code="incompatible_dimensions"
+                        )
                     dimensions = shapes
+                    output_index = len(reports)
+                    episode_name = f"episode{output_index:0{index_width}d}"
                     target = (
-                        aligned / f"episode{index}.hdf5"
+                        aligned / f"{episode_name}.hdf5"
                         if aligned_kind == "hdf5"
-                        else aligned / f"episode{index}"
+                        else aligned / episode_name
                     )
                     os.replace(aligned_path, target)
                     reports.append(
-                        {**prepared, "episode_index": index, "upload_id": uid}
+                        {
+                            **prepared,
+                            "episode_index": output_index,
+                            "source_episode_index": index,
+                            "upload_id": uid,
+                        }
                     )
                     robot_reports.append(
-                        {**robot_report, "episode_index": index, "upload_id": uid}
+                        {
+                            **robot_report,
+                            "episode_index": output_index,
+                            "source_episode_index": index,
+                            "upload_id": uid,
+                        }
                     )
                     sources.append(
                         {
-                            "episode_index": index,
+                            "episode_index": output_index,
+                            "source_episode_index": index,
                             "upload_id": uid,
                             "session_id": manifest["session_id"],
                             "robot_id": manifest["robot_id"],
@@ -602,9 +678,12 @@ class JobRunner:
                             "episode_index": index,
                             "upload_id": uid,
                             "passed": True,
+                            "output_episode_index": output_index,
                             "error": None,
                         }
                     )
+                except InterruptedError:
+                    raise
                 except Exception as exc:
                     episode_diagnostics.append(
                         {
@@ -612,17 +691,39 @@ class JobRunner:
                             "upload_id": uid,
                             "passed": False,
                             "error": str(exc),
+                            "skippable": isinstance(exc, EpisodeValidationError),
+                            "error_code": getattr(
+                                exc, "reason_code", "processing_error"
+                            ),
+                            "details": getattr(exc, "details", {}),
+                            "output_episode_index": None,
                         }
                     )
                 self.save(job, episode_diagnostics=episode_diagnostics)
             failed = [row for row in episode_diagnostics if not row["passed"]]
-            if failed:
+            skipped = [row for row in failed if policy == "skip" and row["skippable"]]
+            fatal = [row for row in failed if policy == "fail" or not row["skippable"]]
+            selection = {
+                "policy": policy,
+                "input_count": len(ids),
+                "accepted_count": len(reports),
+                "skipped_count": len(skipped),
+                "failed_count": len(fatal),
+                "skipped": skipped,
+            }
+            self.save(job, selection_report=selection)
+            atomic_json(
+                work / "episode-selection.json",
+                {**selection, "episodes": episode_diagnostics},
+            )
+            if fatal or not reports:
                 summary = "；".join(
                     f"episode {row['episode_index']} / 采集 {row['upload_id']}：{row['error']}"
                     for row in failed
                 )
                 raise DomainError(
                     f"{len(failed)}/{len(ids)} 个 episode 未通过核验与对齐：{summary}"
+                    + ("；没有合格采集可供转换" if not reports else "")
                 )
             job["alignment_report"] = (
                 reports[0]
@@ -650,6 +751,7 @@ class JobRunner:
                 {
                     "manifest_hash": sources[0]["manifest_hash"],
                     "sources": sources,
+                    "episode_selection": selection,
                     "collection_id": job.get("collection_id"),
                     "dataset_name": job.get("dataset_name"),
                     "instruction": job["instruction"],
@@ -662,6 +764,16 @@ class JobRunner:
                     "synthetic": synthetic,
                     "target_format": job.get("target_format", "v3.0"),
                     "run_doctor": job.get("run_doctor", True),
+                    "conversion_options": options,
+                    "action_corrections": [
+                        {
+                            "episode_index": report["episode_index"],
+                            "upload_id": report["upload_id"],
+                            **report["action_corrections"],
+                        }
+                        for report in reports
+                        if report.get("action_corrections")
+                    ],
                     "video_encoding": {"codec": "libx264", "pixel_format": "yuv420p"},
                 },
             )
@@ -714,7 +826,7 @@ class JobRunner:
             self._deep_validate(executable, work, allocation)
             info = json.loads((work / "dataset/meta/info.json").read_text())
             if (
-                info.get("total_episodes") != len(ids)
+                info.get("total_episodes") != len(reports)
                 or info.get("total_frames") != job["alignment_report"]["frames"]
             ):
                 raise DomainError("转换结果的 episode / 帧数与输入快照不一致")
@@ -722,7 +834,7 @@ class JobRunner:
                 job,
                 dataset_ready=True,
                 dataset_path=str(work / "dataset"),
-                episode_count=len(ids),
+                episode_count=len(reports),
             )
             if not job.get("run_doctor", True):
                 self._close_allocation()

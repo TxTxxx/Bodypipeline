@@ -166,6 +166,8 @@ class ImportService:
                 if exc.code != 404:
                     raise
             else:
+                if row["state"] in {"DELETING", "DELETE_FAILED", "DELETED"}:
+                    raise DomainError("该数据集已删除或正在删除", 409)
                 return self._lerobot_response(row)
             row = {
                 "id": key,

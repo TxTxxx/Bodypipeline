@@ -22,7 +22,10 @@ import numpy as np
 from pipeline.shared.core import DomainError, atomic_json
 from pipeline.shared.hdf5 import AGILEX_ALIGNED_SCHEMA, ALOHA_HDF5_FORMAT
 
+from ..conversion_options import normalize_options
+from ..episode_validation import EpisodeValidationError
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
+from .gripper_closure import capabilities, correct_actions
 from .hdf5_preset import write_hdf5_preset
 
 DEFAULT_STATE_KEY = "observations/qpos"
@@ -69,12 +72,12 @@ def _jpeg_size(payload: bytes, label: str) -> tuple[int, int]:
         with Image.open(io.BytesIO(payload)) as image:
             image.load()
             if image.format != "JPEG":
-                raise DomainError(f"相机 {label} 不是 JPEG 编码")
+                raise EpisodeValidationError(f"相机 {label} 不是 JPEG 编码")
             return image.size
     except DomainError:
         raise
-    except Exception as exc:
-        raise DomainError(f"相机 {label} 图像无法解码") from exc
+    except (OSError, ValueError) as exc:
+        raise EpisodeValidationError(f"相机 {label} 图像无法解码") from exc
 
 
 def _read_episode(path: Path, profile: dict) -> dict:
@@ -89,45 +92,45 @@ def _read_episode(path: Path, profile: dict) -> dict:
         with h5py.File(path, "r") as handle:
             for key in (state_key, action_key):
                 if key not in handle:
-                    raise DomainError(f"{path.name} 缺少字段 {key}")
+                    raise EpisodeValidationError(f"{path.name} 缺少字段 {key}")
             state = np.asarray(handle[state_key], dtype=np.float32)
             action = np.asarray(handle[action_key], dtype=np.float32)
             if state.ndim != 2 or action.ndim != 2:
-                raise DomainError(f"{path.name} 的 state/action 必须是二维数组")
+                raise EpisodeValidationError(f"{path.name} 的 state/action 必须是二维数组")
             if state.shape != action.shape:
-                raise DomainError(f"{path.name} 的 state/action 形状不一致")
+                raise EpisodeValidationError(f"{path.name} 的 state/action 形状不一致")
             if not np.isfinite(state).all() or not np.isfinite(action).all():
-                raise DomainError(f"{path.name} 的 state/action 含非有限值")
+                raise EpisodeValidationError(f"{path.name} 的 state/action 含非有限值")
             names = profile.get("joint_names") or []
             if names and len(names) != state.shape[1]:
-                raise DomainError(
+                raise EpisodeValidationError(
                     f"{path.name} 的关节维度 {state.shape[1]} 与 Profile 的 "
                     f"joint_names 长度 {len(names)} 不一致"
                 )
             frames = state.shape[0]
             if frames < 1:
-                raise DomainError(f"{path.name} 没有帧")
+                raise EpisodeValidationError(f"{path.name} 没有帧")
             shapes = {}
             for camera_id, source_key in cameras:
                 if source_key not in handle:
-                    raise DomainError(f"{path.name} 缺少相机字段 {source_key}")
+                    raise EpisodeValidationError(f"{path.name} 缺少相机字段 {source_key}")
                 dataset = handle[source_key]
                 if _frames(dataset) != frames:
-                    raise DomainError(
+                    raise EpisodeValidationError(
                         f"{path.name} 相机 {camera_id} 帧数与 state 不一致"
                     )
                 size = _jpeg_size(_encoded_frame(dataset, 0), camera_id)
                 width = int(dataset.attrs.get("width", 0)) or size[0]
                 height = int(dataset.attrs.get("height", 0)) or size[1]
                 if (width, height) != size:
-                    raise DomainError(
+                    raise EpisodeValidationError(
                         f"{path.name} 相机 {camera_id} 分辨率与声明不一致"
                     )
                 shapes[camera_id] = (width, height)
     except DomainError:
         raise
-    except (OSError, KeyError, ValueError) as exc:
-        raise DomainError(f"HDF5 原始 episode 无法读取：{path.name}") from exc
+    except (KeyError, ValueError) as exc:
+        raise EpisodeValidationError(f"HDF5 原始 episode 无法读取：{path.name}") from exc
     return {
         "frames": frames,
         "dimensions": int(state.shape[1]),
@@ -154,6 +157,7 @@ class AlohaHDF5Provider:
         _field(profile, "state_key", DEFAULT_STATE_KEY)
         _field(profile, "action_key", DEFAULT_ACTION_KEY)
         _camera_fields(profile)
+        self.conversion_capabilities(profile)
         fps = profile.get("output_fps")
         if type(fps) is not int or not 1 <= fps <= 240:
             raise DomainError("Profile 的 output_fps 必须是 1–240 的整数")
@@ -178,9 +182,20 @@ class AlohaHDF5Provider:
             "cameras": {k: list(v) for k, v in report["cameras"].items()},
         }
 
-    def prepare(self, raw: Path, dest: Path, profile: dict) -> dict:
+    def conversion_capabilities(self, profile: dict) -> dict:
+        return capabilities(profile)
+
+    def prepare(
+        self, raw: Path, dest: Path, profile: dict, *, options: dict | None = None
+    ) -> dict:
+        options = normalize_options(options, self.conversion_capabilities(profile))
         package = raw if raw.is_file() else self._single_file(raw)
         report = _read_episode(package, profile)
+        corrections = {}
+        if "gripper_closure" in options:
+            report["action"], corrections["gripper_closure"] = correct_actions(
+                report["state"], report["action"], profile, options["gripper_closure"]
+            )
         dimensions = report["dimensions"]
         aligned = dest.with_suffix(".hdf5")
         aligned.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +254,7 @@ class AlohaHDF5Provider:
             "aligned_path": str(aligned),
             "aligned_kind": "hdf5",
             "source_package": package.name,
+            **({"action_corrections": corrections} if corrections else {}),
         }
 
     @staticmethod
