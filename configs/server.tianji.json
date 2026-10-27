@@ -8,10 +8,18 @@
     "tianji_thor": {
       "profile_path": "configs/tianji-thor-v1.json",
       "provider": "tianji",
-      "raw_formats": ["tianji_mcap_v1", "tianji_ros2_mcap_v1"],
-      "accepted_capture_profile_hashes": []
+      "raw_formats": [
+        "tianji_mcap_v1",
+        "tianji_ros2_mcap_v1",
+        "tianji_apex_mcap_v1"
+      ],
+      "accepted_capture_profile_hashes": [
+        "f5e15cb027e05bb48245d1fa9a78e839cbc22f6e161a76faa3a01548f5d2ac41"
+      ]
     }
   },
   "default_profile": "tianji_thor",
-  "viewer_origin": "http://127.0.0.1:8082"
+  "viewer_origin": "http://127.0.0.1:8082",
+  "robot_id": "marvin-pro-001",
+  "project_id": "bodypipeline-tianji"
 }

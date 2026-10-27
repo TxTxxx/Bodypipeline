@@ -22,12 +22,17 @@ import subprocess
 from pathlib import Path
 
 from pipeline.shared.core import DomainError, atomic_json, executable_path
+from pipeline.shared.tianji import TIANJI_MCAP_FORMAT
 
 from ..conversion_options import normalize_options
 from ..quality import robot_profile_blockers, validate_robot_policy
 
 TIANJI_RAW_FORMAT = "tianji_mcap_v1"
-TIANJI_RAW_FORMAT_ALIASES = (TIANJI_RAW_FORMAT, "tianji_ros2_mcap_v1")
+TIANJI_RAW_FORMAT_ALIASES = (
+    TIANJI_RAW_FORMAT,
+    "tianji_ros2_mcap_v1",
+    TIANJI_MCAP_FORMAT,
+)
 TIANJI_ROBOT_TYPE = "tianji_marvin_pro"
 TIANJI_JOINT_DIMENSIONS = 16
 TIANJI_PRESET = "thor-v1"
@@ -63,21 +68,17 @@ class TianjiProvider:
 
     def validate_profile(self, profile: dict) -> None:
         if profile.get("robot_type") != TIANJI_ROBOT_TYPE:
-            raise DomainError(
-                "Tianji Provider 只接受 robot_type=tianji_marvin_pro"
-            )
-        validate_robot_policy(
-            profile, expected_dimensions=TIANJI_JOINT_DIMENSIONS
-        )
+            raise DomainError("Tianji Provider 只接受 robot_type=tianji_marvin_pro")
+        validate_robot_policy(profile, expected_dimensions=TIANJI_JOINT_DIMENSIONS)
         self.validate_layout(profile)
 
     def validate_layout(self, profile: dict) -> None:
         cameras = profile.get("cameras")
-        ids = [
-            camera.get("id")
-            for camera in cameras
-            if isinstance(camera, dict)
-        ] if isinstance(cameras, list) else []
+        ids = (
+            [camera.get("id") for camera in cameras if isinstance(camera, dict)]
+            if isinstance(cameras, list)
+            else []
+        )
         if ids != list(TIANJI_CAMERAS):
             raise DomainError(
                 "Tianji Profile 需要 head_left / head_right / left_wrist / right_wrist 四路相机"

@@ -297,6 +297,7 @@ Skill 包含[操作与动作语义核查](agents/skills/adapt-robot/references/c
 | --- | --- |
 | 本地 Mock | [`configs/client.mock.json`](configs/client.mock.json)、[`configs/server.demo.json`](configs/server.demo.json) |
 | AgileX Client / Bridge | [`configs/client.agilex-aloha.json`](configs/client.agilex-aloha.json) |
+| Tianji Apex Client / 现有 Server | [`configs/client.tianji-marvin.json`](configs/client.tianji-marvin.json)、[`configs/server.tianji.json`](configs/server.tianji.json)；见 [Tianji 组合说明](docs/robots/tianji-marvin-pro.md) |
 | 通用 Server | [`configs/server.json`](configs/server.json) |
 | 未审批 Profile 模板 | [`configs/agilex-aloha.json`](configs/agilex-aloha.json) |
 | AgileX ALOHA 已核实 Profile | [`configs/agilex-aloha-v2.json`](configs/agilex-aloha-v2.json) |
@@ -384,6 +385,7 @@ patches/                    # AgileX ALOHA recorder 修复补丁与 Visualizer �
 | [代码导读](docs/code-tour.md) | 模块职责、关键调用链、状态机与测试入口 |
 | [letools 集成](docs/letools-integration.md) | 固定版本、CLI 调用、Doctor 与 Visualizer 集成边界 |
 | [新机器人适配](docs/robots/new-robot-adaptation.md) | 文件级适配矩阵、接口契约与验收清单 |
+| [Tianji Marvin Pro 接入](docs/robots/tianji-marvin-pro.md) | PR Client 与现有 Tianji Server 的格式、Profile 绑定、工具链与验收边界 |
 | [AgileX ALOHA 数据契约](docs/robots/agilex-aloha.md) | ROS2 接口、state/action 映射、时间戳与限位策略 |
 | [AgileX ALOHA recorder 启动空洞修复](docs/robots/agilex-recorder-fix.md) | 根因、预热门控补丁、部署与回归结果 |
 

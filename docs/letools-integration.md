@@ -84,6 +84,10 @@ episode0/
 `observation.eef` 与四路 `observation.image.*`。输入原始 MCAP 保持只读，Server 不在主环境安装
 ROS2 或 MCAP 解码依赖。
 
+PR #5 Client 使用 `tianji_apex_mcap_v1`，当前 Provider 显式接受该格式；
+`configs/server.tianji.json` 已登记 PR Client Profile 的精确兼容摘要。该组合沿用上述
+官方 Tianji 直接转换路径，配置和验收边界见 [Tianji 接入说明](robots/tianji-marvin-pro.md)。
+
 ## 3. Server 调用链
 
 ### 3.1 环境诊断
