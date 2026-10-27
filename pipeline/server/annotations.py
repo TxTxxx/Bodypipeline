@@ -56,6 +56,9 @@ class AnnotationRunner:
         self.lock = threading.RLock()
         self.shutdown_requested = threading.Event()
         self.cancel_events: dict[str, threading.Event] = {}
+        # Per-task model credentials live only here.  They are never written to
+        # the annotation record, the work context, logs or exports.
+        self.credentials: dict[str, dict] = {}
         self._running = False
 
     # ------------------------------------------------------------- persistence
@@ -74,6 +77,18 @@ class AnnotationRunner:
                     state=INTERRUPTED,
                     stage="标注已中断",
                     error="Server 重启；已完成的分段和费用保留，可续跑",
+                    cancel_requested=False,
+                    finished_at=now(),
+                )
+            elif row["state"] == QUEUED:
+                # Model keys only exist in memory, so a queued task cannot run
+                # after a restart.  Keep it resumable instead of failing later
+                # without an explanation.
+                self.save(
+                    row,
+                    state=INTERRUPTED,
+                    stage="标注已中断",
+                    error="Server 重启后任务凭据已清除；请续跑并重新填写 baseURL / API Key",
                     cancel_requested=False,
                     finished_at=now(),
                 )
@@ -233,6 +248,8 @@ class AnnotationRunner:
         inspection: str | None = None,
         field_dictionary: bool | None = None,
         max_tokens: int | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
     ):
         with self.lock:
             job = self.store.get("job", job_id)
@@ -285,6 +302,9 @@ class AnnotationRunner:
                 if row["job_id"] == job_id and row["state"] in ACTIVE:
                     return row
 
+            credentials = argus_annotation.resolve_credentials(
+                self.settings, base_url, api_key
+            )
             self._check_dataset_available(data)
             info = json.loads((data / "meta/info.json").read_text())
             version = info.get("codebase_version")
@@ -334,6 +354,9 @@ class AnnotationRunner:
                 "inspection": inspection,
                 "field_dictionary": field_dictionary,
                 "max_tokens": max_tokens,
+                # The gateway URL is not secret and helps the page explain a
+                # resumed task.  The key stays in self.credentials.
+                "base_url": credentials["task_base_url"],
                 "rig": context.get("rig") or "teleop_arms",
                 "provider_context": context,
                 "source": signature,
@@ -352,7 +375,9 @@ class AnnotationRunner:
             row["work_path"] = str(
                 storage_path(self.settings, row, "annotations", row["id"])
             )
-            return self.save(row)
+            self.save(row)
+            self.credentials[row["id"]] = credentials
+            return row
 
     def _check_dataset_available(self, data: Path):
         key = hashlib.sha256(str(data).encode()).hexdigest()
@@ -413,6 +438,7 @@ class AnnotationRunner:
             event.set()
             if row["state"] == QUEUED:
                 self.cancel_events.pop(aid, None)
+                self.credentials.pop(aid, None)
                 return self.save(
                     row,
                     state=CANCELLED,
@@ -422,7 +448,7 @@ class AnnotationRunner:
                 )
             return self.save(row, stage="正在取消", cancel_requested=True)
 
-    def resume(self, aid: str):
+    def resume(self, aid: str, *, base_url: str | None = None, api_key: str | None = None):
         with self.lock:
             row = self.store.get("annotation", aid)
             if row["state"] in ACTIVE:
@@ -440,12 +466,20 @@ class AnnotationRunner:
             saved = row.get("source") or {}
             if saved.get("signature") and current.get("signature") != saved["signature"]:
                 raise DomainError("来源数据集内容已变化，不能续跑；请创建新的标注任务", 409)
+            # A server restart clears the in-memory key, so resuming asks for
+            # credentials again unless the server has its own default.
+            credentials = argus_annotation.resolve_credentials(
+                self.settings,
+                base_url if base_url is not None else row.get("base_url"),
+                api_key,
+            )
             fields = {
                 "state": QUEUED,
                 "stage": "等待续跑",
                 "error": None,
                 "finished_at": None,
                 "cancel_requested": False,
+                "base_url": credentials["task_base_url"],
             }
             budget = self.budget(row["job_id"], int(row.get("input_episode_count") or 1))
             if budget["available_usd"] <= 0:
@@ -467,7 +501,9 @@ class AnnotationRunner:
                 # starting over, so do that on the first retry instead of failing
                 # once more and asking the operator to resume twice.
                 fields["fresh_start"] = str(row.get("stage") or "") not in LABELLING_STAGES
-            return self.save(row, **fields)
+            self.save(row, **fields)
+            self.credentials[aid] = credentials
+            return row
 
     @staticmethod
     def _preparation_refused(error: str) -> bool:
@@ -477,6 +513,47 @@ class AnnotationRunner:
             or "source changed during review" in text
             or "input resource changed" in text
         )
+
+    @staticmethod
+    def _scrub_log(path: Path, secret: str):
+        """Remove a task key from one log file once the subprocess is done."""
+
+        if not secret:
+            return
+        temp = path.with_name(path.name + ".scrub")
+        try:
+            if not path.is_file():
+                return
+            needle = secret.encode()
+            keep = max(0, len(needle) - 1)
+            changed = False
+            with path.open("rb") as source, temp.open("wb") as target:
+                carry = b""
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    data = carry + chunk
+                    if needle in data:
+                        changed = True
+                        data = data.replace(needle, b"[redacted]")
+                    carry = data[-keep:] if keep else b""
+                    target.write(data[:-keep] if keep else data)
+                target.write(carry)
+            if changed:
+                temp.replace(path)
+            else:
+                temp.unlink()
+        except OSError:
+            temp.unlink(missing_ok=True)
+
+    def _scrub_logs(self, work: Path, log: Path, secret: str):
+        self._scrub_log(log, secret)
+        logs = work / "argus/logs"
+        if not logs.is_dir():
+            return
+        for path in sorted(logs.glob("*.log")):
+            self._scrub_log(path, secret)
 
     # --------------------------------------------------------------------- run
     def tick(self):
@@ -513,8 +590,18 @@ class AnnotationRunner:
         exit_note = None
         started = time.monotonic()
         process = None
+        secret = ""
         try:
             work = data_directory(self.settings, row, "annotations", row["id"])
+            credentials = self.credentials.get(row["id"])
+            if credentials is None:
+                # Direct runs and old queued rows fall back to server defaults;
+                # a task key is never written down, so this path cannot restore
+                # one after a restart.
+                credentials = argus_annotation.resolve_credentials(
+                    self.settings, row.get("base_url"), None
+                )
+            secret = str(credentials.get("api_key") or "")
             log.parent.mkdir(parents=True, exist_ok=True)
             if row.get("fresh_start"):
                 # Argus refused a previous preparation whose products cannot be
@@ -582,6 +669,7 @@ class AnnotationRunner:
                             "src": self.settings.argus_src,
                             "python": self.settings.argus_python,
                             "model": row["model"],
+                            "base_url": credentials.get("base_url") or "",
                         },
                         "created_at": row["created_at"],
                         "attempt": row.get("attempts"),
@@ -592,7 +680,10 @@ class AnnotationRunner:
             )
             argv = argus_annotation.command(self.settings, row, data, work)
             env = argus_annotation.environment(
-                self.settings, row, row.get("provider_context") or {}
+                self.settings,
+                row,
+                row.get("provider_context") or {},
+                credentials,
             )
             with log.open("ab") as out:
                 out.write(
@@ -651,6 +742,9 @@ class AnnotationRunner:
                         )
                     time.sleep(0.5)
             exit_code = process.returncode
+            # A gateway error can echo a request header.  Scrub the key before
+            # the failure tail is stored or any log is served.
+            self._scrub_logs(work, log, secret)
             chunk, _ = _tail(log, offset)
             if chunk:
                 stage = argus_annotation.stage_from_log(chunk, stage)
@@ -720,6 +814,8 @@ class AnnotationRunner:
                 work_path=str(work),
             )
         finally:
+            self._scrub_logs(work, log, secret)
+            self.credentials.pop(row["id"], None)
             self.cancel_events.pop(row["id"], None)
             with self.lock:
                 self._running = False
@@ -752,7 +848,9 @@ class AnnotationRunner:
 
     def log(self, aid: str, name: str) -> str:
         row = self.store.get("annotation", aid)
-        return argus_annotation.read_log(self.work(row), name)
+        text = argus_annotation.read_log(self.work(row), name)
+        secret = str((self.credentials.get(aid) or {}).get("api_key") or "")
+        return argus_annotation.redact(text, secret)
 
     def export(self, aid: str) -> dict:
         row = self.store.get("annotation", aid)
@@ -771,6 +869,7 @@ class AnnotationRunner:
                     "job_id",
                     "dataset_name",
                     "dataset_path",
+                    "base_url",
                     "robot_type",
                     "model",
                     "note",

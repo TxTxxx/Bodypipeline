@@ -71,6 +71,14 @@ class AnnotationRequest(BaseModel):
     inspection: Literal["auto", "all", "off"] | None = None
     field_dictionary: StrictBool | None = None
     max_tokens: int | None = Field(default=None, ge=256, le=200000)
+    base_url: str | None = Field(default=None, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=4096)
+
+
+class AnnotationResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str | None = Field(default=None, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=4096)
 
 
 class MergeRequest(BaseModel):
@@ -530,6 +538,8 @@ def create_app(settings, background=True):
             inspection=body.inspection,
             field_dictionary=body.field_dictionary,
             max_tokens=body.max_tokens,
+            base_url=body.base_url,
+            api_key=body.api_key,
         )
 
     @app.get("/api/annotations/{aid}")
@@ -548,8 +558,12 @@ def create_app(settings, background=True):
         return annotations.cancel(aid)
 
     @app.post("/api/annotations/{aid}/resume")
-    def annotation_resume(aid: str):
-        return annotations.resume(aid)
+    def annotation_resume(aid: str, body: AnnotationResumeRequest | None = None):
+        return annotations.resume(
+            aid,
+            base_url=body.base_url if body else None,
+            api_key=body.api_key if body else None,
+        )
 
     @app.get("/api/annotations/{aid}/episodes")
     def annotation_episodes(aid: str):

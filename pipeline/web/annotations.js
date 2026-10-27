@@ -53,6 +53,7 @@
   let capTouched = false;
   let listSignature = "";
   let detailSignature = "";
+  let resumeTarget = null;
 
   const esc = (value) => ui?.esc(value) ?? String(value ?? "");
   const money = (value) => {
@@ -102,6 +103,15 @@
     $("annotation-cap").addEventListener("input", () => {
       capTouched = true;
     });
+    $("annotation-api-key").addEventListener("input", updateSubmit);
+    $("annotation-base-url").addEventListener("input", updateSubmit);
+    $("annotation-resume-form").addEventListener("submit", submitResume);
+    $("annotation-resume-close").addEventListener("click", closeResume);
+    $("annotation-resume-cancel").addEventListener("click", closeResume);
+    $("annotation-resume-dialog").addEventListener("close", () => {
+      resumeTarget = null;
+      $("annotation-resume-api-key").value = "";
+    });
     $("annotation-detail-close").addEventListener("click", () => {
       selectedId = null;
       detailRow = null;
@@ -124,7 +134,7 @@
       }
       const resume = event.target.closest("[data-annotation-resume]");
       if (resume) {
-        void resumeAnnotation(resume.dataset.annotationResume);
+        openResume(resume.dataset.annotationResume);
         return;
       }
       if (event.target.closest("[data-annotation-reload]")) {
@@ -164,6 +174,8 @@
     [
       "annotation-dataset",
       "annotation-model",
+      "annotation-base-url",
+      "annotation-api-key",
       "annotation-cap",
       "annotation-concurrency",
       "annotation-reasoning",
@@ -193,12 +205,20 @@
     $("annotation-max-tokens").value = String(defaults.max_tokens || 12000);
     $("annotation-field-dictionary").checked = Boolean(defaults.field_dictionary);
     $("annotation-note").value = defaults.note || "";
+    const needsKey = !options.api_key_configured;
+    $("annotation-api-key").required = needsKey;
+    $("annotation-api-key-required").hidden = !needsKey;
+    $("annotation-base-url").placeholder = options.gateway_configured
+      ? "留空使用服务器默认 baseURL"
+      : "https://gateway.example.com/v1";
     capTouched = false;
     const available = Boolean(options.available);
     setFormEnabled(available);
     if (available) {
       $("annotation-unavailable").hidden = true;
-      $("annotation-help").textContent = "提交后在独立队列执行，不会阻塞转换或 Doctor；可随时取消。";
+      $("annotation-help").textContent = options.api_key_configured
+        ? "提交后在独立队列执行，不会阻塞转换或 Doctor；服务器已配置默认模型密钥，本次可留空。"
+        : "提交后在独立队列执行，不会阻塞转换或 Doctor；请填写本次任务的模型 API Key。";
     } else {
       showUnavailable(options.reason || "服务器未找到可用的 Argus");
     }
@@ -288,10 +308,12 @@
 
   function updateSubmit() {
     const button = $("annotation-submit");
+    const needsKey = !options?.api_key_configured;
     const usable =
       Boolean(options?.available) &&
       Boolean($("annotation-dataset").value) &&
       Boolean($("annotation-model").value) &&
+      (!needsKey || Boolean($("annotation-api-key").value.trim())) &&
       !submitting;
     button.disabled = !usable;
     button.textContent = submitting ? "正在提交…" : "提交自动标注";
@@ -554,6 +576,8 @@
     }
     const sample = $("annotation-sample-fps").value;
     const sampleFps = sample === "" ? null : Number(sample);
+    const baseUrl = $("annotation-base-url").value.trim();
+    const apiKey = $("annotation-api-key").value.trim();
     const body = {
       job_id: jobId,
       model: $("annotation-model").value,
@@ -565,11 +589,16 @@
       field_dictionary: $("annotation-field-dictionary").checked,
       max_tokens: Number($("annotation-max-tokens").value),
       note: $("annotation-note").value.trim() || null,
+      base_url: baseUrl || null,
+      api_key: apiKey || null,
     };
     submitting = true;
     updateSubmit();
     try {
       const row = await ui.api("/api/annotations", "POST", body);
+      // The key is not part of the task record; do not keep it in the page
+      // either once the server has accepted the run.
+      $("annotation-api-key").value = "";
       selectedId = row.id;
       ui.notice(`已提交「${row.dataset_name}」自动标注：${row.model}，费用上限 ${money(row.cap_usd)}。`);
       await refresh();
@@ -594,14 +623,47 @@
     }
   }
 
-  async function resumeAnnotation(id) {
+  function openResume(id) {
+    const row = rows.find((item) => item.id === id) || detailRow;
+    if (!row) return;
+    resumeTarget = id;
+    const configured = Boolean(options?.api_key_configured);
+    $("annotation-resume-base-url").value = row.base_url || "";
+    $("annotation-resume-api-key").value = "";
+    $("annotation-resume-api-key").required = !configured;
+    $("annotation-resume-hint").textContent = configured
+      ? "服务器已配置默认模型密钥；API Key 可留空，也可为本次续跑填写专用密钥。"
+      : "服务器未配置默认模型密钥，必须填写本次续跑的 API Key。";
+    $("annotation-resume-dialog").showModal();
+  }
+
+  function closeResume() {
+    resumeTarget = null;
+    $("annotation-resume-api-key").value = "";
+    $("annotation-resume-dialog").close();
+  }
+
+  async function submitResume(event) {
+    event.preventDefault();
+    const id = resumeTarget;
+    if (!id) return;
+    const baseUrl = $("annotation-resume-base-url").value.trim();
+    const apiKey = $("annotation-resume-api-key").value.trim();
+    const body = {};
+    if (baseUrl) body.base_url = baseUrl;
+    if (apiKey) body.api_key = apiKey;
+    const button = $("annotation-resume-submit");
+    button.disabled = true;
     try {
-      await ui.api(`/api/annotations/${id}/resume`, "POST");
+      await ui.api(`/api/annotations/${id}/resume`, "POST", body);
+      closeResume();
       ui.notice("已重新加入标注队列，将沿用已完成的分段和结果。");
       await refresh();
       if (selectedId === id) await loadDetail(true);
     } catch (error) {
       ui.notice(error.message, true);
+    } finally {
+      button.disabled = false;
     }
   }
 

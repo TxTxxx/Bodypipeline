@@ -12,6 +12,7 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pipeline.shared.core import DomainError, executable_path
 
@@ -76,7 +77,87 @@ def source_path(settings) -> Path:
     return Path(settings.argus_src).expanduser()
 
 
-def environment(settings, annotation: dict, provider_context: dict) -> dict:
+MAX_BASE_URL = 2048
+MAX_API_KEY = 4096
+
+
+def normalize_base_url(value) -> str:
+    """Validate a per-task gateway URL without ever echoing the secret fields."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > MAX_BASE_URL:
+        raise DomainError("模型 baseURL 过长", 400)
+    if any(char.isspace() or ord(char) < 32 for char in text):
+        raise DomainError("模型 baseURL 不能包含空白或控制字符", 400)
+    parsed = urlsplit(text)
+    if parsed.scheme not in {"http", "https"}:
+        raise DomainError("模型 baseURL 必须使用 http:// 或 https://", 400)
+    if not parsed.hostname:
+        raise DomainError("模型 baseURL 缺少主机名", 400)
+    if parsed.username or parsed.password:
+        raise DomainError("模型 baseURL 不能包含用户名或密码", 400)
+    if parsed.query or parsed.fragment:
+        raise DomainError("模型 baseURL 不能包含查询参数或片段", 400)
+    return text.rstrip("/")
+
+
+def normalize_api_key(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > MAX_API_KEY:
+        raise DomainError("模型 API Key 过长", 400)
+    if any(
+        char.isspace()
+        or not char.isascii()
+        or ord(char) < 32
+        or ord(char) == 127
+        for char in text
+    ):
+        raise DomainError("模型 API Key 不能包含空白、控制字符或非 ASCII 字符", 400)
+    return text
+
+
+def resolve_credentials(
+    settings, base_url=None, api_key=None
+) -> dict:
+    """Credentials for one task: the page input wins over server defaults.
+
+    The key is returned to the caller only.  It must never be copied into the
+    annotation record, the work context, a log or an export.
+    """
+
+    task_base_url = normalize_base_url(base_url)
+    server_base_url = normalize_base_url(settings.argus_base_url)
+    key = normalize_api_key(api_key) or normalize_api_key(
+        os.environ.get(settings.argus_api_key_env, "")
+    )
+    if not key:
+        raise DomainError(
+            "未提供模型 API Key，且服务器未配置默认密钥；请在页面填写本次任务的 API Key",
+            400,
+        )
+    return {
+        "base_url": task_base_url or server_base_url,
+        "api_key": key,
+        "task_base_url": task_base_url,
+    }
+
+
+def redact(text: str, secret: str) -> str:
+    if not secret:
+        return text
+    return text.replace(secret, "[redacted]")
+
+
+def environment(
+    settings,
+    annotation: dict,
+    provider_context: dict,
+    credentials: dict | None = None,
+) -> dict:
     """Environment for the Argus subprocess.
 
     ``tool_environment`` strips every ``PIPELINE_*`` variable, which is the
@@ -105,6 +186,14 @@ def environment(settings, annotation: dict, provider_context: dict) -> dict:
     key = os.environ.get(settings.argus_api_key_env, "")
     if key:
         env["PIPELINE_ARGUS_API_KEY"] = key
+    if credentials:
+        base_url = str(credentials.get("base_url") or "")
+        task_key = str(credentials.get("api_key") or "")
+        if base_url:
+            env["PIPELINE_ARGUS_BASE_URL"] = base_url
+            env["PIPELINE_ARGUS_GENERIC_GATEWAY"] = "1"
+        if task_key:
+            env["PIPELINE_ARGUS_API_KEY"] = task_key
     jobs = max(1, int(annotation.get("concurrency") or 2))
     env["RDA_DECODE_CONCURRENCY"] = str(max(2, 2 * jobs))
     return env

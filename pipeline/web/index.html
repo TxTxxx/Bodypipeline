@@ -403,6 +403,18 @@
                   </div>
                   <div class="conversion-grid">
                     <div>
+                      <label for="annotation-base-url">模型 baseURL（可选）</label>
+                      <input id="annotation-base-url" type="url" autocomplete="off" placeholder="留空使用服务器默认" disabled />
+                      <p class="small muted">适用于 OpenAI 兼容的 Chat Completions 网关，例如 https://gateway.example.com/v1。</p>
+                    </div>
+                    <div>
+                      <label for="annotation-api-key">模型 API Key <span class="required" id="annotation-api-key-required">*</span></label>
+                      <input id="annotation-api-key" type="password" autocomplete="off" placeholder="仅本次任务使用" disabled />
+                      <p class="small muted">仅保存在 Server 内存，任务结束或取消后清除；不写入任务记录、日志、导出结果或页面详情。</p>
+                    </div>
+                  </div>
+                  <div class="conversion-grid">
+                    <div>
                       <label for="annotation-cap">本次费用上限（USD）</label>
                       <input id="annotation-cap" type="number" min="0.01" step="0.01" required disabled />
                       <p class="small muted" id="annotation-budget" aria-live="polite">正在读取预算…</p>
@@ -487,6 +499,20 @@
         </main>
       </div>
     </div>
+    <dialog id="annotation-resume-dialog" class="dataset-delete-dialog" aria-labelledby="annotation-resume-title">
+      <form id="annotation-resume-form">
+        <div class="panel-heading"><h2 id="annotation-resume-title">续跑自动标注</h2><button type="button" class="text-button" id="annotation-resume-close" aria-label="关闭续跑设置">关闭</button></div>
+        <div class="dataset-delete-body">
+          <p class="small muted">续跑需要模型访问凭据。密钥只保存在 Server 内存中，任务结束或取消后清除；不写入任务记录、日志或导出结果。</p>
+          <p class="small muted" id="annotation-resume-hint"></p>
+          <label for="annotation-resume-base-url">模型 baseURL（留空使用服务器默认）</label>
+          <input id="annotation-resume-base-url" type="url" autocomplete="off" placeholder="https://gateway.example.com/v1" />
+          <label for="annotation-resume-api-key">模型 API Key（服务器已有默认密钥时可留空）</label>
+          <input id="annotation-resume-api-key" type="password" autocomplete="off" />
+          <div class="conversion-submit"><button type="button" class="secondary" id="annotation-resume-cancel">取消</button><button class="primary" id="annotation-resume-submit" type="submit">重新加入队列</button></div>
+        </div>
+      </form>
+    </dialog>
     <dialog id="dataset-delete-dialog" class="dataset-delete-dialog" aria-labelledby="dataset-delete-title" aria-describedby="dataset-delete-warning">
       <form id="dataset-delete-form">
         <div class="panel-heading"><h2 id="dataset-delete-title">永久删除数据集</h2><button type="button" class="text-button" id="dataset-delete-close" aria-label="关闭删除确认">关闭</button></div>

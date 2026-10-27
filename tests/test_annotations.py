@@ -75,10 +75,11 @@ def make_job(store, data, *, provider="agilex", robot_type="agilex_aloha"):
 
 
 @pytest.fixture
-def service(settings_factory, tmp_path):
+def service(settings_factory, tmp_path, monkeypatch):
     src = make_argus(tmp_path)
     imports = tmp_path / "imports"
     imports.mkdir()
+    monkeypatch.setenv("PIPELINE_ARGUS_API_KEY", "test-server-key")
     s = settings_factory(
         "server",
         argus_src=str(src),
@@ -153,6 +154,108 @@ def test_options_never_default_to_a_model_outside_the_allowlist(service):
     runner.settings.argus_models = []
     runner.settings.argus_model = "any/model"
     assert runner.options()["default_model"] == "any/model"
+
+
+def test_enqueue_requires_credentials_and_keeps_the_key_off_the_record(
+    service, monkeypatch
+):
+    runner, _store, _src, _data = service
+    monkeypatch.delenv("PIPELINE_ARGUS_API_KEY", raising=False)
+    with pytest.raises(DomainError, match="API Key"):
+        runner.enqueue("job-1")
+
+    row = runner.enqueue(
+        "job-1", base_url="https://gateway.example.com/v1/", api_key="task-secret"
+    )
+    assert row["base_url"] == "https://gateway.example.com/v1"
+    assert "task-secret" not in json.dumps(row)
+    assert runner.credentials[row["id"]]["api_key"] == "task-secret"
+    assert runner.credentials[row["id"]]["base_url"] == "https://gateway.example.com/v1"
+    runner.cancel(row["id"])
+    assert row["id"] not in runner.credentials
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://gateway.example/v1",
+        "gateway.example/v1",
+        "https://user:pass@gateway.example/v1",
+        "https://gateway.example/v1?key=1",
+        "https://gateway.example/v1#fragment",
+        "https://gateway.example/v 1",
+    ],
+)
+def test_enqueue_rejects_unsafe_base_urls(service, url):
+    runner, _store, _src, _data = service
+    with pytest.raises(DomainError):
+        runner.enqueue("job-1", base_url=url, api_key="task-secret")
+
+
+def test_environment_prefers_per_task_credentials(service):
+    runner, _store, _src, _data = service
+    credentials = argus_annotation.resolve_credentials(
+        runner.settings, "https://gateway.example/v1", "task-secret"
+    )
+    env = argus_annotation.environment(
+        runner.settings, {"concurrency": 2}, {}, credentials
+    )
+    assert env["PIPELINE_ARGUS_BASE_URL"] == "https://gateway.example/v1"
+    assert env["PIPELINE_ARGUS_GENERIC_GATEWAY"] == "1"
+    assert env["PIPELINE_ARGUS_API_KEY"] == "task-secret"
+
+    # Server defaults still work when the task does not name a key.
+    env = argus_annotation.environment(runner.settings, {"concurrency": 2}, {})
+    assert env["PIPELINE_ARGUS_API_KEY"] == "test-server-key"
+    assert "PIPELINE_ARGUS_BASE_URL" not in env
+
+
+def test_task_key_is_redacted_from_logs_and_cleared_after_cancel(service):
+    runner, _store, _src, _data = service
+    row = runner.enqueue("job-1", api_key="task-secret")
+    work = runner.work(row)
+    (work / "logs").mkdir(parents=True)
+    (work / "logs/run.log").write_text("request failed with task-secret\n")
+    assert "task-secret" not in runner.log(row["id"], "run")
+    assert "[redacted]" in runner.log(row["id"], "run")
+    runner.cancel(row["id"])
+    assert row["id"] not in runner.credentials
+
+
+def test_resume_asks_for_the_key_again_after_memory_is_cleared(service, monkeypatch):
+    runner, store, _src, _data = service
+    row = runner.enqueue("job-1")
+    store.put("annotation", row["id"], dict(row, state="FAILED", error="boom"))
+    runner.credentials.pop(row["id"], None)
+    monkeypatch.delenv("PIPELINE_ARGUS_API_KEY", raising=False)
+    with pytest.raises(DomainError, match="API Key"):
+        runner.resume(row["id"])
+
+    resumed = runner.resume(
+        row["id"], base_url="https://gateway.example/v1", api_key="resume-secret"
+    )
+    assert resumed["state"] == "QUEUED"
+    assert resumed["base_url"] == "https://gateway.example/v1"
+    assert runner.credentials[row["id"]]["api_key"] == "resume-secret"
+
+
+def test_recover_marks_queued_interrupted(service):
+    runner, store, _src, _data = service
+    store.put(
+        "annotation",
+        "q1",
+        {
+            "id": "q1",
+            "job_id": "job-1",
+            "state": "QUEUED",
+            "created_at": time.time(),
+            "dataset_path": "/x",
+        },
+    )
+    runner.recover()
+    recovered = store.get("annotation", "q1")
+    assert recovered["state"] == "INTERRUPTED"
+    assert "续跑" in recovered["error"]
 
 
 def test_budget_is_shared_with_analyses(service):
@@ -416,6 +519,7 @@ done
 mkdir -p "$out/run/out" "$out/qa" "$out/logs"
 printf '%s' '{"status":"done","cost_usd":0.25,"reserved_cost_usd":0.3,"cost_complete":true,"cap_usd":2}' > "$out/run/run.json"
 printf '%s' '{"episode_dir":"episode_000000","episode_prompt":"pick","parse_ok":true,"labels":{"completion":{"task_completed":true}},"event_labels":[{}],"usage":{"est_cost_usd":0.25}}' > "$out/run/out/episode_000000.json"
+echo "gateway key=$PIPELINE_ARGUS_API_KEY"
 exit 0
 """
     )
@@ -427,6 +531,9 @@ exit 0
     assert finished["episodes_done"] == 1
     assert finished["cost_usd"] == 0.25
     assert (runner.work(finished) / "logs/run.log").is_file()
+    assert "test-server-key" not in (runner.work(finished) / "logs/run.log").read_text()
+    context = json.loads((runner.work(finished) / "context.json").read_text())
+    assert "test-server-key" not in json.dumps(context)
     assert runner.episodes(finished["id"])[0]["prompt"] == "pick"
     assert runner.export(finished["id"])["argus"]["cost_usd"] == 0.25
 
@@ -513,6 +620,52 @@ def test_api_options_candidates_enqueue_and_delete_guard(service):
             json={"job_id": "job-1", "model": "unknown/model"},
         )
         assert bad.status_code == 400
+
+
+def test_api_accepts_task_credentials_without_persisting_them(service):
+    _fixture_runner, _store, _src, _data = service
+    settings = _fixture_runner.settings
+    app = create_app(settings, background=False)
+    runner = app.state.annotations
+    headers = {"Authorization": "Bearer " + settings.token}
+    with TestClient(app) as http:
+        created = http.post(
+            "/api/annotations",
+            headers=headers,
+            json={
+                "job_id": "job-1",
+                "model": "openai/gpt-6-astra",
+                "base_url": "https://gateway.example/v1",
+                "api_key": "api-secret",
+            },
+        )
+        assert created.status_code == 202, created.text
+        row = created.json()
+        aid = row["id"]
+        assert "api-secret" not in created.text
+        assert row["base_url"] == "https://gateway.example/v1"
+        assert runner.credentials[aid]["api_key"] == "api-secret"
+
+        detail = http.get(f"/api/annotations/{aid}", headers=headers)
+        assert "api-secret" not in detail.text
+        export = http.get(f"/api/annotations/{aid}/export", headers=headers)
+        assert export.status_code == 200
+        assert "api-secret" not in export.text
+
+        assert http.post(f"/api/annotations/{aid}/cancel", headers=headers).json()[
+            "state"
+        ] == "CANCELLED"
+        assert aid not in runner.credentials
+
+        resumed = http.post(
+            f"/api/annotations/{aid}/resume",
+            headers=headers,
+            json={"api_key": "resume-secret"},
+        )
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["state"] == "QUEUED"
+        assert "resume-secret" not in resumed.text
+        assert runner.credentials[aid]["api_key"] == "resume-secret"
 
 
 def test_unavailable_toolchain_disables_enqueue(settings_factory, tmp_path):
