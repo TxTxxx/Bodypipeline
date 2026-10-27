@@ -20,6 +20,7 @@ class ApexAdapter:
         if settings.profile().get("robot_type") != "tianji_marvin_pro":
             raise ValueError("Apex capture requires tianji_marvin_pro Profile")
         self.options = settings.capture_options
+        self.controller_trigger = settings.controller_trigger
         base = self.options.get("url", "http://127.0.0.1:8080")
         parsed = urlparse(base)
         if parsed.scheme != "http" or parsed.hostname not in {
@@ -110,10 +111,15 @@ class ApexAdapter:
 
         status = self._call("GET", "status")
         request_id = status.get("request_id")
+        missing_request_allowed = (
+            self.controller_trigger.get("accept_missing_request_id") is True
+        )
         return dict(
             **status,
-            controller_owned=isinstance(request_id, str)
-            and request_id.startswith("controller-"),
+            controller_owned=(
+                isinstance(request_id, str) and request_id.startswith("controller-")
+            )
+            or (request_id is None and missing_request_allowed),
         )
 
     def _wait(self, predicate):

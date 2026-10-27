@@ -225,6 +225,25 @@ def test_controller_saved_recording_is_imported_without_recorder_mutation(
     assert calls == []
 
 
+def test_legacy_controller_session_without_request_id_is_detected(
+    settings_factory, tmp_path
+):
+    adapter, settings, state, calls, original = setup_apex(settings_factory, tmp_path)
+    settings.controller_trigger["accept_missing_request_id"] = True
+    adapter.controller_trigger = settings.controller_trigger
+    state.update(
+        phase="recording",
+        session_id="apex-controller-owned",
+        request_id=None,
+        data_state="recording",
+        video_state="recording",
+        path=str(original),
+    )
+    status = adapter.controller_status()
+    assert status["controller_owned"] is True
+    assert calls == [("GET", "status")]
+
+
 def test_disabled_health_and_close_are_read_only(settings_factory, tmp_path):
     adapter, s, state, calls, original = setup_apex(settings_factory, tmp_path)
     s.capture_options["allow_recording"] = False

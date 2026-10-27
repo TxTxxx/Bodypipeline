@@ -60,7 +60,10 @@ class FakeControllerAdapter:
 
 
 def controller(settings_factory, **settings):
-    settings.setdefault("controller_trigger", {"enabled": True})
+    settings.setdefault(
+        "controller_trigger",
+        {"enabled": True, "accept_missing_request_id": True},
+    )
     adapter = FakeControllerAdapter()
     service = CaptureService(settings_factory(**settings), adapter=adapter)
     return service, adapter, ControllerCaptureCoordinator(service)
@@ -162,11 +165,12 @@ def test_disarm_keeps_draft_but_does_not_adopt(settings_factory):
 
 
 def test_arm_api_and_config(settings_factory):
-    settings = settings_factory(controller_trigger={"enabled": True})
+    trigger = {"enabled": True, "accept_missing_request_id": True}
+    settings = settings_factory(controller_trigger=trigger)
     with TestClient(create_app(settings, background=False)) as http:
         headers = {"Authorization": "Bearer " + settings.token}
         config = http.get("/api/config", headers=headers).json()
-        assert config["controller_trigger"] == {"enabled": True}
+        assert config["controller_trigger"] == trigger
         response = http.post("/api/controller/arm", json=body(), headers=headers)
         assert response.status_code == 201
         armed = response.json()

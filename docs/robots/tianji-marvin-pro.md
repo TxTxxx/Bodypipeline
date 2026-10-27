@@ -34,8 +34,10 @@ Apex 适配器仅访问 loopback HTTP 的 `status/projects/start/stop` 录制接
 
 右手柄 B 当前由 Tianji 遥操作节点直接切换 Apex recorder 的开始与保存。BodyPipeline
 启用 `controller_trigger` 后，前端“准备手柄采集”只创建一个显式 DRAFT；Client 后台
-监视带 `controller-` request id 的 Apex 会话，并把它绑定到该 DRAFT。第二次按 B 后，
-Client 等待 data/video writer 都关闭，将录制复制到受管目录并进入 `REVIEW`。
+监视由该链路启动的 Apex 会话，并把它绑定到该 DRAFT。新版 controller 会携带
+`controller-` request id；当前现场手柄链路不传 request id，因此部署配置显式启用
+`accept_missing_request_id`。第二次按 B 后，Client 等待 data/video writer 都关闭，
+将录制复制到受管目录并进入 `REVIEW`。
 
 手柄不会执行“保留并上传”。是否保留、封存和上传仍由 Client 前端决定；摇杆取消也不会
 被转换为上传。每次开始下一段手柄采集前，需要在前端重新准备一个 DRAFT，避免在未知
