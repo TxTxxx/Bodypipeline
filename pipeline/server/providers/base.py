@@ -21,7 +21,13 @@ class RobotProvider(Protocol):
 
     def profile_blockers(self, profile: dict) -> list[dict]: ...
 
-    def prepare(self, raw: Path, dest: Path, profile: dict) -> dict: ...
+    def conversion_capabilities(self, profile: dict) -> dict:
+        """Describe supported per-job options from trusted Profile configuration."""
+        return {}
+
+    def prepare(
+        self, raw: Path, dest: Path, profile: dict, *, options: dict | None = None
+    ) -> dict: ...
 
     def quality(
         self, aligned: Path, profile: dict, synthetic: bool = False

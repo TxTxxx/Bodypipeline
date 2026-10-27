@@ -18,6 +18,7 @@ from pipeline.shared.core import (
     now,
 )
 
+from .conversion_options import normalize_options, provider_capabilities
 from .datasets import TARGET_FORMATS
 from .merges import MergeRunner
 from .providers import RuntimeCatalog
@@ -29,6 +30,7 @@ from .storage import (
     share_data_tree,
     storage_path,
 )
+from .version_conversions import VersionConversionRunner
 
 
 class JobRunner:
@@ -38,6 +40,7 @@ class JobRunner:
         self.lock = threading.RLock()
         self.shutdown_requested = threading.Event()
         self.merges = MergeRunner(settings, self)
+        self.version_conversions = VersionConversionRunner(settings, self)
 
     def recover(self):
         for job in self.store.all("job"):
@@ -49,8 +52,21 @@ class JobRunner:
                 )
                 self.store.put("job", job["id"], job)
 
-    def enqueue(self, uid, target_format="v3.0", run_doctor=True, instruction=None):
-        return self._enqueue([uid], target_format, run_doctor, instruction)
+    def enqueue(
+        self,
+        uid,
+        target_format="v3.0",
+        run_doctor=True,
+        instruction=None,
+        conversion_options=None,
+    ):
+        return self._enqueue(
+            [uid],
+            target_format,
+            run_doctor,
+            instruction,
+            conversion_options=conversion_options,
+        )
 
     def enqueue_collection(
         self,
@@ -59,6 +75,7 @@ class JobRunner:
         target_format="v3.0",
         run_doctor=True,
         upload_ids=None,
+        conversion_options=None,
     ):
         if upload_ids is None:
             upload_ids = []
@@ -74,11 +91,23 @@ class JobRunner:
                 if metadata["collection_id"] == collection_id:
                     upload_ids.append(row["id"])
         return self._enqueue(
-            upload_ids, target_format, run_doctor, instruction, collection_id
+            upload_ids,
+            target_format,
+            run_doctor,
+            instruction,
+            collection_id,
+            conversion_options=conversion_options,
         )
 
     def _enqueue(
-        self, upload_ids, target_format, run_doctor, instruction, collection_id=None
+        self,
+        upload_ids,
+        target_format,
+        run_doctor,
+        instruction,
+        collection_id=None,
+        *,
+        conversion_options=None,
     ):
         if target_format not in TARGET_FORMATS or type(run_doctor) is not bool:
             raise DomainError(
@@ -110,6 +139,9 @@ class JobRunner:
                 )
             runtime = self.catalog.get(runtime_ids[0])
             provider = self.catalog.provider(runtime)
+            options = normalize_options(
+                conversion_options, provider_capabilities(provider, runtime.profile)
+            )
             cid = collection_id or metadata[0]["collection_id"]
             if any(m["collection_id"] != cid for m in metadata):
                 raise DomainError(
@@ -138,6 +170,7 @@ class JobRunner:
                     "mode": self.settings.processing_mode,
                     "target_format": target_format,
                     "run_doctor": run_doctor,
+                    **({"conversion_options": options} if options else {}),
                     "pipeline": "runtime-provider-v2",
                     "encoding": "libx264-yuv420p",
                     "letools": "1c417cc9c205f85cd01a5e5860646f1594738354",
@@ -182,6 +215,7 @@ class JobRunner:
                 "target_format": target_format,
                 "run_doctor": run_doctor,
                 "instruction": instruction,
+                "conversion_options": options,
                 "capture_mode": manifests[0]["capture_mode"],
                 "error": None,
             }
@@ -450,6 +484,9 @@ class JobRunner:
         if job.get("operation") == "merge":
             self.merges.run(job)
             return
+        if job.get("operation") == "version_conversion":
+            self.version_conversions.run(job)
+            return
         self.save(
             job,
             state="RUNNING",
@@ -489,6 +526,9 @@ class JobRunner:
                 return
             if not synthetic:
                 provider.validate_profile(profile)
+            options = normalize_options(
+                job.get("conversion_options"), provider_capabilities(provider, profile)
+            )
             from pipeline.shared.core import confined, file_hash
 
             ids = job.get("upload_ids", [job["upload_id"]])
@@ -559,7 +599,12 @@ class JobRunner:
                     for f in manifest["files"]:
                         if file_hash(confined(raw_root, f["path"])) != f["sha256"]:
                             raise DomainError(f"原始文件摘要变化：{f['path']}")
-                    prepared = provider.prepare(raw, source_work / "aligned", profile)
+                    prepared = provider.prepare(
+                        raw,
+                        source_work / "aligned",
+                        profile,
+                        **({"options": options} if options else {}),
+                    )
                     aligned_path = Path(
                         prepared.pop("aligned_path", source_work / "aligned/episode0")
                     )
@@ -662,6 +707,16 @@ class JobRunner:
                     "synthetic": synthetic,
                     "target_format": job.get("target_format", "v3.0"),
                     "run_doctor": job.get("run_doctor", True),
+                    "conversion_options": options,
+                    "action_corrections": [
+                        {
+                            "episode_index": report["episode_index"],
+                            "upload_id": report["upload_id"],
+                            **report["action_corrections"],
+                        }
+                        for report in reports
+                        if report.get("action_corrections")
+                    ],
                     "video_encoding": {"codec": "libx264", "pixel_format": "yuv420p"},
                 },
             )

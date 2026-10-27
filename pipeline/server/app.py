@@ -16,6 +16,7 @@ from pipeline.shared.web import mount_ui
 
 from .analyses import AnalysisRunner
 from .checks import QualityRunner
+from .conversion_options import ConversionOptions
 from .datasets import TARGET_FORMATS, dataset_for_job
 from .imports import ImportService
 from .ingest import IngestService
@@ -31,6 +32,7 @@ class ConversionRequest(BaseModel):
     target_format: Literal["v3.0", "v2.1"] = "v3.0"
     run_doctor: StrictBool = True
     instruction: str | None = Field(default=None, min_length=1, max_length=2000)
+    conversion_options: ConversionOptions = Field(default_factory=ConversionOptions)
 
 
 class BatchConversionRequest(ConversionRequest):
@@ -55,6 +57,14 @@ class MergeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_job_ids: list[str] = Field(min_length=2, max_length=100)
     name: str = Field(min_length=1, max_length=2000)
+
+
+class VersionConversionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_job_id: str = Field(min_length=1, max_length=128)
+    target_format: Literal["v3.0", "v2.1"]
+    name: str | None = Field(default=None, min_length=1, max_length=2000)
+    run_doctor: StrictBool = True
 
 
 log = logging.getLogger("pipeline.server")
@@ -351,6 +361,21 @@ def create_app(settings, background=True):
     def merge_candidates():
         return runner.merges.candidates()
 
+    @app.get("/api/version-conversion-candidates")
+    def version_conversion_candidates():
+        return runner.version_conversions.candidates()
+
+    @app.post("/api/version-conversions", status_code=202)
+    def convert_version(body: VersionConversionRequest):
+        return job_response(
+            runner.version_conversions.enqueue(
+                body.source_job_id,
+                body.target_format,
+                name=body.name,
+                run_doctor=body.run_doctor,
+            )
+        )
+
     @app.post("/api/merges", status_code=202)
     def merge(body: MergeRequest):
         return job_response(runner.merges.enqueue(body.source_job_ids, body.name))
@@ -424,7 +449,14 @@ def create_app(settings, background=True):
 
     @app.get("/api/jobs/{jid}/logs/{name}")
     def logs(jid: str, name: str):
-        if name not in {"convert", "validate", "doctor", "merge"}:
+        if name not in {
+            "convert",
+            "validate",
+            "doctor",
+            "merge",
+            "source-validate",
+            "environment",
+        }:
             raise DomainError("日志不存在", 404)
         row = ingest.store.get("job", jid)
         p = storage_path(settings, row, "work", row["id"]) / f"{name}.stderr.log"

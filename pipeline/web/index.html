@@ -210,7 +210,7 @@
             </div>
           <section id="server-view" hidden>
             <div class="warning" id="demo-warning" hidden>
-              演示模式只验证上传与时间对齐。真实格式转换、Doctor 和 Visualizer 需部署真实工具环境。
+              演示模式只影响原始采集转换；已有 LeRobot 版本转换与数据集合并仍执行真实处理。
             </div>
             <section class="panel robot-scope" data-server-overview aria-label="选择机器人类型">
               <div>
@@ -279,10 +279,42 @@
                     <div class="episode-toolbar"><label class="check-label"><input id="episode-all" type="checkbox" />全选已接收采集</label><span id="episode-selection-count" class="small muted"></span></div>
                     <div class="table-scroll"><table><thead><tr><th>选择</th><th>采集 / 设备</th><th>数据规模</th><th>状态</th></tr></thead><tbody id="episode-list"></tbody></table></div>
                   </div>
+                  <div id="conversion-closure" hidden>
+                    <label class="check-label" for="conversion-closure-enabled"><input id="conversion-closure-enabled" type="checkbox" />启用夹爪闭合度修正</label>
+                    <div id="conversion-closure-fields" class="field-block" hidden>
+                      <label for="conversion-closure-percent">夹持阶段最小闭合度（名义行程 %）</label>
+                      <input id="conversion-closure-percent" type="number" min="0" max="100" step="0.1" value="90" disabled />
+                      <p class="small muted">仅提高识别出的稳定夹持阶段的夹爪动作目标，保留已经更闭合的动作。百分比表示配置中的电机名义行程，不代表夹持力。</p>
+                    </div>
+                  </div>
                   <label class="check-label" for="conversion-doctor"><input id="conversion-doctor" type="checkbox" checked />转换后自动运行 LeRobot Doctor</label>
                   <p class="small muted">自动质检仅生成质量报告，不改变转换结果。取消勾选时仅转换与结构验证，之后仍可直接预览或单独质检。</p>
                   <div id="conversion-warning" class="warning" hidden></div>
                   <div class="conversion-submit"><button id="conversion-submit" class="primary" type="submit" disabled>提交批量转换</button><span id="conversion-help" class="small muted">请选择数据集并填写 instruction。</span></div>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><h2>已有 LeRobot 版本转换</h2><span class="step">VERSION ROUND-TRIP</span></div>
+                <form id="version-conversion-form" class="conversion-form">
+                  <div class="conversion-grid">
+                    <div>
+                      <label for="version-conversion-source">选择已有数据集 <span class="required">*</span></label>
+                      <select id="version-conversion-source" required disabled><option value="">请先选择机器人类型</option></select>
+                      <div id="version-conversion-source-summary" class="source-summary small muted">选择已转换、已导入或已合并的 LeRobot v2.1 / v3.0 数据集。</div>
+                    </div>
+                    <div>
+                      <label for="version-conversion-target">目标版本</label>
+                      <select id="version-conversion-target" disabled><option value="">选择来源后自动确定</option></select>
+                      <p class="small muted">仅支持 v2.1 ↔ v3.0 双向转换；来源数据集保持不变。</p>
+                    </div>
+                  </div>
+                  <label for="version-conversion-name">新数据集名称 <span class="required">*</span></label>
+                  <input id="version-conversion-name" required maxlength="2000" autocomplete="off" placeholder="选择来源后自动填写，也可以修改" />
+                  <p class="small muted">Episodes、Task 文本、特征、统计信息与视频内容由 LeTools 转换，不会要求重新填写 instruction。</p>
+                  <label class="check-label" for="version-conversion-doctor"><input id="version-conversion-doctor" type="checkbox" checked />转换后自动运行 LeRobot Doctor</label>
+                  <p class="small muted">转换和深度结构验证始终执行；Doctor 仅生成质量报告，不修改结果。</p>
+                  <div id="version-conversion-warning" class="warning" hidden></div>
+                  <div class="conversion-submit"><button id="version-conversion-submit" class="primary" type="submit" disabled>创建版本转换任务</button><span id="version-conversion-help" class="small muted">请选择一个可用的 LeRobot 数据集。</span></div>
                 </form>
               </section>
               <section class="panel">

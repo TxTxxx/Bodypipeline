@@ -66,5 +66,42 @@
     "action 与 qpos 同为 14 维、顺序一致（左臂 6 关节 + 左夹爪 + 右臂 6 关节 + 右夹爪），由文件形状与上游转换脚本共同确认。",
     "相机为 JPEG 字节数组，分辨率从首帧解码得到；Profile 只声明字段名，不重新编码原始帧。",
     "output_fps 取上游录制约定值；该格式不携带 fps 元数据，改变帧率会改变动作的时间尺度。"
-  ]
+  ],
+  "conversion": {
+    "gripper_closure": {
+      "algorithm": "closing_hold_plateaus_v1",
+      "calibration_id": "arx_x5_nominal_motor_travel_v1",
+      "default_percent": 90,
+      "channels": [
+        {
+          "joint": "left_gripper",
+          "open": -3.14,
+          "closed": 0.0
+        },
+        {
+          "joint": "right_gripper",
+          "open": -3.14,
+          "closed": 0.0
+        }
+      ],
+      "phase_parameters": {
+        "median_frames": 5,
+        "opening_prominence": 0.06,
+        "minimum_closure": 0.06,
+        "closing_onset": 0.02,
+        "plateau_range": 0.04,
+        "plateau_seconds": 0.3,
+        "minimum_phase_seconds": 0.4,
+        "release_window_seconds": 0.2,
+        "release_drop": 0.045,
+        "release_confirm_seconds": 0.5,
+        "release_confirm_drop": 0.12,
+        "release_onset_drop": 0.01,
+        "empty_closed_margin": 0.2,
+        "stability_range": 0.025,
+        "minimum_plateau_seconds": 0.5,
+        "maximum_level_difference": 0.15
+      }
+    }
+  }
 }

@@ -180,7 +180,9 @@ footer { display: flex; justify-content: space-between; gap: 16px; color: #9aa2a
   .breadcrumb { padding-left: 24px; }
   .capture-layout { grid-template-columns: minmax(0, 1fr) 280px; }
   .panel-heading .small { display: none; }
-  .robot-scope { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .robot-scope { grid-template-columns: 1fr; gap: 8px; }
+  .robot-scope p { margin-top: 0; }
+  .conversion-grid { grid-template-columns: 1fr; gap: 18px; }
 }
 @media (max-width: 850px) {
   .mobile-only { display: grid; }

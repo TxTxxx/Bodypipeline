@@ -28,7 +28,9 @@ let config = null,
   selectedEpisodes = new Set(),
   serverJobs = [],
   serverMergeCandidates = [],
+  serverVersionConversionCandidates = [],
   selectedMergeDatasets = new Set(),
+  activeVersionConversionSource = null,
   serverTab = "convert",
   clientTab = "capture",
   selectedCheck = null,
@@ -69,11 +71,13 @@ const names = {
   STOPPED: "未启动",
   IMPORTED: "历史导入",
   MERGED: "合并数据集",
+  VERSION_CONVERTED: "版本转换",
 };
 const jobBadge = (job) => job.operation === "merge" && job.state === "CONVERTED"
   ? '<span class="badge">合并完成 · 待质检</span>' : badge(job.state);
 const sourceBadge = (job) => {
   if (job.operation === "merge") return badge("MERGED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
+  if (job.operation === "version_conversion") return badge("VERSION_CONVERTED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
   const upload = serverUploads.find((u) => u.id === job.upload_id);
   if (job.capture_mode === "mock" || upload?.capture_mode === "mock") return badge("MOCK");
   if (job.capture_mode === "imported" || upload?.capture_mode === "imported" || upload?.source_kind === "raw_import") return badge("IMPORTED");
@@ -165,7 +169,7 @@ async function action(fn) {
     notice(e.message, true);
   } finally {
     busy = false;
-    if (config?.role === "server") { updateConversionSelection(); updateMergeSelection(); }
+    if (config?.role === "server") { updateConversionSelection(); updateMergeSelection(); updateVersionConversionSelection(); }
     if (client && config?.role === "client") {
       renderClientCaptures();
       void refresh();
@@ -637,16 +641,18 @@ async function refresh() {
       const rows = await api("/api/capture-status");
       if (config?.role === "client") acceptCaptures(rows);
     } else {
-      const [uploads, jobs, v, mergeCandidates] = await Promise.all([
+      const [uploads, jobs, v, mergeCandidates, versionConversionCandidates] = await Promise.all([
         api("/api/collections"),
         api("/api/jobs"),
         api("/api/viewer"),
         api("/api/merge-candidates"),
+        api("/api/version-conversion-candidates"),
       ]);
       serverCollections = uploads;
       serverUploads = uploads.flatMap((c) => c.uploads);
       serverJobs = jobs;
       serverMergeCandidates = mergeCandidates;
+      serverVersionConversionCandidates = versionConversionCandidates;
       renderServer(serverUploads, jobs);
       renderViewerStatus(v);
       if (selectedJob) await showJob();
@@ -773,7 +779,10 @@ function replaceOptions(element, options, selected) {
 }
 $("server-robot-type").onchange = () => {
   selectedMergeDatasets.clear();
+  activeVersionConversionSource = null;
   $("conversion-upload").value = "";
+  $("version-conversion-source").value = "";
+  $("version-conversion-name").value = "";
   selectedJob = null;
   selectedCheck = null;
   detailSignature = null;
@@ -781,8 +790,57 @@ $("server-robot-type").onchange = () => {
   $("notice").hidden = true;
   renderServer(serverUploads, serverJobs);
 };
+function conversionCorrectionSummary(job) {
+  const options = job.conversion_options?.gripper_closure;
+  if (!options) return "";
+  const reports = job.alignment_report?.episodes || (job.alignment_report ? [job.alignment_report] : []);
+  const corrections = reports.map((r) => r.action_corrections?.gripper_closure).filter(Boolean);
+  const changed = corrections.reduce((count, r) => count + r.changed_frames_any_channel, 0);
+  return `<p class="small">夹持阶段最小闭合度：<strong>${esc(options.minimum_percent)}%</strong>（名义行程）${corrections.length ? ` · 已调整 ${esc(changed)} 帧 · ${esc(corrections.length)} 个 episodes 已检查` : " · 等待处理"}</p>`;
+}
 function chosenCollection() {
   return serverCollections.find((c) => c.id === $("conversion-upload").value && rowRobotType(c) === $("server-robot-type").value);
+}
+let conversionOptionsRuntime = null;
+function selectedConversionRuntime() {
+  const collection = chosenCollection();
+  const runtimes = (config.runtimes || []).filter((r) => r.robot_type === $("server-robot-type").value);
+  if (collection) {
+    const ids = [...new Set((collection.uploads || []).map((u) => u.runtime_id))];
+    return ids.length === 1 ? runtimes.find((r) => r.id === ids[0]) : null;
+  }
+  return runtimes.length === 1 ? runtimes[0] : null;
+}
+function updateConversionOptions() {
+  const runtime = selectedConversionRuntime();
+  const capability = runtime?.conversion_capabilities?.gripper_closure;
+  const identity = runtime ? `${$("server-robot-type").value}:${runtime.id}` : null;
+  if (conversionOptionsRuntime !== identity) {
+    conversionOptionsRuntime = identity;
+    $("conversion-closure-enabled").checked = false;
+    $("conversion-closure-percent").value = capability?.default_percent ?? "";
+  }
+  $("conversion-closure").hidden = !capability;
+  if (!capability) {
+    $("conversion-closure-enabled").checked = false;
+    $("conversion-closure-percent").value = "";
+  }
+  const enabled = Boolean(capability && $("conversion-closure-enabled").checked);
+  $("conversion-closure-enabled").disabled = busy || !capability;
+  $("conversion-closure-fields").hidden = !enabled;
+  $("conversion-closure-percent").disabled = busy || !enabled;
+  $("conversion-closure-percent").required = enabled;
+  if (capability) {
+    $("conversion-closure-percent").min = capability.minimum_percent;
+    $("conversion-closure-percent").max = capability.maximum_percent;
+  }
+  return !enabled || $("conversion-closure-percent").checkValidity();
+}
+function selectedConversionOptions() {
+  const supported = selectedConversionRuntime()?.conversion_capabilities?.gripper_closure;
+  return supported && $("conversion-closure-enabled").checked
+    ? { gripper_closure: { minimum_percent: Number($("conversion-closure-percent").value) } }
+    : {};
 }
 function updateConversionSelection() {
   const type = $("server-robot-type").value, c = chosenCollection();
@@ -792,6 +850,7 @@ function updateConversionSelection() {
     $("conversion-instruction").value = "";
   }
   const ready = (c?.uploads || []).filter((u) => u.state === "COMMITTED");
+  const optionsValid = updateConversionOptions();
   selectedEpisodes = new Set([...selectedEpisodes].filter((id) => ready.some((u) => u.id === id)));
   $("server-robot-type").disabled = busy;
   $("conversion-upload").disabled = busy || !type;
@@ -816,9 +875,46 @@ function updateConversionSelection() {
   $("conversion-warning").hidden = !problems.length;
   $("conversion-warning").innerHTML = problems.length ? `<strong>转换前需要完成以下配置：</strong><ul>${problems.map((message) => `<li>${esc(message)}</li>`).join("")}</ul>` : "";
   const instruction = $("conversion-instruction").value.trim();
-  $("conversion-submit").disabled = busy || !c || !selected.length || selected.length > 1000 || !instruction || !$("conversion-format").value || problems.length > 0;
+  $("conversion-submit").disabled = busy || !c || !selected.length || selected.length > 1000 || !instruction || !$("conversion-format").value || !optionsValid || problems.length > 0;
   $("conversion-submit").textContent = config.processing_mode === "demo" ? "提交批量演示" : `批量转换 ${selected.length} 个 episodes`;
   $("conversion-help").textContent = problems.length ? "所选采集的配置检查未通过。" : !instruction ? "请填写训练 instruction。" : "本次选择保存为固定快照；后续上传不会改变正在执行的任务。";
+}
+function chosenVersionConversionSource() {
+  return serverVersionConversionCandidates.find(
+    (source) =>
+      source.source_job_id === $("version-conversion-source").value &&
+      rowRobotType(source) === $("server-robot-type").value,
+  );
+}
+function updateVersionConversionSelection() {
+  const source = chosenVersionConversionSource();
+  if (activeVersionConversionSource !== (source?.source_job_id || null)) {
+    activeVersionConversionSource = source?.source_job_id || null;
+    $("version-conversion-name").value = source
+      ? `${source.dataset_name.slice(0, 1990)} · ${source.target_format}`
+      : "";
+  }
+  $("version-conversion-source").disabled = busy || !$("server-robot-type").value;
+  $("version-conversion-target").innerHTML = source
+    ? `<option value="${esc(source.target_format)}">LeRobot ${esc(source.source_format)} → ${esc(source.target_format)}</option>`
+    : '<option value="">选择来源后自动确定</option>';
+  $("version-conversion-source-summary").innerHTML = source
+    ? `<strong>${esc(source.dataset_name)}</strong><br>LeRobot ${esc(source.source_format)} · ${esc(source.episode_count)} episodes · ${esc(source.frame_count)} 帧 · ${esc(source.fps)} FPS<br><span class="path-hint">${esc(source.dataset_path || source.reason || "")}</span>`
+    : "选择已转换、已导入或已合并的 LeRobot v2.1 / v3.0 数据集。";
+  const problems = [];
+  if (source && !source.selectable) problems.push(source.reason || "来源数据集当前不可用。");
+  if (!config?.letools_available) problems.push("服务器尚未配置可执行的 LeTools 环境。");
+  $("version-conversion-warning").hidden = !problems.length;
+  $("version-conversion-warning").textContent = problems.join("；");
+  const name = $("version-conversion-name").value.trim();
+  $("version-conversion-submit").disabled = busy || !source || !source.selectable || !source.target_format || !name || problems.length > 0;
+  $("version-conversion-help").textContent = problems.length
+    ? "请先处理来源或工具环境问题。"
+    : !source
+      ? "请选择一个可用的 LeRobot 数据集。"
+      : !name
+        ? "请填写新数据集名称。"
+        : `将 ${source.source_format} 转换为 ${source.target_format}，来源数据集保持不变。`;
 }
 $("import-form").onsubmit = (event) => {
   event.preventDefault();
@@ -851,6 +947,8 @@ $("import-form").onsubmit = (event) => {
 $("conversion-upload").onchange = updateConversionSelection;
 $("conversion-format").onchange = updateConversionSelection;
 $("conversion-instruction").oninput = updateConversionSelection;
+$("conversion-closure-enabled").onchange = updateConversionSelection;
+$("conversion-closure-percent").oninput = updateConversionSelection;
 $("episode-all").onchange = () => {
   selectedEpisodes = new Set($("episode-all").checked ? chosenCollection().uploads.filter((u) => u.state === "COMMITTED").map((u) => u.id) : []);
   updateConversionSelection();
@@ -866,8 +964,27 @@ $("conversion-form").onsubmit = (event) => {
     const row = await api(`/api/collections/${$("conversion-upload").value}/process`, "POST", {
       target_format: $("conversion-format").value, run_doctor: $("conversion-doctor").checked,
       instruction: $("conversion-instruction").value.trim(), upload_ids: [...selectedEpisodes],
+      conversion_options: selectedConversionOptions(),
     });
     notice(`数据集 ${row.dataset_name} · ${row.source_count} 个 episodes · ${row.target_format} · ${names[row.state] || row.state}。`);
+  });
+};
+$("version-conversion-source").onchange = updateVersionConversionSelection;
+$("version-conversion-name").oninput = updateVersionConversionSelection;
+$("version-conversion-doctor").onchange = updateVersionConversionSelection;
+$("version-conversion-form").onsubmit = (event) => {
+  event.preventDefault();
+  action(async () => {
+    const source = chosenVersionConversionSource();
+    if (!source) return;
+    $("version-conversion-submit").disabled = true;
+    const row = await api("/api/version-conversions", "POST", {
+      source_job_id: source.source_job_id,
+      target_format: $("version-conversion-target").value,
+      name: $("version-conversion-name").value.trim(),
+      run_doctor: $("version-conversion-doctor").checked,
+    });
+    notice(`已提交「${row.dataset_name}」：LeRobot ${row.source_format} → ${row.target_format}，${row.episode_count} 个 episodes。`);
   });
 };
 function renderServer(uploads, jobs) {
@@ -900,15 +1017,28 @@ function renderServer(uploads, jobs) {
   const options = '<option value="">请选择数据集</option>' + collections.map((c) => `<option value="${esc(c.id)}">${c.capture_mode === "mock" ? "[模拟] " : ""}${esc(c.dataset_name)} · ${c.ready_count}/${c.episode_count} episodes · ${esc(c.target)}/${esc(c.prefix)} · ${esc(c.id.slice(0, 6))}</option>`).join("");
   replaceOptions($("conversion-upload"), options, collections.some((c) => c.id === selected) ? selected : "");
   updateConversionSelection();
+  const versionSources = serverVersionConversionCandidates.filter((source) => rowRobotType(source) === type);
+  const selectedVersionSource = $("version-conversion-source").value;
+  const versionOptions = '<option value="">请选择已有 LeRobot 数据集</option>' + versionSources.map(
+    (source) => `<option value="${esc(source.source_job_id)}">${source.selectable ? "" : "[不可用] "}${esc(source.dataset_name)} · LeRobot ${esc(source.source_format || "?")} → ${esc(source.target_format || "?")} · ${esc(source.episode_count ?? "?")} episodes</option>`,
+  ).join("");
+  replaceOptions(
+    $("version-conversion-source"),
+    versionOptions,
+    versionSources.some((source) => source.source_job_id === selectedVersionSource)
+      ? selectedVersionSource
+      : "",
+  );
+  updateVersionConversionSelection();
   $("upload-list").innerHTML = collections.length ? collections.map((c) =>
     `<tr><td><strong class="task-name">${esc(c.dataset_name)}</strong><span class="sub">${esc(c.id.slice(0, 12))} · ${esc(collectionLocation(c))}</span></td><td>${esc([...new Set(c.uploads.map((u) => u.robot_id))].join(", "))} ${c.capture_mode === "mock" ? badge("MOCK") : c.target === "imported" ? badge("IMPORTED") : ""}</td><td>${bytes(c.total_bytes)}<span class="sub">${c.episode_count} 个 episodes</span></td><td>${c.ready_count} / ${c.episode_count}</td><td><button class="secondary" data-process="${esc(c.id)}">查看 / 批量转换</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型；该类型的数据集将在此显示。</td></tr>';
   $("job-list").innerHTML = conversions.length ? conversions.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || 1} 个 episodes</span></td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || 1} 个 episodes</span>${j.operation === "version_conversion" ? `<span class="sub">来源：${esc(j.source_dataset_name)} · ${esc(j.source_format)} → ${esc(j.target_format)}</span>` : ""}</td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换 + 深度验证" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
   const available = jobs.filter((j) => j.dataset_available);
   $("result-list").innerHTML = available.length ? available.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行质检</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${j.source_count || j.episode_count || 1} 个 episodes</span><span class="sub">${j.operation === "version_conversion" ? `版本转换：${esc(j.source_format)} → ${esc(j.target_format)}` : esc(j.instruction)}</span></td><td>LeRobot ${esc(j.target_format)}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td>${datasetLocation(j)}</td><td><div class="action-row"><button class="primary" data-viewer="${esc(j.id)}">预览数据</button><button class="secondary" data-doctor="${esc(j.id)}">运行质检</button><button class="secondary" data-report-page="${esc(j.id)}">查看报告</button></div></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型已转换的数据集。受阻任务的原因可在“数据转换”查看。</td></tr>';
   updateMergeSelection();
   renderMergeJobs(jobs.filter((j) => j.operation === "merge"));
@@ -1004,6 +1134,8 @@ async function showJob() {
   $("job-detail").innerHTML = `
     <p class="small"><strong>${esc(j.dataset_name || "历史数据集")}</strong> · ${j.source_count || j.episode_count || 1} 个 episodes</p>
     <p class="small">Instruction：${esc(j.instruction || "—")}</p>
+    ${conversionCorrectionSummary(j)}
+    ${j.operation === "version_conversion" ? `<p class="small">来源：<strong>${esc(j.source_dataset_name)}</strong>（任务 ${esc(j.source_job_id.slice(0, 12))}） · LeRobot ${esc(j.source_format)} → ${esc(j.target_format)}</p>` : ""}
     ${jobBadge(j)} ${sourceBadge(j)} <span class="small muted">${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}</span>
     ${j.error && !j.blockers?.length ? `<p class="job-error">${esc(j.error)}</p>` : ""}
     ${j.state === "BLOCKED" ? `<div class="warning preflight-detail"><strong>转换尚未启动：此任务使用的机器人配置尚未完成核实</strong><ul>${(j.blockers || []).map((b) => `<li><code>${esc(b.field)}</code>：${esc(b.message)}</li>`).join("")}</ul><p>请核实关节顺序、单位、动作来源和时钟，更新服务器 Profile 后重新提交转换。旧任务保留提交时的配置与阻断记录。</p></div>` : ""}
@@ -1011,13 +1143,13 @@ async function showJob() {
     ${j.dataset_available ? "" : `<p class="small muted">${esc(j.dataset_unavailable_reason)}</p>`}
     ${j.work_path ? `<p class="path-hint">任务工作目录：${esc(j.work_path)}</p>` : ""}
     ${j.operation === "merge" ? `<h3 class="section-label">合并来源（拼接顺序）</h3><ol>${(j.merge_sources || []).map((s) => `<li>${esc(s.dataset_name)} · ${s.episode_count} episodes · ${s.frame_count} 帧</li>`).join("")}</ol>` : ""}
-    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行质检</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button>${j.operation === "merge" ? '<button class="secondary" data-log="merge">合并日志</button>' : '<button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button>'}</div>
+    <div class="action-row">${j.dataset_available ? `<button class="primary" data-viewer="${esc(j.id)}">打开数据预览</button><button class="secondary" data-doctor="${esc(j.id)}">运行 / 重新运行质检</button>` : ""}<button class="secondary" data-report-page="${esc(j.id)}">打开独立报告页</button>${j.operation === "merge" ? '<button class="secondary" data-log="merge">合并日志</button>' : j.operation === "version_conversion" ? '<button class="secondary" data-log="environment">环境日志</button><button class="secondary" data-log="source-validate">来源验证日志</button><button class="secondary" data-log="convert">版本转换日志</button><button class="secondary" data-log="validate">结果验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button>' : '<button class="secondary" data-log="convert">转换日志</button><button class="secondary" data-log="validate">验证日志</button><button class="secondary" data-log="doctor">自动质检日志</button>'}</div>
     <h3 class="section-label">LeRobot Doctor 质量报告</h3>
     <p class="small muted">Doctor 报告只用于展示数据质量，不会修改或删除已转换的数据集。模拟数据始终保留模拟标识。</p>
     <div class="action-row"><button class="secondary" data-report="automatic">转换时的报告</button>${checks.map((c) => `<button class="secondary" data-report="${esc(c.id)}">${esc(new Date(c.created_at * 1000).toLocaleTimeString("zh-CN"))} · ${esc(names[c.state] || c.state)}${c.severity ? " · " + esc(c.severity) : ""}</button>`).join("")}</div>
     ${latest ? `<p class="small">${badge(latest.state)} ${esc(latest.stage)}${latest.error ? `<span class="job-error"> ${esc(latest.error)}</span>` : ""}</p><div class="action-row"><button class="secondary" data-log="doctor" data-check-log="${esc(latest.id)}">本次质检日志</button><button class="secondary" data-log="validate" data-check-log="${esc(latest.id)}">本次验证日志</button></div>` : ""}
     ${j.processing_mode === "demo" ? '<p class="small muted">演示模式不生成 LeRobot 数据或 Doctor 报告。</p>' : j.state === "BLOCKED" ? '<p class="small muted">机器人配置检查未通过，Doctor 尚未运行；这不是质检失败。</p>' : doctorReport(report, gate)}
-    <details class="report-json"><summary>时间对齐与转换检查</summary><pre>${esc(JSON.stringify({ alignment: j.alignment_report, robot: j.robot_report, quality_gate: j.quality_gate }, null, 2))}</pre></details>
+    <details class="report-json"><summary>${j.operation === "version_conversion" ? "版本转换来源与检查" : "时间对齐与转换检查"}</summary><pre>${esc(JSON.stringify(j.operation === "version_conversion" ? { source: j.source_description, snapshot: j.source_snapshot, quality_gate: j.quality_gate } : { alignment: j.alignment_report, robot: j.robot_report, quality_gate: j.quality_gate }, null, 2))}</pre></details>
     <pre id="log-output">${esc(logText)}</pre>`;
 }
 $("close-detail").onclick = () => {

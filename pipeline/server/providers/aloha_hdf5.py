@@ -22,7 +22,9 @@ import numpy as np
 from pipeline.shared.core import DomainError, atomic_json
 from pipeline.shared.hdf5 import AGILEX_ALIGNED_SCHEMA, ALOHA_HDF5_FORMAT
 
+from ..conversion_options import normalize_options
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
+from .gripper_closure import capabilities, correct_actions
 from .hdf5_preset import write_hdf5_preset
 
 DEFAULT_STATE_KEY = "observations/qpos"
@@ -154,6 +156,7 @@ class AlohaHDF5Provider:
         _field(profile, "state_key", DEFAULT_STATE_KEY)
         _field(profile, "action_key", DEFAULT_ACTION_KEY)
         _camera_fields(profile)
+        self.conversion_capabilities(profile)
         fps = profile.get("output_fps")
         if type(fps) is not int or not 1 <= fps <= 240:
             raise DomainError("Profile 的 output_fps 必须是 1–240 的整数")
@@ -178,9 +181,20 @@ class AlohaHDF5Provider:
             "cameras": {k: list(v) for k, v in report["cameras"].items()},
         }
 
-    def prepare(self, raw: Path, dest: Path, profile: dict) -> dict:
+    def conversion_capabilities(self, profile: dict) -> dict:
+        return capabilities(profile)
+
+    def prepare(
+        self, raw: Path, dest: Path, profile: dict, *, options: dict | None = None
+    ) -> dict:
+        options = normalize_options(options, self.conversion_capabilities(profile))
         package = raw if raw.is_file() else self._single_file(raw)
         report = _read_episode(package, profile)
+        corrections = {}
+        if "gripper_closure" in options:
+            report["action"], corrections["gripper_closure"] = correct_actions(
+                report["state"], report["action"], profile, options["gripper_closure"]
+            )
         dimensions = report["dimensions"]
         aligned = dest.with_suffix(".hdf5")
         aligned.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +253,7 @@ class AlohaHDF5Provider:
             "aligned_path": str(aligned),
             "aligned_kind": "hdf5",
             "source_package": package.name,
+            **({"action_corrections": corrections} if corrections else {}),
         }
 
     @staticmethod

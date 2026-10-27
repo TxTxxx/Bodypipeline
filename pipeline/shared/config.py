@@ -37,6 +37,7 @@ class Settings:
     max_manifest_bytes: int = 64 * 1024**2
     command_timeout: int = 7200
     letools_bin: str = "letools"
+    tianji_provider_bin: str = ""
     processing_mode: str = "real"
     auto_process: bool = False
     poll_seconds: float = 2.0

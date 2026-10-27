@@ -11,6 +11,7 @@ BodyPipeline 不实现 LeRobot 转换和 Doctor 算法，而是在 Server 上通
 | Python | 3.12 |
 | 工具环境 | `.runtime/letools-venv/` |
 | letools 源码 | `.runtime/vendor/letools/` |
+| Tianji provider | `tianji-provider==0.6.3`，data-providers commit `487418f5270a77722820d104015cda907fa6facd` |
 | Python 锁文件 | `environments/letools/uv.lock` |
 
 安装：
@@ -19,10 +20,11 @@ BodyPipeline 不实现 LeRobot 转换和 Doctor 算法，而是在 Server 上通
 bash scripts/install_letools.sh
 ```
 
-安装脚本会检查源码 checkout 是否干净、切换到固定提交、初始化子模块，并使用独立 uv 项目同步依赖。Server 配置中的 `letools_bin` 应指向：
+安装脚本会检查两个源码 checkout 是否干净、切换到固定提交、初始化 letools 子模块，并使用独立 uv 项目同步依赖，最后把官方 Tianji provider 安装到同一个 Python 环境。Server 配置中的 `letools_bin` 和 `tianji_provider_bin` 应分别指向：
 
 ```text
 .runtime/letools-venv/bin/letools
+.runtime/letools-venv/bin/tianji-provider
 ```
 
 不要在 ROS Bridge 环境中安装 letools，也不要让 letools 依赖覆盖 Client / Server 主环境。
@@ -59,6 +61,28 @@ letools 负责：
 路径。其他 Provider 可以声明不同的 source-format 和输入布局；这不代表 letools 能直接读取所有
 ROS2 bag、MCAP 或任意机器人目录。新增输入格式必须在 Server 侧增加 Provider / staging adapter，
 或先确认上游已有可用 source provider。
+
+当前 Tianji Server 适配使用官方 `tianji-provider`：
+
+```text
+episode0/
+├── data/metadata.yaml + *.mcap
+├── video/metadata.yaml + *.mcap
+└── bodypipeline-source.json  # 可选来源标记
+```
+
+对应配置示例是 `configs/server.tianji.json`，Profile 是
+`configs/tianji-thor-v1.json`。Server 先复制并核验每个 `episode0`，再调用同一独立环境中的
+`tianji-provider inspect` 计算保留帧数，最后执行：
+
+```bash
+<letools_bin> convert <work>/aligned <work>/dataset \
+  --source-format tianji --task '<instruction>' --fps 50 --wrench-fps 200 --to v2.1
+```
+
+官方输出包含 `observation.state`、`observation.action`、`observation.wrench_windows`、
+`observation.eef` 与四路 `observation.image.*`。输入原始 MCAP 保持只读，Server 不在主环境安装
+ROS2 或 MCAP 解码依赖。
 
 ## 3. Server 调用链
 
@@ -106,6 +130,26 @@ HDF5 preset 明确声明：
 - `v2.1`
 
 转换后 Server 会回填 Profile 中的 `joint_names` 到 `meta/info.json`，并检查 episode / frame 数量与输入快照一致。
+
+已有 LeRobot 数据集不经过机器人 Provider 或 HDF5 时间对齐。Server 从已登记的数据集记录中选择来源，
+锁定来源目录并记录文件快照，然后直接调用 Letools 的 LeRobot 读取器：
+
+```bash
+<letools_bin> validate <source>
+<letools_bin> convert \
+  <source> \
+  <work>/dataset \
+  --source-format lerobot \
+  --to <v2.1|v3.0> \
+  --workers <N> \
+  --video-workers <N>
+<letools_bin> validate <work>/dataset --deep
+```
+
+来源与目标必须不同，仅支持 v2.1 与 v3.0 双向转换。已有 MP4 不传视频编码参数，由 Letools
+执行 remux 和版本切片。结果保留 Task、特征、统计信息及模拟标识，并写入
+`meta/bodypipeline-version-conversion.json` 记录来源任务、版本和快照。来源文件保持只读，
+转换输出使用独立的 `work/<job_id>/dataset` 目录和共享权限。
 
 ### 3.3 深度结构验证
 

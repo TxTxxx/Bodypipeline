@@ -31,7 +31,7 @@ def source_snapshot(root: Path) -> dict:
     """Fingerprint file identities without reading large video payloads or links."""
     entries, size = [], 0
     if any(p.is_symlink() for p in [root, *root.parents]):
-        raise DomainError("合并来源不能包含符号链接", 400)
+        raise DomainError("数据集来源不能包含符号链接", 400)
 
     def walk(directory):
         nonlocal size
@@ -50,7 +50,7 @@ def source_snapshot(root: Path) -> dict:
                 )
                 size += entry.st_size
             else:
-                raise DomainError("合并来源含符号链接或特殊文件：" + str(path), 400)
+                raise DomainError("数据集来源含符号链接或特殊文件：" + str(path), 400)
 
     try:
         walk(root)

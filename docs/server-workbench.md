@@ -9,6 +9,10 @@ Server 页面用于管理原始数据、提交批量转换、合并数据集、�
 
 所有结果都保存在 Server 文件系统，不使用数据库。页面中显示的路径都是运行 Server 的主机路径，不是操作者本机路径。
 
+原始采集转换表单会按 Runtime 能力显示可选项。目前 ARX 支持“夹持阶段最小闭合度”修正，
+默认关闭，启用后填写电机名义行程百分比；规则和部署兼容说明见
+[夹爪闭合度修正](robots/gripper-closure.md)。
+
 ## 1. 原始数据
 
 ### 1.1 机器人类型优先
@@ -143,7 +147,24 @@ Server 页面用于管理原始数据、提交批量转换、合并数据集、�
 | `QUARANTINED` | Doctor 有 WARN / FAIL，数据保留供排查 |
 | `INTERRUPTED` | Server 重启中断，需要显式重试 |
 
-### 2.3 时间对齐
+### 2.3 已有 LeRobot 版本转换
+
+同一“数据转化”页面还提供“已有 LeRobot 版本转换”：
+
+1. 选择机器人类型。
+2. 选择一个已转换、已导入或已合并的 LeRobot `v2.1` / `v3.0` 数据集。
+3. 填写新数据集名称，目标版本自动设为另一版本。
+4. 选择是否在转换后运行 Doctor。
+
+版本转换不经过机器人 Provider、HDF5 对齐或 instruction 输入。Server 从已登记任务中选择来源，
+记录来源文件快照并锁定目录；后台执行来源结构验证、`letools convert --source-format lerobot`、
+结果 deep validate 和可选 Doctor。来源存在回收站 Episode、正在永久清理、元数据损坏或来源发生变化时，
+任务会拒绝执行。
+
+来源目录保持只读，新结果写入独立任务目录并自动应用共享权限。仅支持 v2.1 与 v3.0 互相转换；
+同版本、跨到其他 LeRobot schema 和跨版本合并都不允许。
+
+### 2.4 时间对齐
 
 当前 AgileX 适配器要求：
 
@@ -164,7 +185,7 @@ Server 页面用于管理原始数据、提交批量转换、合并数据集、�
 
 说明指定 episode 的第 5 个输出帧之前没有足够新的关节样本。应检查 recorder 启动阶段、topic 连续性、时间戳单位和写入延迟，不应直接放宽阈值。
 
-### 2.4 转换结果路径
+### 2.5 转换结果路径
 
 转换结果固定保存在：
 
@@ -184,6 +205,7 @@ Server 当前 AgileX 数据示例：
 work/<job_id>/
 ├── aligned/episodeN.hdf5     # 对齐后的 Letools 输入
 ├── letools-hdf5-preset.json  # 字段映射
+├── version-conversion-input.json # 已有数据集版本转换来源快照
 ├── dataset/                  # 可预览 LeRobot 数据集
 ├── checks/<check_id>/        # 独立质检报告与日志
 ├── alignment-report.json
