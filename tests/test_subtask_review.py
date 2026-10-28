@@ -159,7 +159,13 @@ def test_gateway_forwards_only_authenticated_registered_id(review_app, monkeypat
         assert client.post(URL, json=payload).status_code == 403  # Cookie needs Origin.
 
 
-def test_patch_is_repeatable_on_pinned_viewer(tmp_path):
+def test_patch_is_repeatable_on_pinned_viewer(tmp_path, monkeypatch):
+    from pipeline.server import viewer_annotations
+
+    # Component anchors are exercised against the actual pinned source in the
+    # UI build. This fixture checks migration of the previous replacement mount.
+    replacements = []
+    monkeypatch.setattr(viewer_annotations, "_replace", lambda *args: replacements.append(args))
     path = tmp_path / "source/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
     path.parent.mkdir(parents=True)
     path.write_text('''import { AnnotationsPanel } from "@/components/annotations-panel";
@@ -173,8 +179,27 @@ def test_patch_is_repeatable_on_pinned_viewer(tmp_path):
     first = path.read_text()
     patch_subtask_review(tmp_path)
     assert path.read_text() == first
-    assert first.count("<SubtaskReview ") == 1
+    assert "SubtaskReview" not in first
     assert "<PlaybackBar />" in first
+    assert "<AnnotationsTimeline" in first and "<AnnotationsPanel" in first
+    assert 'className="grounding-intro"' in first
+    assert any("end_timestamp" in after for _, _, after in replacements)
+
+
+def test_manual_annotations_are_saved_with_subtasks_and_survive_legacy_save(review_app):
+    client = client_for(review_app)
+    initial = client.get(URL).json()
+    atoms = [{"role": "user", "style": "vqa", "content": "Where is the object?", "timestamp": 0.1, "camera": "observation.images.top", "tool_calls": None},
+             {"role": "assistant", "style": None, "content": None, "timestamp": 0.2, "camera": None, "tool_calls": [{"type": "function", "function": {"name": "say", "arguments": {"text": "hello"}}}]}]
+    assert client.post(URL, json={**body(initial, initial["segments"]), "atoms": atoms}).status_code == 200
+    head = client.get(URL).json()
+    assert head["atoms"] == atoms
+    assert client.post(URL, json=body(head, [])).status_code == 200
+    # Existing interval-only clients must not erase manual/VQA annotations.
+    assert client.get(URL).json()["atoms"] == atoms
+    latest = client.get(URL).json()
+    assert client.post(URL, json={**body(latest, []), "atoms": []}).status_code == 200
+    assert client.get(URL).json()["atoms"] == []
 
 
 def test_export_revision_conflict_and_recycle_guard(review_app, monkeypatch, tmp_path):
@@ -214,6 +239,43 @@ def hashes(root):
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()}
 
 
+@pytest.mark.parametrize("indexed", [False, True])
+def test_language_column_import_and_authoritative_sidecar(tmp_path, letools_binary, indexed):
+    """Old language-only sources and indexed AI sources use the same editor."""
+    code = '''
+import json,sys
+from pathlib import Path
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pipeline.server.subtask_review_worker import read_subtasks
+root=Path(sys.argv[1]); indexed=sys.argv[2]=='True'
+(root/'meta').mkdir(); (root/'data').mkdir()
+(root/'meta/info.json').write_text(json.dumps({'codebase_version':'v3.0','fps':10,'total_episodes':2,'total_frames':6}))
+language=[{'role':'assistant','style':'subtask','content':'language subtask','timestamp':0.1},
+          {'role':'assistant','style':'plan','content':'existing manual plan','timestamp':0.0}]
+rows=[]
+for ep in range(2):
+ for frame in range(3):
+  row={'episode_index':ep,'frame_index':frame,'timestamp':frame/10,'language_persistent':language,
+       'language_events':[{'role':'user','style':'vqa','content':'question'}] if frame==1 else []}
+  if indexed: row['subtask_index']=-1
+  rows.append(row)
+pq.write_table(pa.Table.from_pylist(rows),root/'data/shard.parquet')
+loaded=read_subtasks(root)
+for ep in loaded['episodes']:
+ assert ep['segments']==([] if indexed else [{'start_frame':1,'end_frame':3,'text':'language subtask'}])
+ assert len(ep['atoms'])==2
+ assert ep['atoms'][0]['timestamp']==0
+ assert ep['atoms'][1]['timestamp']==0.1
+ assert ep['atoms'][0]['camera'] is None and ep['atoms'][0]['tool_calls'] is None
+(root/'meta/bodypipeline-manual-annotations.json').write_text(json.dumps({'version':1,'episodes':{'0':[]}}))
+loaded=read_subtasks(root)
+assert loaded['episodes'][0]['atoms']==[]
+assert len(loaded['episodes'][1]['atoms'])==2
+'''
+    subprocess.run([str(Path(letools_binary).with_name("python")), "-c", code, str(tmp_path), str(indexed)], check=True)
+
+
 @pytest.mark.parametrize("version", ["v2.1", "v3.0"])
 def test_real_review_roundtrip(settings_factory, tmp_path, letools_binary, version):
     python = str(Path(letools_binary).with_name("python"))
@@ -232,7 +294,8 @@ def test_real_review_roundtrip(settings_factory, tmp_path, letools_binary, versi
     initial = initial.json()
     assert initial["segments"] == []  # No labels in the source fixture.
     edited = [segment(0, 2), segment(4, 6)]
-    assert client.post(URL, json=body(initial, edited)).status_code == 200
+    manual = [{"role": "assistant", "style": "plan", "content": "manual plan", "timestamp": 0.1, "camera": None, "tool_calls": None}]
+    assert client.post(URL, json={**body(initial, edited), "atoms": manual}).status_code == 200
     saved = client.get(URL).json()
     export_body = {"revision": saved["revision"], "source_signature": saved["source_signature"]}
     queued = client.post("/api/subtask-review/source/exports", json=export_body)
@@ -250,9 +313,15 @@ def test_real_review_roundtrip(settings_factory, tmp_path, letools_binary, versi
     url = f"/api/subtask-review/{result['id']}/episodes/0"
     loaded = client.get(url).json()
     assert loaded["segments"] == edited  # Includes the deliberate two-frame gap.
-    assert client.get(f"/api/subtask-review/{result['id']}/episodes/1").json()["segments"] == []
+    assert loaded["atoms"] == manual
+    other_url = f"/api/subtask-review/{result['id']}/episodes/1"
+    other = client.get(other_url).json()
+    assert other["segments"] == []
+    other_manual = [{**manual[0], "content": "independent Episode 1 plan"}]
+    assert client.post(other_url, json={**body(other, []), "atoms": other_manual}).status_code == 200
     # Rewrite an ALREADY labelled source: edit only one repeated-text interval.
     changed = [segment(0, 1, "human corrected"), segment(4, 6)]
+    loaded = client.get(url).json()
     assert client.post(url, json=body(loaded, changed)).status_code == 200
     head = client.get(url).json()
     queued2 = client.post(f"/api/subtask-review/{result['id']}/exports", json={"revision": head["revision"], "source_signature": head["source_signature"]}).json()
@@ -263,6 +332,8 @@ def test_real_review_roundtrip(settings_factory, tmp_path, letools_binary, versi
     target = Path(result2["dataset_path"])
     PreviewRegistry(runner.store, settings.viewer_ttl).register(result2["id"], target)
     assert client.get(f"/api/subtask-review/{result2['id']}/episodes/0").json()["segments"] == changed
+    assert client.get(f"/api/subtask-review/{result2['id']}/episodes/0").json()["atoms"] == manual
+    assert client.get(f"/api/subtask-review/{result2['id']}/episodes/1").json()["atoms"] == other_manual
     assert client.get(url).json()["segments"] == changed  # Saved draft still exists.
     # Deleting every segment must export -1 for ALL frames, even on labelled input.
     assert client.post(url, json=body(head, [])).status_code == 200

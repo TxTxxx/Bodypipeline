@@ -573,20 +573,27 @@ letools validate "/path/to/example-subtasks" --deep
 ### 6.4.3 在数据预览中查看和修订 Subtask
 
 从数据集管理打开预览后，进入原有的“标注”标签页，可对照视频查看
-`subtask_index + meta/subtasks.parquet` 还原的逐段文本与区间。此页不依赖
+`subtask_index + meta/subtasks.parquet` 还原的逐段文本与区间。保留原有 composer、
+标注列表、Inspector、时间线、视频框选/点选、VQA 和语音入口；AI Subtask 作为普通
+Subtask 标注显示和编辑，不另设替代工作台。此页不依赖
 `NEXT_PUBLIC_ANNOTATE_BACKEND_URL`，也不会调用预览器自带的 language 导出后端。
 
-- 开始、结束边界使用显式 `[start_frame, end_frame)`；可逐段修改文本、输入帧号或
-  拖动时间线两端、在当前未标注帧新增、在播放位置拆分、删除区间。同文本区间相互独立。
-  合并仅允许紧邻且文本相同的两段，不会跨越间隙。删除后对应帧保持 `-1`。
-- **保存服务端草稿**：通过 Viewer gateway 转发给 Server，持久化在
+- 开始、结束边界使用显式 `[start_frame, end_frame)`；原 Inspector 可修改文本和
+  起止秒数（按帧对齐），也可拖动时间线两端、新增或删除区间。同文本不同区间独立编辑。
+  Quick-add 在已有覆盖区间内部插入时拆分该区间，不会延长前段跨越间隙；删除后保持 `-1`。
+- **保存 Episode**：通过 Viewer gateway 转发给 Server，Subtask 与手动标注一起持久化在
   `state/subtask_draft`，每次保存的审计快照在 `state/subtask_draft_history`。
   草稿版本以数据集为单位；多窗口或其他 Episode 更新后，旧版本保存会返回 409，
-  不覆盖新草稿。来源快照变化也会拒绝套用旧草稿。空数组表示删除全部区间。
-- **生成独立修订数据集**：必须先保存当前修改，使用整个数据集的最新草稿；没有草稿的
+  不覆盖新草稿。来源快照变化也会拒绝套用旧草稿。`segments: []` 表示删除全部区间；
+  可选的 `atoms` 保存非 Subtask 标注，旧客户端省略此字段不会清空手动标注。
+- **保存数据集**：必须先保存当前 Episode 修改，生成独立修订副本，使用整个数据集的最新草稿；没有草稿的
   Episode 保留来源标注。默认名称为 `<原名称>-revised`，仍输出 LeRobot v3.0、逐帧
   `subtask_index`、词表和统计，经深度验证后登记。入队时冻结修订计划，后续草稿保存
   不改变已提交任务；原数据集、Argus 标注结果不改写，不需要 API Key。
+- 手动标注以权威 `meta/bodypipeline-manual-annotations.json` sidecar（按 Episode 分组）
+  随修订副本携带，重新预览时优先读取；源 `language_persistent` / `language_events`
+  Parquet 列保留原样，**本功能尚未把人工修改重新物化到这些列**。外部训练工具若仅读取
+  language 列而忽略 sidecar，不会看到手动修订；逐帧 Subtask 列则按修订结果重写。
 - 本地未保存备份只用于本窗口恢复提示，不能代替服务端保存。刷新、关闭后可恢复的
   正式版本以 Server 草稿为准。存在回收站 Episode 时，先还原或永久清理再导出。
 

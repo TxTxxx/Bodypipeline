@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
@@ -24,11 +26,23 @@ class Segment(BaseModel):
     text: str = Field(min_length=1, max_length=400)
 
 
+class ManualAtom(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    role: Literal["user", "assistant", "system", "tool"]
+    content: str | None = Field(default=None, max_length=20000)
+    style: Literal["task_aug", "plan", "memory", "interjection", "vqa"] | None
+    timestamp: float = Field(ge=0)
+    camera: str | None = Field(default=None, max_length=256)
+    tool_calls: list[dict[str, Any]] | None = Field(default=None, max_length=32)
+
+
 class DraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: StrictInt = Field(ge=0)
     source_signature: str = Field(min_length=64, max_length=64)
     segments: list[Segment] = Field(max_length=2000)
+    # Optional for backwards compatibility with existing interval-only drafts.
+    atoms: list[ManualAtom] | None = Field(default=None, max_length=10000)
 
 
 class RevisionExportRequest(BaseModel):
@@ -63,7 +77,7 @@ class SubtaskReview:
         return key, path, job
 
     def _source(self, path, snapshot):
-        key = digest({"path": str(path), "snapshot": snapshot, "reader": 1})
+        key = digest({"path": str(path), "snapshot": snapshot, "reader": 2})
         try:
             return self.store.get("subtask_source", key)["data"]
         except DomainError as exc:
@@ -128,6 +142,7 @@ class SubtaskReview:
                 "revision": row["revision"], "source_signature": row["source_signature"],
                 "has_draft": str(episode) in row["episodes"],
                 "segments": row["episodes"].get(str(episode), item["segments"]),
+                "atoms": row.get("atoms", {}).get(str(episode), item.get("atoms", [])),
             }
 
     def save(self, dataset_id, episode, body):
@@ -140,6 +155,19 @@ class SubtaskReview:
             row = self._draft(key, path, snapshot)
             self._check(row, body)
             segments = validate_segments([s.model_dump() for s in body.segments], item["frames"])
+            if body.atoms is not None:
+                atoms = [a.model_dump() for a in body.atoms]
+                if len(json.dumps(atoms, ensure_ascii=False).encode()) > 4 * 1024 * 1024:
+                    raise DomainError("单个 Episode 的手动标注不能超过 4 MiB", 422)
+                for atom in atoms:
+                    if not math.isfinite(atom["timestamp"]) or atom["timestamp"] >= item["frames"] / data["fps"]:
+                        raise DomainError("手动标注时间戳必须位于 Episode 内", 422)
+                    # Validate arbitrary tool arguments recursively (including NaN).
+                    try:
+                        json.dumps(atom, allow_nan=False)
+                    except (ValueError, TypeError) as exc:
+                        raise DomainError("手动标注含无效工具参数", 422) from exc
+                row.setdefault("atoms", {})[str(episode)] = atoms
             row["episodes"][str(episode)] = segments  # [] is an authoritative deletion.
             row.update(revision=row["revision"] + 1, updated_at=now())
             # Keep immutable audit snapshots outside the dataset, before publishing
@@ -166,7 +194,8 @@ class SubtaskReview:
                 index = vocabulary.setdefault(s["text"], len(vocabulary))
                 spans.append([s["start_frame"], s["end_frame"], index])
                 covered += s["end_frame"] - s["start_frame"]
-            episodes.append({"episode_index": item["episode_index"], "frames": item["frames"], "segments": spans})
+            episodes.append({"episode_index": item["episode_index"], "frames": item["frames"], "segments": spans,
+                             "atoms": row.get("atoms", {}).get(str(item["episode_index"]), item.get("atoms", []))})
             labelled += covered
             total += item["frames"]
         info = json.loads((path / "meta/info.json").read_text())

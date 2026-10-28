@@ -288,6 +288,12 @@ def patch(destination: Path, spec: dict) -> dict:
         raise ValueError("meta/info.json 缺少 features")
     features["subtask_index"] = {"dtype": "int64", "shape": [1], "names": None}
     _write_json(info_path, info)
+    # Lossless manual annotations (including arbitrary VQA/tool arguments).
+    # Keep the original language columns untouched; this sidecar is authoritative
+    # for reviewed episodes and travels with the independent dataset copy.
+    manual = {str(item["episode_index"]): item["atoms"] for item in spec["episodes"] if "atoms" in item}
+    if manual:
+        _write_json(destination / "meta/bodypipeline-manual-annotations.json", {"version": 1, "episodes": manual})
 
     _write_subtasks(
         destination / "meta/subtasks.parquet",
