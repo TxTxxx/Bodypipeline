@@ -83,7 +83,17 @@ const names = {
   UNAVAILABLE: "暂不可删除",
 };
 const jobBadge = (job) => job.operation === "merge" && job.state === "CONVERTED"
-  ? '<span class="badge">合并完成 · 待质检</span>' : badge(job.state);
+  ? '<span class="badge">合并完成 · 待质检</span>'
+  : job.operation === "subtask_export" && job.state === "CONVERTED"
+    ? '<span class="badge">Subtask 已生成 · 待质检</span>'
+    : badge(job.state);
+// Every conversion-like job reuses CONVERTED, but their stage text differs.
+const jobStageText = (job) => {
+  if (job.operation === "subtask_export") return job.stage;
+  return job.state === "CONVERTED" && job.operation !== "merge"
+    ? "转换完成（独立质检见报告）"
+    : job.stage;
+};
 const sourceBadge = (job) => {
   if (job.operation === "merge") return badge("MERGED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
   if (job.operation === "version_conversion") return badge("VERSION_CONVERTED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
@@ -1071,7 +1081,7 @@ function renderServer(uploads, jobs) {
     `<tr><td><strong class="task-name">${esc(c.dataset_name)}</strong><span class="sub">${esc(c.id.slice(0, 12))} · ${esc(collectionLocation(c))}</span></td><td>${esc([...new Set(c.uploads.map((u) => u.robot_id))].join(", "))} ${c.capture_mode === "mock" ? badge("MOCK") : c.target === "imported" ? badge("IMPORTED") : ""}</td><td>${bytes(c.total_bytes)}<span class="sub">${c.episode_count} 个 episodes</span></td><td>${c.ready_count} / ${c.episode_count}</td><td><button class="secondary" data-process="${esc(c.id)}">查看 / 批量转换</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型；该类型的数据集将在此显示。</td></tr>';
   $("job-list").innerHTML = conversions.length ? conversions.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${esc(episodeSelectionSummary(j))}</span>${j.operation === "version_conversion" ? `<span class="sub">来源：${esc(j.source_dataset_name)} · ${esc(j.source_format)} → ${esc(j.target_format)}</span>` : ""}${j.operation === "subtask_export" ? `<span class="sub">Subtask：${esc(j.source_dataset_name)} · 标注 ${esc(j.id.slice(0, 12))} · 覆盖 ${esc(Math.round(100 * (j.subtask_summary?.ratio ?? 0)))}%</span>` : ""}</td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换 + 深度验证" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${esc(jobOriginSummary(j))}</span>${j.operation === "version_conversion" ? `<span class="sub">来源：${esc(j.source_dataset_name)} · ${esc(j.source_format)} → ${esc(j.target_format)}</span>` : ""}${j.operation === "subtask_export" ? `<span class="sub">Subtask：${esc(j.source_dataset_name)} · 标注 ${esc(String(j.source_annotation_id || j.annotation_id || "").slice(0, 12))} · 覆盖 ${esc(Math.round(100 * (j.subtask_summary?.ratio ?? 0)))}%</span>` : ""}</td><td>LeRobot ${esc(j.target_format)}<span class="sub">${esc(j.operation === "subtask_export" ? "复制并写入 subtask_index + 深度验证" : j.run_doctor === false ? "仅转换 + 深度验证" : "转换 + Doctor")}</span></td><td>${esc(jobStageText(j))}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
   const available = jobs.filter((j) => j.dataset_available);
   $("result-list").innerHTML = available.length ? available.map((j) =>
@@ -1203,6 +1213,14 @@ $("merge-job-list").addEventListener("click", (event) => {
   $("merge-form").scrollIntoView({ behavior: "smooth", block: "start" });
   notice("已填入原合并配置，请检查来源后重新提交；新任务会使用新的输出目录。");
 });
+function jobOriginSummary(job) {
+  // A subtask export copies a whole dataset, so input/accepted/skipped counts
+  // would describe a conversion that never ran.
+  if (job.operation === "subtask_export") {
+    return `${job.episode_count ?? job.source_episode_count ?? 1} 个 episodes · 来自标注`;
+  }
+  return episodeSelectionSummary(job);
+}
 function episodeSelectionSummary(job) {
   const selection = job.selection_report;
   if (!selection) return `${job.episode_count ?? job.source_count ?? 1} 个 episodes`;
@@ -1246,7 +1264,7 @@ async function showJob() {
     ${conversionCorrectionSummary(j)}
     ${renderEpisodeSelection(j)}
     ${j.operation === "version_conversion" ? `<p class="small">来源：<strong>${esc(j.source_dataset_name)}</strong>（任务 ${esc(j.source_job_id.slice(0, 12))}） · LeRobot ${esc(j.source_format)} → ${esc(j.target_format)}</p>` : ""}
-    ${jobBadge(j)} ${sourceBadge(j)} <span class="small muted">${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}</span>
+    ${jobBadge(j)} ${sourceBadge(j)} <span class="small muted">${esc(jobStageText(j))}</span>
     ${j.error && !j.blockers?.length ? `<p class="job-error">${esc(j.error)}</p>` : ""}
     ${j.state === "BLOCKED" ? `<div class="warning preflight-detail"><strong>转换尚未启动：此任务使用的机器人配置尚未完成核实</strong><ul>${(j.blockers || []).map((b) => `<li><code>${esc(b.field)}</code>：${esc(b.message)}</li>`).join("")}</ul><p>请核实关节顺序、单位、动作来源和时钟，更新服务器 Profile 后重新提交转换。旧任务保留提交时的配置与阻断记录。</p></div>` : ""}
     ${datasetLocation(j)}

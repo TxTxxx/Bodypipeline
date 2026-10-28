@@ -759,8 +759,23 @@
 
   const percentText = (value) => `${Math.round(100 * number(value, 0))}%`;
 
+  // A subtask export is not an annotation, so it gets its own wording instead
+  // of reusing "标注中" for a job that is only copying and rewriting frames.
+  const SUBTASK_STATE_LABELS = {
+    QUEUED: "排队中",
+    RUNNING: "生成中",
+    CONVERTED: "已完成",
+    FAILED: "失败",
+    INTERRUPTED: "已中断",
+    CANCELLED: "已取消",
+    // A finished export can be removed through dataset management, and the
+    // history keeps showing that so a missing dataset is not a surprise.
+    DELETING: "正在删除",
+    DELETED: "已删除",
+    DELETE_FAILED: "删除失败",
+  };
   function subtaskStateLabel(state) {
-    return STATE_LABELS[state] || state || "—";
+    return SUBTASK_STATE_LABELS[state] || state || "—";
   }
 
   function renderSubtask(force) {
@@ -792,7 +807,7 @@
         (item) => `<tr>
           <td><strong class="task-name">${esc(item.dataset_name || item.id.slice(0, 12))}</strong><span class="sub">${time(item.created_at)}</span></td>
           <td>${esc(subtaskStateLabel(item.state))}<span class="sub">${esc(item.stage || "")}</span></td>
-          <td>${item.episode_count ? esc(item.episode_count) + " Episodes" : "—"}${item.dataset_path ? `<span class="sub"><code>${esc(item.dataset_path)}</code></span>` : ""}${item.error ? `<span class="sub job-error">${esc(item.error)}</span>` : ""}</td>
+          <td>${item.episode_count ? esc(item.episode_count) + " Episodes" : "—"}${item.state === "CONVERTED" && item.dataset_path ? `<span class="sub"><code>${esc(item.dataset_path)}</code></span>` : ""}${item.error ? `<span class="sub job-error">${esc(item.error)}</span>` : ""}</td>
         </tr>`,
       )
       .join("");
