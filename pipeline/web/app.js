@@ -76,6 +76,7 @@ const names = {
   IMPORTED: "历史导入",
   MERGED: "合并数据集",
   VERSION_CONVERTED: "版本转换",
+  SUBTASK_EXPORTED: "Subtask 数据集",
   DELETING: "正在删除",
   DELETE_FAILED: "删除失败",
   DELETED: "已删除",
@@ -86,6 +87,7 @@ const jobBadge = (job) => job.operation === "merge" && job.state === "CONVERTED"
 const sourceBadge = (job) => {
   if (job.operation === "merge") return badge("MERGED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
   if (job.operation === "version_conversion") return badge("VERSION_CONVERTED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
+  if (job.operation === "subtask_export") return badge("SUBTASK_EXPORTED") + (job.capture_mode === "mock" ? " " + badge("MOCK") : "");
   const upload = serverUploads.find((u) => u.id === job.upload_id);
   if (job.capture_mode === "mock" || upload?.capture_mode === "mock") return badge("MOCK");
   if (job.capture_mode === "imported" || upload?.capture_mode === "imported" || upload?.source_kind === "raw_import") return badge("IMPORTED");
@@ -1069,7 +1071,7 @@ function renderServer(uploads, jobs) {
     `<tr><td><strong class="task-name">${esc(c.dataset_name)}</strong><span class="sub">${esc(c.id.slice(0, 12))} · ${esc(collectionLocation(c))}</span></td><td>${esc([...new Set(c.uploads.map((u) => u.robot_id))].join(", "))} ${c.capture_mode === "mock" ? badge("MOCK") : c.target === "imported" ? badge("IMPORTED") : ""}</td><td>${bytes(c.total_bytes)}<span class="sub">${c.episode_count} 个 episodes</span></td><td>${c.ready_count} / ${c.episode_count}</td><td><button class="secondary" data-process="${esc(c.id)}">查看 / 批量转换</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型；该类型的数据集将在此显示。</td></tr>';
   $("job-list").innerHTML = conversions.length ? conversions.map((j) =>
-    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${esc(episodeSelectionSummary(j))}</span>${j.operation === "version_conversion" ? `<span class="sub">来源：${esc(j.source_dataset_name)} · ${esc(j.source_format)} → ${esc(j.target_format)}</span>` : ""}</td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换 + 深度验证" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
+    `<tr><td><strong class="task-name">${esc(j.dataset_name || j.instruction || j.id.slice(0, 12))}</strong><span class="sub">${esc(j.id.slice(0, 12))} · ${esc(episodeSelectionSummary(j))}</span>${j.operation === "version_conversion" ? `<span class="sub">来源：${esc(j.source_dataset_name)} · ${esc(j.source_format)} → ${esc(j.target_format)}</span>` : ""}${j.operation === "subtask_export" ? `<span class="sub">Subtask：${esc(j.source_dataset_name)} · 标注 ${esc(j.id.slice(0, 12))} · 覆盖 ${esc(Math.round(100 * (j.subtask_summary?.ratio ?? 0)))}%</span>` : ""}</td><td>LeRobot ${esc(j.target_format)}<span class="sub">${j.run_doctor === false ? "仅转换 + 深度验证" : "转换 + Doctor"}</span></td><td>${esc(j.state === "CONVERTED" && j.operation !== "merge" ? "转换完成（独立质检见报告）" : j.stage)}${j.error ? `<span class="sub job-error">${esc(j.error)}</span>` : ""}</td><td>${jobBadge(j)} ${sourceBadge(j)}</td><td><button class="secondary" data-detail="${esc(j.id)}">详情与结果</button></td></tr>`
   ).join("") : '<tr><td colspan="5" class="empty">请选择机器人类型，查看该类型的转换任务。</td></tr>';
   const available = jobs.filter((j) => j.dataset_available);
   $("result-list").innerHTML = available.length ? available.map((j) =>

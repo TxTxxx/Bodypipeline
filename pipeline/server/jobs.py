@@ -31,6 +31,7 @@ from .storage import (
     share_data_tree,
     storage_path,
 )
+from .subtask_export import SubtaskExportRunner
 from .version_conversions import VersionConversionRunner
 
 
@@ -42,6 +43,7 @@ class JobRunner:
         self.shutdown_requested = threading.Event()
         self.merges = MergeRunner(settings, self)
         self.version_conversions = VersionConversionRunner(settings, self)
+        self.subtask_exports = SubtaskExportRunner(settings, self)
 
     def recover(self):
         for job in self.store.all("job"):
@@ -502,6 +504,9 @@ class JobRunner:
             return
         if job.get("operation") == "version_conversion":
             self.version_conversions.run(job)
+            return
+        if job.get("operation") == "subtask_export":
+            self.subtask_exports.run(job)
             return
         self.save(
             job,

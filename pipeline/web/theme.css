@@ -52,6 +52,7 @@ html[data-theme="dark"] .sev-chip { color: #b0bfd2; }
 html[data-theme="dark"] .login-card { box-shadow: 0 24px 80px #0005; }
 /* Automatic annotation episode viewer */
 html[data-theme="dark"] .annotation-viewer { background: var(--night-surface); border-color: var(--line); }
+html[data-theme="dark"] .annotation-subtask { background: var(--night-surface); border-color: var(--line); }
 html[data-theme="dark"] .viewer-track { background: #1b2740; border-color: #2c3d58; }
 html[data-theme="dark"] .viewer-segment.idle { background: #3a4659; }
 html[data-theme="dark"] .viewer-segment.other { background: #43567a; }

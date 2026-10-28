@@ -511,12 +511,7 @@ def _summary(name: str, data: dict, source: str) -> dict:
         completion = labels.get("completion") if isinstance(labels, dict) else {}
     completion = completion if isinstance(completion, dict) else {}
     meta = data.get("_meta") if isinstance(data.get("_meta"), dict) else {}
-    failed = data.get("_label_failed")
-    if not failed and data.get("parse_ok") is False:
-        failed = {
-            "status": "failed",
-            "why": data.get("no_reply") or data.get("unreadable") or "模型未返回可用标注",
-        }
+    failed = _label_failure(data)
     timeline = data.get("event_labels") or labels.get("timeline") or []
     key_events = data.get("key_events") or labels.get("key_events") or []
     prompt = data.get("episode_prompt") or labels.get("task_summary") or ""
@@ -576,6 +571,59 @@ def outputs(work: Path) -> list[dict]:
         episode = Path(str(data.get("episode_dir") or name)).name or name
         rows.append(_summary(episode, data, "run"))
     rows.sort(key=lambda row: row["id"])
+    return rows
+
+
+def labels_available(data: dict) -> bool:
+    """Whether one episode result carries usable model labels.
+
+    Kept next to :func:`_summary` so the queue, the export and the page agree on
+    what counts as a labelled episode.
+    """
+
+    if not isinstance(data, dict) or data.get("dry_run"):
+        return False
+    return not _label_failure(data)
+
+
+def _label_failure(data: dict) -> dict | None:
+    failed = data.get("_label_failed")
+    if isinstance(failed, dict) and failed:
+        return failed
+    if failed:
+        return {"status": "failed", "why": "模型调用失败"}
+    if data.get("parse_ok") is False:
+        return {
+            "status": "failed",
+            "why": data.get("no_reply") or data.get("unreadable") or "模型未返回可用标注",
+        }
+    return None
+
+
+def episode_results(work: Path) -> dict[str, dict]:
+    """Episode directory name -> full result, including failed labels.
+
+    Both the board output (``qa/*.json``) and a raw model reply share the
+    episode directory name the prepared context uses, so the caller can join
+    them on that name.  Failed and unparsable replies are kept so an export can
+    report why an episode was skipped instead of silently omitting it.
+    """
+
+    argus = Path(work) / "argus"
+    rows: dict[str, dict] = {}
+    for path in _qa_files(argus):
+        data = _read_json(path)
+        if not data or data.get("dry_run"):
+            continue
+        rows.setdefault(path.stem, data)
+    for name, path in _raw_files(argus).items():
+        if name in rows:
+            continue
+        data = _read_json(path)
+        if not data or data.get("dry_run"):
+            continue
+        episode = Path(str(data.get("episode_dir") or name)).name or name
+        rows.setdefault(episode, data)
     return rows
 
 
@@ -770,6 +818,8 @@ __all__ = [
     "cost",
     "environment",
     "episode",
+    "labels_available",
+    "episode_results",
     "log_names",
     "outputs",
     "progress",

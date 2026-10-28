@@ -477,6 +477,13 @@
               <section class="panel" id="annotation-detail-panel" hidden>
                 <div class="panel-heading"><h2 id="annotation-detail-title">标注详情</h2><button type="button" class="text-button" id="annotation-detail-close">关闭</button></div>
                 <div id="annotation-detail"></div>
+                <section class="annotation-subtask" id="annotation-subtask-panel">
+                  <div class="episode-toolbar">
+                    <strong>Subtask 数据集</strong>
+                    <span class="annotation-log-tools"><button class="text-button" type="button" data-subtask-refresh>刷新预览</button></span>
+                  </div>
+                  <div id="annotation-subtask"><p class="small muted">正在读取标注覆盖率…</p></div>
+                </section>
                 <div class="annotation-episodes">
                   <div class="episode-toolbar"><strong>逐 Episode 结果</strong><span id="annotation-episode-count" class="small muted"></span></div>
                   <div class="table-scroll"><table>

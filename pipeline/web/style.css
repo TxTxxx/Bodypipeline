@@ -297,6 +297,18 @@ a.secondary:hover:not(:disabled) { text-decoration: none; }
 .action-row a { padding: 6px 9px; font-size: 11px; }
 .annotation-log-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
+/* Annotation -> subtask dataset export */
+.annotation-subtask { margin-top: 20px; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 8px; background: #f7f9fc; }
+.annotation-subtask .episode-toolbar { padding: 0 0 10px; }
+.subtask-summary { margin: 10px 0 14px; }
+.subtask-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 14px 0 6px; }
+.subtask-actions label { flex: 1 1 260px; }
+.subtask-actions input { margin: 4px 0 0; }
+.subtask-actions button { flex: 0 0 auto; margin-bottom: 1px; }
+.subtask-skipped { margin: 10px 0 0; }
+.subtask-skipped summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.subtask-skipped ol, .subtask-skipped ul { margin: 8px 0 0 20px; font-size: 12px; line-height: 1.8; }
+
 /* Automatic annotation: per-episode viewer (video + event timeline) */
 .annotation-viewer { margin-top: 16px; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; scroll-margin-top: calc(var(--header-height) + 16px); }
 #annotation-detail-panel, .annotation-episode-detail { scroll-margin-top: calc(var(--header-height) + 16px); }

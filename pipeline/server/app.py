@@ -103,6 +103,11 @@ class VersionConversionRequest(BaseModel):
     run_doctor: StrictBool = True
 
 
+class SubtaskExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
 class DatasetDeletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["raw", "result"]
@@ -632,6 +637,14 @@ def create_app(settings, background=True):
                 )
             },
         )
+
+    @app.get("/api/annotations/{aid}/subtask-export-preview")
+    def subtask_export_preview(aid: str):
+        return runner.subtask_exports.preview(aid)
+
+    @app.post("/api/annotations/{aid}/subtask-exports", status_code=202)
+    def subtask_export_start(aid: str, body: SubtaskExportRequest | None = None):
+        return runner.subtask_exports.enqueue(aid, body.name if body else None)
 
     @app.get("/api/checks/{cid}/logs/{name}")
     def check_logs(cid: str, name: str):

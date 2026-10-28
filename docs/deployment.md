@@ -525,6 +525,51 @@ Server 内存中，任务结束、取消或 Server 重启后清除；不会写�
 - 标注任务运行期间不能永久删除来源数据集；任务结束后标注结果独立保留，不随
   数据集删除而移除。Doctor 质检逻辑和结论不受影响。
 
+### 6.4.2 从标注生成 Subtask 数据集
+
+标注完成后，详情页的“Subtask 数据集”面板（`GET
+/api/annotations/{id}/subtask-export-preview`）会显示可导出 Episode、逐帧覆盖率、
+词表和被跳过的标注，底部“生成 Subtask 数据集”按钮
+（`POST /api/annotations/{id}/subtask-exports`，202）把标注写成带逐帧
+`subtask_index` 的新 LeRobot 数据集。
+
+- 输出是**独立副本**，默认命名 `<原数据集名>-subtasks`，可在提交前改名；
+  原数据集只读，导出前后按 `source_snapshot` 校验，不会被就地修改。
+- 统一输出 LeRobot **v3.0**：v3.0 来源用 reflink/复制镜像，v2.1 来源先由
+  LeTools `convert` 转成 v3.0 再增补，因此同一个标注能覆盖两种格式的来源。
+- 写入 `data/**/*.parquet` 的 `subtask_index`（int64）、`meta/subtasks.parquet`
+  （`subtask` 为索引列，`subtask_index` 为取值）以及 `meta/info.json` 的
+  `features.subtask_index`；`meta/stats.json` 同步补充该字段的统计。
+- 帧边界按 `episode_index + frame_index/fps` 计算（`ceil(t*fps - 1e-6)`），不比较
+  Parquet 里的 float32 `timestamp`。左右臂重叠的事件按起止时间切分成不重叠区间，
+  同一帧上多条事件用 `" | "` 合成一条描述并去重（限 400 字符），相邻同文本合并。
+- 没有被任何标注步骤覆盖的帧保留 `subtask_index = -1`，词表文本为
+  `未标注 / Unannotated`，页面展示覆盖率。导出不会把整体任务描述当成子任务，
+  也不会凭空补一个“空闲”步骤。
+- 失败、未返回、无法对应到数据集 Episode 或缺少帧率/帧数的标注会被跳过并在面板里
+  列出原因，不会静默丢弃。`subtask` 词表按 `subtask` 文本排序后整体编号，
+  跨 Episode 共享。
+- 生成**不需要**再调用模型，也不需要 API Key；它走现有 `JobRunner` 串行队列
+  （`operation == "subtask_export"`），复用 `dataset_lock`、Slurm allocation 与
+  `share_data_tree`，发布前跑 `letools validate --deep`。
+- 成功后自动登记为可预览、可质检、可删除的数据集结果；`meta/bodypipeline-subtask-export.json`
+  记录来源标注、来源任务与 `plan_digest`，提交后标注结果若发生变化会拒绝发布而不是
+  生成错位的标签。
+- 表结构与校验约束：`subtask_index` 在 Arrow schema 里声明为可空，输出前统一
+  `cast` 到该 schema，否则 `ParquetWriter` 会因 nullable 不一致失败；worker 的
+  spec 文件名固定为 `subtask-spec.json`，避免与队列写到 `<name>.json` 的 stdout
+  冲突。
+
+验收命令（在生产机执行，`$AID` 为标注 id）：
+
+```bash
+curl -s -b cookie.txt "http://100.64.0.71:8081/api/annotations/$AID/subtask-export-preview" | jq '.summary'
+curl -s -b cookie.txt -X POST "http://100.64.0.71:8081/api/annotations/$AID/subtask-exports" \
+  -H 'content-type: application/json' -d '{"name": null}' | jq '{id,dataset_name,state}'
+# 任务完成后
+letools validate /path/to/<dataset>-subtasks --deep
+```
+
 ## 6.5 Slurm 转换资源（可选）
 
 转换是 CPU 密集型（每个 episode、每路相机都要重新编码），在计算节点上应通过
@@ -663,6 +708,7 @@ ssh -N -L 18082:127.0.0.1:8082 <server-host>
 | Server 设备上传 | `/device/uploads*`、`/device/targets` |
 | Server 数据集与任务 | `/api/collections*`、`/api/jobs*` |
 | Server 导入 | `/api/imports` |
+| Server 自动标注 | `/api/annotations*`、`/api/annotations/{id}/subtask-exports` |
 | Server 质检 | `/api/jobs/{id}/checks`、`/api/checks/*` |
 | Server Viewer | `POST/DELETE /api/jobs/{id}/viewer`、`GET /api/viewer` |
 

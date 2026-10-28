@@ -58,6 +58,11 @@
   let submitting = false;
   let capTouched = false;
   let listSignature = "";
+  let subtask = null;
+  let subtaskLoading = false;
+  let subtaskSubmitting = false;
+  let subtaskName = "";
+  let subtaskSignature = "";
   let detailSignature = "";
   let resumeTarget = null;
   let modelFetching = false;
@@ -285,6 +290,11 @@
       currentLog = event.target.value || "run";
       void loadLog(currentLog);
     });
+    panel.addEventListener("input", (event) => {
+      if (event.target.matches("[data-subtask-name]")) {
+        subtaskName = event.target.value;
+      }
+    });
     panel.addEventListener("click", (event) => {
       const select = event.target.closest("[data-annotation-select]");
       if (select) {
@@ -307,6 +317,19 @@
       }
       if (event.target.closest("[data-annotation-log-refresh]")) {
         void loadLog(currentLog);
+        return;
+      }
+      if (event.target.closest("[data-subtask-refresh]")) {
+        void loadSubtask(true);
+        return;
+      }
+      if (event.target.closest("[data-subtask-scroll]")) {
+        $("annotation-subtask-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+        void loadSubtask(true);
+        return;
+      }
+      if (event.target.closest("[data-subtask-export]")) {
+        void startSubtaskExport();
         return;
       }
       if (event.target.closest("[data-annotation-viewer-close]")) {
@@ -622,11 +645,15 @@
     episodes = [];
     logs = ["run"];
     currentLog = "run";
+    subtask = null;
+    subtaskName = "";
+    subtaskSignature = "";
     closeViewer();
     $("annotation-episode-detail").hidden = true;
     $("annotation-log-output").textContent = "正在读取日志…";
     $("annotation-log-select").innerHTML = '<option value="run">run</option>';
     $("annotation-episode-list").innerHTML = '<tr><td colspan="6" class="empty">正在读取 Episode 结果…</td></tr>';
+    $("annotation-subtask").innerHTML = '<p class="small muted">正在读取标注覆盖率…</p>';
     $("annotation-detail-panel").hidden = false;
     renderDetail();
     $("annotation-detail-panel").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -649,6 +676,9 @@
         : "",
       row.episodes_done || row.episode_count
         ? `<a class="secondary" href="/api/annotations/${esc(row.id)}/export" download>导出完整结果</a>`
+        : "",
+      !ACTIVE.has(row.state) && (row.episodes_done || row.episode_count)
+        ? `<button class="primary" type="button" data-subtask-scroll>生成 Subtask 数据集</button>`
         : "",
     ]
       .filter(Boolean)
@@ -699,10 +729,128 @@
       renderEpisodes();
       renderLogOptions();
       if (force) await loadLog(currentLog);
+      await loadSubtask(false);
     } catch (error) {
       if (visible) ui.notice(error.message, true);
     } finally {
       detailLoading = false;
+    }
+  }
+
+  // ------------------------------------------------------------ subtask export
+  async function loadSubtask(force) {
+    const id = selectedId;
+    const box = $("annotation-subtask");
+    if (!id || !box || subtaskLoading) return;
+    subtaskLoading = true;
+    try {
+      const value = await ui.api(`/api/annotations/${id}/subtask-export-preview`);
+      if (selectedId !== id) return;
+      subtask = value;
+      renderSubtask(force);
+    } catch (error) {
+      if (selectedId !== id) return;
+      subtask = null;
+      box.innerHTML = `<p class="warning">${esc(error.message)}</p>`;
+    } finally {
+      subtaskLoading = false;
+    }
+  }
+
+  const percentText = (value) => `${Math.round(100 * number(value, 0))}%`;
+
+  function subtaskStateLabel(state) {
+    return STATE_LABELS[state] || state || "—";
+  }
+
+  function renderSubtask(force) {
+    const box = $("annotation-subtask");
+    if (!box || !subtask) return;
+    const data = subtask;
+    const focused = document.activeElement?.matches?.("[data-subtask-name]");
+    if (!force && focused) return;
+    const history = data.exports || [];
+    const running = history.find((item) => ACTIVE.has(item.state));
+    const latest = history[0];
+    const ready = Boolean(data.available && data.can_export) && !running;
+    const summary = data.summary;
+    const defaultName = subtaskName || (data.dataset?.name ? `${data.dataset.name}-subtasks` : "");
+    const skipped = data.skipped || [];
+    const previewEpisodes = data.episodes || [];
+    const vocabulary = data.vocabulary || [];
+    const rows = previewEpisodes
+      .map(
+        (item) => `<tr>
+          <td>Episode ${esc(item.episode_index)}<span class="sub">${esc(item.episode_id)}</span></td>
+          <td>${esc(item.frames)} 帧<span class="sub">${esc(Number(item.duration_s || 0).toFixed(1))} 秒</span></td>
+          <td>${esc(item.labels)} 段<span class="sub">覆盖 ${percentText(item.coverage)}</span></td>
+        </tr>`,
+      )
+      .join("");
+    const exportRows = history
+      .map(
+        (item) => `<tr>
+          <td><strong class="task-name">${esc(item.dataset_name || item.id.slice(0, 12))}</strong><span class="sub">${time(item.created_at)}</span></td>
+          <td>${esc(subtaskStateLabel(item.state))}<span class="sub">${esc(item.stage || "")}</span></td>
+          <td>${item.episode_count ? esc(item.episode_count) + " Episodes" : "—"}${item.dataset_path ? `<span class="sub"><code>${esc(item.dataset_path)}</code></span>` : ""}${item.error ? `<span class="sub job-error">${esc(item.error)}</span>` : ""}</td>
+        </tr>`,
+      )
+      .join("");
+    const body = !data.available
+      ? `<p class="warning">${esc(data.reason || "暂时无法生成 Subtask 数据集")}</p>`
+      : `
+        <p class="small muted">把该标注的逐帧事件写成 LeRobot v3.0 的 <code>subtask_index</code>，另存为独立数据集（原数据集不变）。未被标注覆盖的帧保留 <code>-1</code>（${esc(summary.unannotated_text)}），不会用整体任务或猜测的空闲动作填充。</p>
+        <div class="annotation-summary subtask-summary">
+          <div><span class="small muted">可导出 Episode</span><div>${esc(summary.annotated_episodes)} / ${esc(summary.dataset_episodes)}</div><span class="sub">跳过 ${esc(summary.skipped_episodes)} 条标注</span></div>
+          <div><span class="small muted">逐帧覆盖</span><div>${percentText(summary.ratio)}</div><span class="sub">${esc(summary.labelled_frames)} / ${esc(summary.frames)} 帧已标注</span></div>
+          <div><span class="small muted">Subtask 词表</span><div>${esc(summary.vocabulary_size)} 条</div><span class="sub">含未标注占位</span></div>
+          <div><span class="small muted">来源格式</span><div>LeRobot ${esc(data.dataset?.format || "—")} → v3.0</div><span class="sub">${esc(data.dataset?.total_episodes || 0)} Episodes</span></div>
+        </div>
+        ${data.annotations_running ? '<p class="small muted">标注任务仍在运行，完成或停止后才能生成。</p>' : ""}
+        <div class="table-scroll"><table>
+          <thead><tr><th>标注 Episode</th><th>帧数</th><th>Subtask 区间</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3" class="empty">没有可用标注的 Episode。</td></tr>'}</tbody>
+        </table></div>
+        ${skipped.length ? `<details class="subtask-skipped"><summary>跳过的标注（${skipped.length} 条）</summary><ul>${skipped.map((item) => `<li>${esc(item.episode_id)}：${esc(item.reason)}</li>`).join("")}</ul></details>` : ""}
+        ${vocabulary.length ? `<details class="subtask-skipped"><summary>预览 Subtask 词表（${vocabulary.length} 条）</summary><ol start="0">${vocabulary.map((item) => `<li>${esc(item.subtask)}</li>`).join("")}</ol></details>` : ""}
+        <div class="subtask-actions">
+          <label for="annotation-subtask-name">新数据集名称</label>
+          <input id="annotation-subtask-name" data-subtask-name type="text" maxlength="2000" value="${esc(defaultName)}" placeholder="留空则使用「原数据集名-subtasks」" ${ready ? "" : "disabled"} />
+          <button class="primary" type="button" data-subtask-export ${ready ? "" : "disabled"}>${running ? "正在生成…" : "生成 Subtask 数据集"}</button>
+        </div>
+        <p class="small muted">生成在后台队列中执行，不需要模型密钥；完成后自动登记到数据集管理，可预览、质检或删除。</p>
+        ${exportRows ? `<div class="table-scroll"><table><thead><tr><th>导出任务</th><th>状态</th><th>结果</th></tr></thead><tbody>${exportRows}</tbody></table></div>` : ""}
+        ${latest && latest.error ? `<p class="warning">上次导出失败：${esc(latest.error)}</p>` : ""}
+      `;
+    const signature = body;
+    if (subtaskSignature === signature) return;
+    subtaskSignature = signature;
+    box.innerHTML = body;
+  }
+
+  async function startSubtaskExport() {
+    if (!selectedId || subtaskSubmitting) return;
+    if (!subtask?.can_export) return;
+    const input = $("annotation-subtask-name");
+    const name = (subtaskName || input?.value || "").trim();
+    subtaskSubmitting = true;
+    const button = document.querySelector("[data-subtask-export]");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "正在提交…";
+    }
+    try {
+      const job = await ui.api(`/api/annotations/${selectedId}/subtask-exports`, "POST", {
+        name: name || null,
+      });
+      subtaskName = "";
+      ui.notice(`已提交 Subtask 数据集生成：${job.dataset_name}。完成后可在数据集管理中找到。`);
+      await loadSubtask(true);
+    } catch (error) {
+      ui.notice(error.message, true);
+      await loadSubtask(true);
+    } finally {
+      subtaskSubmitting = false;
     }
   }
 
