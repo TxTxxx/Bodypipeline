@@ -213,16 +213,35 @@ def test_environment_prefers_per_task_credentials(service):
         runner.settings, "https://gateway.example/v1", "task-secret"
     )
     env = argus_annotation.environment(
-        runner.settings, {"concurrency": 2}, {}, credentials
+        runner.settings,
+        {"concurrency": 2, "model": "gpt-6.1-sol"},
+        {},
+        credentials,
     )
     assert env["PIPELINE_ARGUS_BASE_URL"] == "https://gateway.example/v1"
     assert env["PIPELINE_ARGUS_GENERIC_GATEWAY"] == "1"
     assert env["PIPELINE_ARGUS_API_KEY"] == "task-secret"
+    # The gateway need not serve Argus's OpenRouter-only routing model.
+    assert env["PIPELINE_ARGUS_ROUTE_MODEL"] == "gpt-6.1-sol"
 
     # Server defaults still work when the task does not name a key.
-    env = argus_annotation.environment(runner.settings, {"concurrency": 2}, {})
+    env = argus_annotation.environment(
+        runner.settings, {"concurrency": 2, "model": "gpt-6.1-sol"}, {}
+    )
     assert env["PIPELINE_ARGUS_API_KEY"] == "test-server-key"
     assert "PIPELINE_ARGUS_BASE_URL" not in env
+    assert "PIPELINE_ARGUS_ROUTE_MODEL" not in env
+
+
+def test_environment_routes_with_the_task_model_on_the_server_gateway(service):
+    runner, _store, _src, _data = service
+    runner.settings.argus_base_url = "https://gateway.example/v1"
+    env = argus_annotation.environment(
+        runner.settings, {"model": "gpt-6.1-sol"}, {}
+    )
+    assert env["PIPELINE_ARGUS_BASE_URL"] == "https://gateway.example/v1"
+    assert env["PIPELINE_ARGUS_GENERIC_GATEWAY"] == "1"
+    assert env["PIPELINE_ARGUS_ROUTE_MODEL"] == "gpt-6.1-sol"
 
 
 def test_task_key_is_redacted_from_logs_and_cleared_after_cancel(service):

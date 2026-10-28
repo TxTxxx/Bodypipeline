@@ -291,6 +291,13 @@ def environment(
             env["PIPELINE_ARGUS_GENERIC_GATEWAY"] = "1"
         if task_key:
             env["PIPELINE_ARGUS_API_KEY"] = task_key
+    if env.get("PIPELINE_ARGUS_GENERIC_GATEWAY") == "1":
+        # Argus's routing question otherwise goes to its OpenRouter-only
+        # ``openai/gpt-6-sol``.  A gateway publishes its own catalogue, so route
+        # with the model this task already chose (and just listed).
+        route_model = str(annotation.get("model") or "").strip()
+        if route_model:
+            env["PIPELINE_ARGUS_ROUTE_MODEL"] = route_model
     jobs = max(1, int(annotation.get("concurrency") or 2))
     env["RDA_DECODE_CONCURRENCY"] = str(max(2, 2 * jobs))
     return env

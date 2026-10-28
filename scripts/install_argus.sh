@@ -57,7 +57,9 @@ git -C "$SRC" submodule update --init --depth 1 || true
 if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py" \
    || ! grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py" \
-   || ! grep -q "pipeline-argus-generic-models:v4" "$SRC/label/harness.py"; then
+   || ! grep -q "pipeline-argus-generic-models:v4" "$SRC/label/harness.py" \
+   || ! grep -q "pipeline-argus-generic-route:v5" "$SRC/label/route.py" \
+   || ! grep -q "pipeline-argus-generic-pricing:v5" "$SRC/label/pricing.py"; then
   git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
@@ -74,6 +76,14 @@ grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py" || {
 }
 grep -q "pipeline-argus-generic-models:v4" "$SRC/label/harness.py" || {
   echo "Argus generic gateway model hook was not applied" >&2
+  exit 1
+}
+grep -q "pipeline-argus-generic-route:v5" "$SRC/label/route.py" || {
+  echo "Argus generic gateway routing hook was not applied" >&2
+  exit 1
+}
+grep -q "pipeline-argus-generic-pricing:v5" "$SRC/label/pricing.py" || {
+  echo "Argus generic gateway pricing hook was not applied" >&2
   exit 1
 }
 

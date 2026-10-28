@@ -20,6 +20,9 @@ What it changes:
    an ``openai/`` prefix or an OpenRouter-shaped key.  A spend cap falls back to
    the OpenAI list price when the gateway model's base name is known, and the
    recorded provider is ``gateway``.
+6. ``label.route`` can route with the gateway's own model through
+   ``PIPELINE_ARGUS_ROUTE_MODEL`` instead of Argus's OpenRouter-only
+   ``openai/gpt-6-sol``.
 
 The patch is deliberately conservative: with none of the environment variables
 set, Argus behaves exactly as upstream.
@@ -32,10 +35,12 @@ import os
 import re
 from pathlib import Path
 
-VERSION = 4
+VERSION = 5
 MARKER = "# pipeline-argus-integration:v1"
 GATEWAY_MARKER = "# pipeline-argus-gateway-key:v3"
 GENERIC_MODEL_MARKER = "# pipeline-argus-generic-models:v4"
+GENERIC_ROUTE_MARKER = "# pipeline-argus-generic-route:v5"
+GENERIC_PRICING_MARKER = "# pipeline-argus-generic-pricing:v5"
 
 
 def _insert_after(text: str, anchor: str, addition: str) -> str:
@@ -246,20 +251,67 @@ def patch_generic_models(path: Path) -> None:
     path.write_text(text)
 
 
-def patch_pricing(path: Path) -> None:
-    """Skip the OpenRouter catalogue lookup when a generic gateway is configured."""
+def patch_route(path: Path) -> None:
+    """Route resolution choices through the gateway's own model.
+
+    Upstream Argus always sends its routing question to ``openai/gpt-6-sol``,
+    which exists on OpenRouter but not necessarily on a private gateway.  A
+    generic gateway lets the Server name the routing model explicitly; the
+    default is unchanged when no gateway is in use.
+    """
 
     text = path.read_text()
-    if MARKER in text:
+    if GENERIC_ROUTE_MARKER in text:
         return
+
+    if "\nimport os\n" not in text:
+        text = text.replace("import json\n", "import json\nimport os\n", 1)
+    anchor = 'ROUTE_MODEL = "openai/gpt-6-sol"\n'
+    if text.count(anchor) != 1:
+        raise RuntimeError("unexpected Argus layout: ROUTE_MODEL missing")
+    text = text.replace(
+        anchor,
+        GENERIC_ROUTE_MARKER + "\n"
+        + 'ROUTE_MODEL = (\n'
+        + '    (os.environ.get("PIPELINE_ARGUS_ROUTE_MODEL") or "").strip()\n'
+        + '    or "openai/gpt-6-sol"\n'
+        + ')\n',
+        1,
+    )
+
+    anchor = "    rates = OPENAI_PRICES[ROUTE_MODEL.split('/', 1)[-1]][1]\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError("unexpected Argus layout: routing rates missing")
+    text = text.replace(
+        anchor,
+        "    rates = OPENAI_PRICES.get(\n"
+        "        ROUTE_MODEL.split('/', 1)[-1], OPENAI_PRICES['gpt-6-astra'])[1]\n",
+        1,
+    )
+    path.write_text(text)
+
+
+def patch_pricing(path: Path) -> None:
+    """Skip the OpenRouter catalogue lookup when a generic gateway is configured.
+
+    Earlier patch versions inserted this guard without a marker of its own, so a
+    repeated ``apply()`` stacked duplicates.  Normalise every copy to exactly
+    one marked guard.
+    """
+
+    text = path.read_text()
+    guard = (
+        '    if os.environ.get("PIPELINE_ARGUS_GENERIC_GATEWAY") == "1":\n'
+        '        raise ValueError("generic gateway: no catalogue pricing, use pipeline budget")\n'
+    )
     anchor = "def quote(model: str, timeout: int) -> dict:\n"
     if anchor not in text:
         raise RuntimeError("unexpected Argus pricing layout: quote() missing")
+    text = text.replace(guard, "")
+    text = text.replace("    " + GENERIC_PRICING_MARKER + "\n", "")
     text = text.replace(
         anchor,
-        anchor
-        + '    if os.environ.get("PIPELINE_ARGUS_GENERIC_GATEWAY") == "1":\n'
-        + '        raise ValueError("generic gateway: no catalogue pricing, use pipeline budget")\n',
+        anchor + "    " + GENERIC_PRICING_MARKER + "\n" + guard,
         1,
     )
     if "\nimport os\n" not in text:
@@ -394,6 +446,7 @@ def apply(root: Path) -> dict:
     patch_harness(root / "label" / "harness.py")
     patch_gateway_key(root / "label" / "harness.py")
     patch_generic_models(root / "label" / "harness.py")
+    patch_route(root / "label" / "route.py")
     patch_pricing(root / "label" / "pricing.py")
     patch_label_module(root)
     patch_mounting(root)
