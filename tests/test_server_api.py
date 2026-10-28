@@ -127,6 +127,19 @@ def test_report_page_is_public_but_data_requires_login(settings_factory):
         ).status_code == 200
 
 
+def test_server_page_scripts_load_before_login(settings_factory):
+    s = settings_factory("server")
+    with TestClient(create_app(s, background=False)) as http:
+        page = http.get("/")
+        assert page.status_code == 200
+        # The page's own scripts must load before login: a script that 401s is
+        # never retried by boot(), so its panel would silently stay dead.
+        for name in ("theme.js", "clipboard.js", "client-replay.js", "app.js", "annotations.js"):
+            assert f"/assets/{name}" in page.text
+            assert http.get(f"/assets/{name}").status_code == 200, name
+        assert http.get("/api/annotations").status_code == 401
+
+
 def test_report_page_is_server_only():
     from fastapi import FastAPI
 

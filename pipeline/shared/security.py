@@ -184,6 +184,7 @@ def install_security(app: FastAPI, settings, device_prefix: str | None = None):
                 "/healthz",
                 "/api/login",
                 "/assets/app.js",
+                "/assets/annotations.js",
                 "/assets/client-replay.js",
                 "/assets/clipboard.js",
                 "/assets/theme.js",
