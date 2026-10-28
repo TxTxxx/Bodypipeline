@@ -403,7 +403,19 @@ bash scripts/install_argus.sh
 `OPENROUTER_API_KEYS` / `OPENAI_API_KEY`；不配置时只有本地检查可用。
 `PIPELINE_ARGUS_API_KEY` 也可直接作为网关密钥。`argus_base_url` 可指向任意
 Chat Completions 兼容网关，此时服务会自动设置
-`PIPELINE_ARGUS_GENERIC_GATEWAY=1`，补丁会去掉网关不接受的字段。
+`PIPELINE_ARGUS_GENERIC_GATEWAY=1`，补丁会去掉网关不接受的字段。设置后它也是
+自动标注页面 `baseURL` 的默认值：
+
+```json
+{
+  "argus_base_url": "https://aiproxy.mintibot.com:8888/v1",
+  "argus_models": ["gpt-6.1-sol"]
+}
+```
+
+网关补丁 v4 允许直接使用网关返回的模型 ID（不要求 `openai/` 前缀，也不要求
+OpenRouter 形状的密钥）；已知模型按 OpenAI 列表价计入费用上限，未知模型在设置
+预算上限时会明确拒绝。
 
 跨模态检查依赖 Profile 声明的相机安装关系：
 

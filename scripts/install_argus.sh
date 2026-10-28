@@ -56,7 +56,8 @@ git -C "$SRC" submodule update --init --depth 1 || true
 # safe as long as nobody added work on top of it.
 if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py" \
-   || ! grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py"; then
+   || ! grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py" \
+   || ! grep -q "pipeline-argus-generic-models:v4" "$SRC/label/harness.py"; then
   git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
@@ -69,6 +70,10 @@ grep -q "pipeline-argus-mounting:v2" "$SRC/prepare/formats.py" || {
 }
 grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py" || {
   echo "Argus gateway key hook was not applied" >&2
+  exit 1
+}
+grep -q "pipeline-argus-generic-models:v4" "$SRC/label/harness.py" || {
+  echo "Argus generic gateway model hook was not applied" >&2
   exit 1
 }
 

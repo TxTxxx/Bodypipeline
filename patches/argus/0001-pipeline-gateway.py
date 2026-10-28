@@ -16,6 +16,10 @@ What it changes:
    ``PIPELINE_ARGUS_GENERIC_GATEWAY=1``.
 4. ``label.pricing.quote`` is bypassed when the gateway has no pricing
    endpoint; the caller then relies on pipeline-side budget accounting.
+5. A generic gateway publishes its own model names, so labels no longer require
+   an ``openai/`` prefix or an OpenRouter-shaped key.  A spend cap falls back to
+   the OpenAI list price when the gateway model's base name is known, and the
+   recorded provider is ``gateway``.
 
 The patch is deliberately conservative: with none of the environment variables
 set, Argus behaves exactly as upstream.
@@ -28,9 +32,10 @@ import os
 import re
 from pathlib import Path
 
-VERSION = 3
+VERSION = 4
 MARKER = "# pipeline-argus-integration:v1"
 GATEWAY_MARKER = "# pipeline-argus-gateway-key:v3"
+GENERIC_MODEL_MARKER = "# pipeline-argus-generic-models:v4"
 
 
 def _insert_after(text: str, anchor: str, addition: str) -> str:
@@ -176,6 +181,68 @@ def patch_gateway_key(path: Path) -> None:
         signature + "    " + GATEWAY_MARKER + "\n" + GATEWAY_BLOCK,
         1,
     )
+    path.write_text(text)
+
+
+def patch_generic_models(path: Path) -> None:
+    """Let a generic gateway label with the model names it publishes.
+
+    Upstream Argus decides where a call goes from the key shape: only an
+    OpenRouter-shaped key may label a model that is not named ``openai/...``.
+    A gateway publishes its own catalogue (``gpt-6.1-sol``, not
+    ``openai/gpt-6.1-sol``), so every such check has to respect
+    ``PIPELINE_ARGUS_GENERIC_GATEWAY`` first.  Pricing and provider telemetry
+    follow the same rule: base-name rates give a spend cap something to bound,
+    and the recorded provider is the gateway rather than OpenAI.
+    """
+
+    text = path.read_text()
+    if GENERIC_MODEL_MARKER in text:
+        return
+
+    replacements = [
+        (
+            "    if not dry_run and not is_openrouter_key(api_key) and not model.startswith('openai/'):",
+            "    " + GENERIC_MODEL_MARKER + "\n"
+            "    if (not dry_run and not _GENERIC and not is_openrouter_key(api_key)\n"
+            "            and not model.startswith('openai/')):",
+        ),
+        (
+            "    if not dry_run and require_known_pricing and (not model.startswith('openai/')\n"
+            "            or model.split('/', 1)[-1] not in OPENAI_PRICES):",
+            "    if (not dry_run and require_known_pricing and not _GENERIC\n"
+            "            and (not model.startswith('openai/')\n"
+            "                 or model.split('/', 1)[-1] not in OPENAI_PRICES)):",
+        ),
+        (
+            "    tiers = OPENAI_PRICES.get(model.split('/', 1)[-1]) if model.startswith('openai/') else None",
+            "    tiers = (OPENAI_PRICES.get(model.split('/', 1)[-1])\n"
+            "             if (model.startswith('openai/') or _GENERIC) else None)",
+        ),
+        (
+            '        "provider": "openrouter" if is_openrouter_key(api_key) else "openai",',
+            '        "provider": "gateway" if _GENERIC else ("openrouter" if is_openrouter_key(api_key) else "openai"),',
+        ),
+        (
+            "    if (not _complete_token_usage(usage) or not model.startswith(\"openai/\")\n"
+            "            or model.split(\"/\", 1)[-1] not in OPENAI_PRICES):",
+            "    if (not _complete_token_usage(usage)\n"
+            "            or not (_GENERIC or model.startswith(\"openai/\"))\n"
+            "            or model.split(\"/\", 1)[-1] not in OPENAI_PRICES):",
+        ),
+        (
+            '    if not args.dry_run and not is_openrouter_key(keys[0]) and args.model and not args.model.startswith("openai/"):',
+            "    if (not args.dry_run and not _GENERIC and not is_openrouter_key(keys[0])\n"
+            '            and args.model and not args.model.startswith("openai/")):',
+        ),
+    ]
+    for original, replacement in replacements:
+        if text.count(original) != 1:
+            raise RuntimeError(
+                "unexpected Argus layout: generic gateway anchor missing: "
+                + original.strip().splitlines()[0][:80]
+            )
+        text = text.replace(original, replacement, 1)
     path.write_text(text)
 
 
@@ -326,6 +393,7 @@ def patch_mounting(root: Path) -> None:
 def apply(root: Path) -> dict:
     patch_harness(root / "label" / "harness.py")
     patch_gateway_key(root / "label" / "harness.py")
+    patch_generic_models(root / "label" / "harness.py")
     patch_pricing(root / "label" / "pricing.py")
     patch_label_module(root)
     patch_mounting(root)

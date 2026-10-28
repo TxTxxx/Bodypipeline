@@ -324,6 +324,10 @@
     $("annotation-max-tokens").value = String(defaults.max_tokens || 12000);
     $("annotation-field-dictionary").checked = Boolean(defaults.field_dictionary);
     $("annotation-note").value = defaults.note || "";
+    const defaultBaseUrl = String(options.default_base_url || "").trim();
+    if (defaultBaseUrl) {
+      $("annotation-base-url").value = defaultBaseUrl;
+    }
     const needsKey = !options.api_key_configured;
     $("annotation-api-key").required = needsKey;
     $("annotation-api-key-required").hidden = !needsKey;

@@ -110,6 +110,13 @@ def test_options_and_candidates_come_from_registered_datasets(service):
     assert str(data) == store.get("job", "job-1")["dataset_path"]
 
 
+def test_options_expose_the_server_default_base_url(service):
+    runner, _store, _src, _data = service
+    assert runner.options()["default_base_url"] == ""
+    runner.settings.argus_base_url = "https://aiproxy.example/v1"
+    assert runner.options()["default_base_url"] == "https://aiproxy.example/v1"
+
+
 def test_annotation_context_uses_profile_rig_and_rejects_typos(service):
     runner, store, _src, _data = service
     job = store.get("job", "job-1")

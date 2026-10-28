@@ -121,6 +121,7 @@ class AnnotationRunner:
             "reason": why,
             "models": models,
             "default_model": default_model,
+            "default_base_url": (self.settings.argus_base_url or "").strip(),
             "rigs": list(ANNOTATION_RIGS),
             "api_key_configured": argus_annotation.server_key_configured(
                 self.settings
