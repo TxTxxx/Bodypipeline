@@ -527,8 +527,8 @@ Server 内存中，任务结束、取消或 Server 重启后清除；不会写�
 
 ### 6.4.2 从标注生成 Subtask 数据集
 
-标注完成后，详情页的“Subtask 数据集”面板（`GET
-/api/annotations/{id}/subtask-export-preview`）会显示可导出 Episode、逐帧覆盖率、
+标注完成后，详情页的“Subtask 数据集”面板
+（`GET /api/annotations/{id}/subtask-export-preview`）会显示可导出 Episode、逐帧覆盖率、
 词表和被跳过的标注，底部“生成 Subtask 数据集”按钮
 （`POST /api/annotations/{id}/subtask-exports`，202）把标注写成带逐帧
 `subtask_index` 的新 LeRobot 数据集。
@@ -547,8 +547,8 @@ Server 内存中，任务结束、取消或 Server 重启后清除；不会写�
   `未标注 / Unannotated`，页面展示覆盖率。导出不会把整体任务描述当成子任务，
   也不会凭空补一个“空闲”步骤。
 - 失败、未返回、无法对应到数据集 Episode 或缺少帧率/帧数的标注会被跳过并在面板里
-  列出原因，不会静默丢弃。`subtask` 词表按 `subtask` 文本排序后整体编号，
-  跨 Episode 共享。
+  列出原因，不会静默丢弃。相同 `subtask` 文本共享编号，按规划时首次出现的顺序编号，
+  跨 Episode 共用同一份词表。
 - 生成**不需要**再调用模型，也不需要 API Key；它走现有 `JobRunner` 串行队列
   （`operation == "subtask_export"`），复用 `dataset_lock`、Slurm allocation 与
   `share_data_tree`，发布前跑 `letools validate --deep`。
@@ -567,7 +567,7 @@ curl -s -b cookie.txt "http://100.64.0.71:8081/api/annotations/$AID/subtask-expo
 curl -s -b cookie.txt -X POST "http://100.64.0.71:8081/api/annotations/$AID/subtask-exports" \
   -H 'content-type: application/json' -d '{"name": null}' | jq '{id,dataset_name,state}'
 # 任务完成后
-letools validate /path/to/<dataset>-subtasks --deep
+letools validate "/path/to/example-subtasks" --deep
 ```
 
 ## 6.5 Slurm 转换资源（可选）
