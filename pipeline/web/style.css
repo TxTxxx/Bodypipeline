@@ -297,7 +297,8 @@ a.secondary:hover:not(:disabled) { text-decoration: none; }
 .annotation-log-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* Automatic annotation: per-episode viewer (video + event timeline) */
-.annotation-viewer { margin-top: 16px; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; }
+.annotation-viewer { margin-top: 16px; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; scroll-margin-top: calc(var(--header-height) + 16px); }
+#annotation-detail-panel, .annotation-episode-detail { scroll-margin-top: calc(var(--header-height) + 16px); }
 .annotation-viewer .episode-toolbar { padding: 0 0 10px; }
 .viewer-prompt { margin: 0 0 10px; line-height: 1.7; overflow-wrap: anywhere; }
 .viewer-stage { display: grid; gap: 8px; }

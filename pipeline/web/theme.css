@@ -50,6 +50,19 @@ html[data-theme="dark"] td .task-name { color: #9cbdff; }
 html[data-theme="dark"] :is(.progress, .sev-chip) { background: #233046; }
 html[data-theme="dark"] .sev-chip { color: #b0bfd2; }
 html[data-theme="dark"] .login-card { box-shadow: 0 24px 80px #0005; }
+/* Automatic annotation episode viewer */
+html[data-theme="dark"] .annotation-viewer { background: var(--night-surface); border-color: var(--line); }
+html[data-theme="dark"] .viewer-track { background: #1b2740; border-color: #2c3d58; }
+html[data-theme="dark"] .viewer-segment.idle { background: #3a4659; }
+html[data-theme="dark"] .viewer-segment.other { background: #43567a; }
+html[data-theme="dark"] .viewer-playhead { background: #dbe7fb; box-shadow: 0 0 0 1px #0b101980; }
+html[data-theme="dark"] .viewer-completion { background: var(--night-soft); border-color: var(--line); }
+html[data-theme="dark"] .viewer-event:hover { background: #1c2b42; }
+html[data-theme="dark"] .viewer-event.active { background: #213455; border-color: #35507a; }
+html[data-theme="dark"] :is(.viewer-event-time, .viewer-event-tag, .viewer-list-time, .viewer-ticks) { color: #94a3b8; }
+html[data-theme="dark"] .viewer-grid h3, html[data-theme="dark"] .viewer-side h3 { color: #b0bfd2; }
+html[data-theme="dark"] .viewer-list li { border-color: #2b3b53; }
+html[data-theme="dark"] .viewer-cameras .secondary.active { background: #213455; border-color: #35507a; color: #a8c5ff; }
 html[data-theme="dark"] :is(.viewer-login-card, .doctor-header, .doctor-check, .viewer-starting-card) { background: var(--night-surface) !important; border-color: var(--line) !important; }
 html[data-theme="dark"] .viewer-starting-card { color: #e3eaf4; }
 html[data-theme="dark"] :is(.viewer-login-card label, .doctor-check h2) { color: #e3eaf4; }

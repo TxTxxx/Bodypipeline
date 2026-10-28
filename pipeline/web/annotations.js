@@ -804,25 +804,6 @@
         <video class="viewer-video" id="annotation-viewer-video" controls playsinline preload="metadata"></video>`
       : `<p class="empty small muted">本次运行没有可播放的预览视频（clips 阶段未生成）。事件时间线仍可查看。</p>`;
 
-    const segments = events
-      .map((event) => {
-        const start = percent(event.start);
-        const width = Math.min(100 - start, Math.max(0.3, percent(event.end) - start));
-        const title = [seconds(event.start), event.verb_class, event.object]
-          .filter(Boolean)
-          .join(" · ");
-        return `<span class="viewer-segment ${viewerTone(event)}" style="left:${start}%;width:${width}%" title="${esc(title)}"></span>`;
-      })
-      .join("");
-    const markers = (key) =>
-      viewerRows(key)
-        .map((row) => {
-          const title = key === "key_events" ? row.label || row.kind || "关键动作" : row.object || "状态变化";
-          const tone = key === "key_events" ? "key" : "state";
-          return `<span class="viewer-marker ${tone}" style="left:${percent(row.t_s)}%" title="${esc(title)}"></span>`;
-        })
-        .join("");
-
     const eventRows = events
       .map((event) => {
         const arm = ARM_LABELS[event.arm] || event.arm || "";
@@ -858,7 +839,7 @@
       <p class="viewer-prompt"><strong>任务：</strong>${esc(prompt)}</p>
       <div class="viewer-stage">${video}</div>
       <div class="viewer-timeline" data-viewer-timeline role="slider" tabindex="0" aria-label="事件时间线">
-        <div class="viewer-track">${segments}${markers("key_events")}${markers("state_changes")}<span class="viewer-playhead" id="annotation-viewer-playhead"></span></div>
+        <div class="viewer-track" id="annotation-viewer-track"><span class="viewer-playhead" id="annotation-viewer-playhead"></span></div>
         <div class="viewer-ticks"><span>0s</span><span>${seconds(duration / 2)}</span><span>${seconds(duration)}</span></div>
       </div>
       <div class="viewer-grid">
@@ -874,6 +855,41 @@
           ${completionHtml}
         </div>
       </div>`;
+
+    // Positions are set through CSSOM: the page's CSP allows styles from
+    // 'self' but not inline style attributes parsed from markup.
+    const track = $("annotation-viewer-track");
+    const playhead = $("annotation-viewer-playhead");
+    if (track && playhead) {
+      const place = (node, left, width) => {
+        node.style.left = `${left}%`;
+        if (width != null) node.style.width = `${width}%`;
+        track.insertBefore(node, playhead);
+      };
+      for (const event of events) {
+        const start = percent(event.start);
+        const node = document.createElement("span");
+        node.className = `viewer-segment ${viewerTone(event)}`;
+        node.title = [seconds(event.start), event.verb_class, event.object]
+          .filter(Boolean)
+          .join(" · ");
+        place(node, start, Math.min(100 - start, Math.max(0.3, percent(event.end) - start)));
+      }
+      for (const [key, tone] of [
+        ["key_events", "key"],
+        ["state_changes", "state"],
+      ]) {
+        for (const row of viewerRows(key)) {
+          const node = document.createElement("span");
+          node.className = `viewer-marker ${tone}`;
+          node.title =
+            key === "key_events"
+              ? row.label || row.kind || "关键动作"
+              : row.object || "状态变化";
+          place(node, percent(row.t_s), null);
+        }
+      }
+    }
 
     const timeline = body.querySelector("[data-viewer-timeline]");
     timeline?.addEventListener("keydown", (event) => {
