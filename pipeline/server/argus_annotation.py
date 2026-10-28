@@ -46,6 +46,13 @@ STAGE_ORDER = (
 
 _MARKER = re.compile(r"^== ([A-Za-z0-9_]+)\b", re.MULTILINE)
 _EPISODE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_CAMERA_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+# Argus names the fixed camera ``exo`` and the mounted ones ``left``/``right``;
+# clips land at CLIPS/<episode>.mp4 for the fixed one and in a folder per camera
+# otherwise (board/clips.py clip_path).  The page shows these labels; any other
+# camera keeps the folder's own name so a new rig needs no page change.
+CAMERA_LABELS = {"exo": "主相机", "left": "左腕", "right": "右腕"}
+_WRIST_FOLDERS = {"wrist_left": "left", "wrist_right": "right"}
 
 
 def _python(settings) -> str | None:
@@ -520,6 +527,76 @@ def episode(work: Path, episode_id: str) -> dict | None:
                 "source": "run",
                 **data,
             }
+    return None
+
+
+def _clip_label(camera: str) -> str:
+    depth = camera.startswith("depth_")
+    base = camera.removeprefix("depth_")
+    label = CAMERA_LABELS.get(base, base)
+    return f"{label} 深度" if depth else label
+
+
+def _clip_rows(clips: Path, episode_id: str) -> list[tuple[str, Path]]:
+    """Every playable clip of one episode as ``(camera, path)``, main camera first.
+
+    The main camera's clip sits at the top of ``clips`` and every other camera
+    has a folder named after it; ``wrist_left``/``wrist_right`` are the mounted
+    cameras.  Depth clips (``depth_<camera>``) stay separate from their colour
+    camera and come last.
+    """
+
+    if not clips.is_dir():
+        return []
+    candidates: list[tuple[str, Path]] = [("exo", clips / f"{episode_id}.mp4")]
+    for folder in sorted(clips.iterdir()):
+        if not folder.is_dir():
+            continue
+        camera = _WRIST_FOLDERS.get(folder.name, folder.name)
+        candidates.append((camera, folder / f"{episode_id}.mp4"))
+    rows: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for camera, path in candidates:
+        if camera in seen or not path.is_file():
+            continue
+        seen.add(camera)
+        rows.append((camera, path))
+    order = {"exo": 0, "left": 1, "right": 2}
+    rows.sort(key=lambda row: (
+        row[0].startswith("depth_"),
+        order.get(row[0], len(order)),
+        row[0],
+    ))
+    return rows
+
+
+def clips(work: Path, episode_id: str) -> list[dict]:
+    """The episode's playable preview clips, or [] when the run cut none."""
+
+    if not isinstance(episode_id, str) or not _EPISODE_ID.fullmatch(episode_id):
+        return []
+    rows: list[dict] = []
+    for camera, path in _clip_rows(Path(work) / "argus" / "clips", episode_id):
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        rows.append(
+            {"camera": camera, "label": _clip_label(camera), "size": size}
+        )
+    return rows
+
+
+def clip(work: Path, episode_id: str, camera: str) -> Path | None:
+    """The path of one discovered clip; never a client-supplied path."""
+
+    if not isinstance(episode_id, str) or not _EPISODE_ID.fullmatch(episode_id):
+        return None
+    if not isinstance(camera, str) or not _CAMERA_ID.fullmatch(camera):
+        return None
+    for name, path in _clip_rows(Path(work) / "argus" / "clips", episode_id):
+        if name == camera:
+            return path
     return None
 
 

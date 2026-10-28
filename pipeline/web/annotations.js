@@ -43,6 +43,12 @@
   let episodes = [];
   let logs = ["run"];
   let currentLog = "run";
+  let viewerEpisode = null;
+  let viewerData = null;
+  let viewerClips = [];
+  let viewerCamera = null;
+  let viewerTime = 0;
+  let viewerToken = 0;
   let visible = false;
   let bound = false;
   let timer = null;
@@ -231,6 +237,7 @@
       $("annotation-resume-api-key").value = "";
     });
     $("annotation-detail-close").addEventListener("click", () => {
+      closeViewer();
       selectedId = null;
       detailRow = null;
       $("annotation-detail-panel").hidden = true;
@@ -263,9 +270,37 @@
         void loadLog(currentLog);
         return;
       }
+      if (event.target.closest("[data-annotation-viewer-close]")) {
+        closeViewer();
+        return;
+      }
+      const camera = event.target.closest("[data-viewer-camera]");
+      if (camera) {
+        selectViewerCamera(camera.dataset.viewerCamera);
+        return;
+      }
+      const seek = event.target.closest("[data-viewer-seek]");
+      if (seek) {
+        seekViewer(Number(seek.dataset.viewerSeek));
+        return;
+      }
+      const timeline = event.target.closest("[data-viewer-timeline]");
+      if (timeline) {
+        const rect = timeline.getBoundingClientRect();
+        const duration = viewerDuration();
+        if (rect.width > 0) {
+          seekViewer((duration * (event.clientX - rect.left)) / rect.width);
+        }
+        return;
+      }
       const episode = event.target.closest("[data-annotation-episode]");
       if (episode) {
         void showEpisode(episode.dataset.annotationEpisode);
+        return;
+      }
+      const raw = event.target.closest("[data-annotation-episode-json]");
+      if (raw) {
+        void showEpisodeJson(raw.dataset.annotationEpisodeJson);
       }
     });
   }
@@ -545,6 +580,7 @@
     episodes = [];
     logs = ["run"];
     currentLog = "run";
+    closeViewer();
     $("annotation-episode-detail").hidden = true;
     $("annotation-log-output").textContent = "正在读取日志…";
     $("annotation-log-select").innerHTML = '<option value="run">run</option>';
@@ -677,13 +713,293 @@
           <td>${esc(completion)}</td>
           <td>${esc(item.events || 0)} 事件<span class="sub">${esc(item.key_events || 0)} 关键动作 · ${esc(item.state_changes || 0)} 状态变化</span></td>
           <td>${esc(item.model || "—")}</td>
-          <td>${labels}<button class="text-button" type="button" data-annotation-episode="${esc(item.id)}">查看原始结果</button></td>
+          <td>${labels}<div class="action-row">${item.labels_available ? `<button class="secondary" type="button" data-annotation-episode="${esc(item.id)}">查看预览</button>` : ""}<button class="text-button" type="button" data-annotation-episode-json="${esc(item.id)}">原始结果</button></div></td>
         </tr>`;
       })
       .join("");
   }
 
+  const number = (value, fallback = 0) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const seconds = (value) => `${number(value).toFixed(1)}s`;
+  const ARM_LABELS = { left: "左臂", right: "右臂", both: "双臂" };
+
+  function viewerRows(key) {
+    const rows = viewerData?.[key];
+    return Array.isArray(rows) ? rows.filter((row) => row && typeof row === "object") : [];
+  }
+
+  function viewerCompletion() {
+    const completion = viewerData?.completion;
+    if (completion && typeof completion === "object") return completion;
+    const nested = viewerData?.labels?.completion;
+    return nested && typeof nested === "object" ? nested : {};
+  }
+
+  function viewerOutcome() {
+    let outcome = viewerCompletion().task_completed;
+    if (outcome === true) outcome = "success";
+    if (outcome === false) outcome = "failure";
+    return typeof outcome === "string" ? outcome : "";
+  }
+
+  function viewerDuration() {
+    const values = [number(viewerData?.duration_s, 0)];
+    const completion = viewerCompletion();
+    values.push(number(completion.completed_at_s, 0), number(completion.goal_reached_at_s, 0));
+    for (const row of viewerRows("event_labels")) {
+      values.push(number(row.t_s ?? row.start_s, 0), number(row.end_s, 0));
+    }
+    for (const row of [...viewerRows("key_events"), ...viewerRows("state_changes")]) {
+      values.push(number(row.t_s, 0));
+    }
+    const last = Math.max(0, ...values.filter((value) => Number.isFinite(value)));
+    return last > 0 ? last : 1;
+  }
+
+  function viewerEvents() {
+    const duration = viewerDuration();
+    const rows = viewerRows("event_labels").map((row) => {
+      const start = Math.max(0, number(row.t_s ?? row.start_s, 0));
+      const end = number(row.end_s, 0);
+      return { ...row, start, end: end > start ? end : null };
+    });
+    return rows.map((row, index) => ({
+      ...row,
+      end: row.end ?? (index + 1 < rows.length ? rows[index + 1].start : duration),
+    }));
+  }
+
+  function viewerTone(event) {
+    const text = String(event.contribution || "").toLowerCase();
+    if (text.includes("advanc")) return "advance";
+    if (text.includes("hold")) return "hold";
+    if (text.includes("retract") || text.includes("retreat")) return "retract";
+    if (text.includes("idle")) return "idle";
+    return "other";
+  }
+
+  function renderViewer() {
+    const body = $("annotation-viewer-body");
+    if (!body || !viewerData) return;
+    const duration = viewerDuration();
+    const events = viewerEvents();
+    const completion = viewerCompletion();
+    const outcome = viewerOutcome();
+    const model = viewerData._meta?.model || viewerData.model || "—";
+    const prompt = viewerData.episode_prompt || viewerData.labels?.task_summary || "未记录任务描述";
+    $("annotation-viewer-title").textContent = `Episode ${viewerEpisode} 可视化`;
+    $("annotation-viewer-meta").textContent = `${seconds(duration)} · ${OUTCOME_LABELS[outcome] || "未判断"} · ${model}`;
+
+    const percent = (value) => Math.min(100, Math.max(0, (100 * number(value, 0)) / duration));
+    const video = viewerClips.length
+      ? `<div class="viewer-cameras">${viewerClips
+          .map(
+            (clip) =>
+              `<button type="button" class="secondary${clip.camera === viewerCamera ? " active" : ""}" data-viewer-camera="${esc(clip.camera)}">${esc(clip.label)}</button>`,
+          )
+          .join("")}</div>
+        <video class="viewer-video" id="annotation-viewer-video" controls playsinline preload="metadata"></video>`
+      : `<p class="empty small muted">本次运行没有可播放的预览视频（clips 阶段未生成）。事件时间线仍可查看。</p>`;
+
+    const segments = events
+      .map((event) => {
+        const start = percent(event.start);
+        const width = Math.min(100 - start, Math.max(0.3, percent(event.end) - start));
+        const title = [seconds(event.start), event.verb_class, event.object]
+          .filter(Boolean)
+          .join(" · ");
+        return `<span class="viewer-segment ${viewerTone(event)}" style="left:${start}%;width:${width}%" title="${esc(title)}"></span>`;
+      })
+      .join("");
+    const markers = (key) =>
+      viewerRows(key)
+        .map((row) => {
+          const title = key === "key_events" ? row.label || row.kind || "关键动作" : row.object || "状态变化";
+          const tone = key === "key_events" ? "key" : "state";
+          return `<span class="viewer-marker ${tone}" style="left:${percent(row.t_s)}%" title="${esc(title)}"></span>`;
+        })
+        .join("");
+
+    const eventRows = events
+      .map((event) => {
+        const arm = ARM_LABELS[event.arm] || event.arm || "";
+        const target = [event.object, event.carry_phase].filter(Boolean).join(" · ");
+        return `<button type="button" class="viewer-event" data-viewer-seek="${event.start}" data-viewer-start="${event.start}" data-viewer-end="${event.end}">
+          <span class="viewer-event-time">${seconds(event.start)}</span>
+          <span class="viewer-event-body"><strong>${esc(event.verb_class || "未描述动作")}</strong>${target ? `<span class="sub">${esc(target)}</span>` : ""}</span>
+          <span class="viewer-event-tag">${esc([arm, event.contribution].filter(Boolean).join(" · "))}</span>
+        </button>`;
+      })
+      .join("");
+
+    const keyRows = viewerRows("key_events")
+      .map(
+        (row) => `<li><span class="viewer-list-time">${seconds(row.t_s)}</span><strong>${esc(row.label || row.kind || "关键动作")}</strong>${row.note ? `<span class="sub">${esc(row.note)}</span>` : ""}</li>`,
+      )
+      .join("");
+    const stateRows = viewerRows("state_changes")
+      .map(
+        (row) => `<li><span class="viewer-list-time">${seconds(row.t_s)}</span><strong>${esc(row.object || "状态变化")}</strong><span class="sub">${esc(row.from || "—")} → ${esc(row.to || "—")}</span>${row.seen_in ? `<span class="sub viewer-list-note">${esc(row.seen_in)}</span>` : ""}</li>`,
+      )
+      .join("");
+    const completionHtml = completion.task_completed
+      ? `<div class="viewer-completion">
+          <h3>完成判定</h3>
+          <p class="small"><strong>${esc(OUTCOME_LABELS[outcome] || outcome || "未判断")}</strong>${completion.completed_at_s != null ? ` · ${seconds(completion.completed_at_s)}` : ""}</p>
+          ${completion.reason ? `<p class="small muted">${esc(completion.reason)}</p>` : ""}
+          ${completion.success_predicate ? `<p class="small muted">判定标准：${esc(completion.success_predicate)}</p>` : ""}
+        </div>`
+      : "";
+
+    body.innerHTML = `
+      <p class="viewer-prompt"><strong>任务：</strong>${esc(prompt)}</p>
+      <div class="viewer-stage">${video}</div>
+      <div class="viewer-timeline" data-viewer-timeline role="slider" tabindex="0" aria-label="事件时间线">
+        <div class="viewer-track">${segments}${markers("key_events")}${markers("state_changes")}<span class="viewer-playhead" id="annotation-viewer-playhead"></span></div>
+        <div class="viewer-ticks"><span>0s</span><span>${seconds(duration / 2)}</span><span>${seconds(duration)}</span></div>
+      </div>
+      <div class="viewer-grid">
+        <div>
+          <h3>事件时间线（${events.length}）</h3>
+          <div class="viewer-events">${eventRows || '<p class="empty small muted">没有事件记录</p>'}</div>
+        </div>
+        <div class="viewer-side">
+          <h3>关键动作（${viewerRows("key_events").length}）</h3>
+          <ul class="viewer-list">${keyRows || '<li class="muted small">未记录关键动作</li>'}</ul>
+          <h3>状态变化（${viewerRows("state_changes").length}）</h3>
+          <ul class="viewer-list">${stateRows || '<li class="muted small">未记录状态变化</li>'}</ul>
+          ${completionHtml}
+        </div>
+      </div>`;
+
+    const timeline = body.querySelector("[data-viewer-timeline]");
+    timeline?.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      seekViewer(viewerTime + (event.key === "ArrowRight" ? 0.5 : -0.5));
+    });
+    const player = $("annotation-viewer-video");
+    if (player) {
+      player.addEventListener("timeupdate", () => {
+        if (!player.seeking) paintViewerTime(player.currentTime);
+      });
+      player.addEventListener("seeked", () => paintViewerTime(player.currentTime));
+      selectViewerCamera(viewerCamera, { seek: viewerTime, play: false });
+    }
+    paintViewerTime(viewerTime);
+  }
+
+  function paintViewerTime(value) {
+    viewerTime = Math.max(0, number(value, 0));
+    const playhead = $("annotation-viewer-playhead");
+    if (playhead) playhead.style.left = `${Math.min(100, (100 * viewerTime) / viewerDuration())}%`;
+    $("annotation-viewer-body")
+      ?.querySelectorAll("[data-viewer-start]")
+      .forEach((row) => {
+        const start = number(row.dataset.viewerStart, 0);
+        const end = number(row.dataset.viewerEnd, start);
+        row.classList.toggle("active", viewerTime >= start && viewerTime < Math.max(end, start + 0.001));
+      });
+  }
+
+  function selectViewerCamera(camera, options = {}) {
+    const clip = viewerClips.find((item) => item.camera === camera);
+    const video = $("annotation-viewer-video");
+    if (!clip || !video) return;
+    const time = Number.isFinite(options.seek) ? options.seek : viewerTime;
+    const wasPlaying =
+      options.play ?? (Boolean(video.getAttribute("src")) && !video.paused && !video.ended);
+    viewerCamera = clip.camera;
+    $("annotation-viewer-body")
+      ?.querySelectorAll("[data-viewer-camera]")
+      .forEach((button) => {
+        button.classList.toggle("active", button.dataset.viewerCamera === clip.camera);
+      });
+    if (video.dataset.camera === clip.camera && video.getAttribute("src")) return;
+    video.dataset.camera = clip.camera;
+    video.src = clip.url;
+    video.load();
+    const restore = () => {
+      video.onloadedmetadata = null;
+      try {
+        video.currentTime = Math.min(Math.max(0, time), video.duration || time);
+      } catch {
+        // A clip shorter than the requested time keeps its own start.
+      }
+      if (wasPlaying) void video.play().catch(() => {});
+    };
+    if (video.readyState >= 1) restore();
+    else video.onloadedmetadata = restore;
+  }
+
+  function seekViewer(value) {
+    const time = Math.min(Math.max(0, number(value, 0)), viewerDuration());
+    const video = $("annotation-viewer-video");
+    if (video && video.getAttribute("src")) {
+      try {
+        video.currentTime = time;
+      } catch {
+        // The element is between sources; the playhead still follows the click.
+      }
+    }
+    paintViewerTime(time);
+  }
+
+  function closeViewer() {
+    viewerToken += 1;
+    viewerEpisode = null;
+    viewerData = null;
+    viewerClips = [];
+    viewerCamera = null;
+    viewerTime = 0;
+    const video = $("annotation-viewer-video");
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+    const body = $("annotation-viewer-body");
+    if (body) body.innerHTML = "";
+    const box = $("annotation-episode-viewer");
+    if (box) box.hidden = true;
+  }
+
   async function showEpisode(episodeId) {
+    const id = selectedId;
+    if (!id) return;
+    const token = ++viewerToken;
+    viewerEpisode = episodeId;
+    viewerData = null;
+    viewerClips = [];
+    viewerCamera = null;
+    viewerTime = 0;
+    $("annotation-episode-viewer").hidden = false;
+    $("annotation-viewer-title").textContent = `Episode ${episodeId} 可视化`;
+    $("annotation-viewer-meta").textContent = "";
+    $("annotation-viewer-body").innerHTML = '<p class="empty small muted">正在读取 Episode 预览…</p>';
+    $("annotation-episode-viewer").scrollIntoView({ behavior: "smooth", block: "start" });
+    try {
+      const [data, clips] = await Promise.all([
+        ui.api(`/api/annotations/${id}/episodes/${encodeURIComponent(episodeId)}`),
+        ui.api(`/api/annotations/${id}/episodes/${encodeURIComponent(episodeId)}/clips`).catch(
+          () => ({ clips: [] }),
+        ),
+      ]);
+      if (token !== viewerToken || selectedId !== id) return;
+      viewerData = data && typeof data === "object" ? data : {};
+      viewerClips = Array.isArray(clips.clips) ? clips.clips : [];
+      viewerCamera = viewerClips[0]?.camera || null;
+      renderViewer();
+    } catch (error) {
+      if (token !== viewerToken) return;
+      $("annotation-viewer-body").innerHTML = `<p class="warning small">${esc(error.message)}</p>`;
+    }
+  }
+
+  async function showEpisodeJson(episodeId) {
     const id = selectedId;
     if (!id) return;
     const box = $("annotation-episode-detail");
@@ -825,6 +1141,7 @@
     visible = false;
     clearInterval(timer);
     timer = null;
+    $("annotation-viewer-video")?.pause();
   }
 
   window.AnnotationUI = { configure, show, hide };

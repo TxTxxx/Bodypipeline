@@ -615,6 +615,78 @@ def test_outputs_episode_and_cost_are_read_from_argus_sidecars(tmp_path):
     assert cost["reserved_cost_usd"] == 0.5
 
 
+def test_clips_are_discovered_and_confined_to_the_run(tmp_path):
+    work = tmp_path / "annotation"
+    clips = work / "argus/clips"
+    for folder in ("wrist_left", "wrist_right", "depth_exo"):
+        (clips / folder).mkdir(parents=True)
+    (clips / "episode_000000.mp4").write_bytes(b"head")
+    (clips / "wrist_left/episode_000000.mp4").write_bytes(b"left")
+    (clips / "wrist_right/episode_000000.mp4").write_bytes(b"right")
+    (clips / "depth_exo/episode_000000.mp4").write_bytes(b"depth")
+    (clips / "wrist_left/episode_000001.mp4").write_bytes(b"other")
+    (clips / "failed.json").write_text("{}")
+
+    rows = argus_annotation.clips(work, "episode_000000")
+    assert [(row["camera"], row["label"]) for row in rows] == [
+        ("exo", "主相机"),
+        ("left", "左腕"),
+        ("right", "右腕"),
+        ("depth_exo", "主相机 深度"),
+    ]
+    assert argus_annotation.clip(work, "episode_000000", "left").read_bytes() == b"left"
+    # A client names a camera, never a path, and only a discovered clip is served.
+    assert argus_annotation.clip(work, "episode_000000", "../clips") is None
+    assert argus_annotation.clip(work, "episode_000000", "wrist_left") is None
+    assert argus_annotation.clip(work, "episode_000000", "missing") is None
+    assert argus_annotation.clips(work, "../episode_000000") == []
+    assert argus_annotation.clips(work, "episode_000009") == []
+
+
+def test_clip_endpoint_lists_and_streams_byte_ranges(service):
+    runner, store, _src, _data = service
+    row = runner.enqueue("job-1")
+    clips = runner.work(row) / "argus/clips"
+    (clips / "wrist_left").mkdir(parents=True)
+    payload = bytes(range(256)) * 16
+    (clips / "episode_000000.mp4").write_bytes(payload)
+    (clips / "wrist_left/episode_000000.mp4").write_bytes(b"left")
+    store.put("annotation", row["id"], dict(row, state="COMPLETED"))
+
+    with TestClient(create_app(runner.settings, background=False)) as http:
+        headers = {"Authorization": "Bearer " + runner.settings.token}
+        listing = http.get(
+            f"/api/annotations/{row['id']}/episodes/episode_000000/clips",
+            headers=headers,
+        )
+        assert listing.status_code == 200, listing.text
+        found = listing.json()["clips"]
+        assert [(item["camera"], item["size"]) for item in found] == [
+            ("exo", len(payload)),
+            ("left", len(b"left")),
+        ]
+        assert found[0]["url"].endswith(
+            f"/api/annotations/{row['id']}/episodes/episode_000000/clips/exo"
+        )
+
+        video = http.get(
+            found[0]["url"], headers={**headers, "Range": "bytes=4-11"}
+        )
+        assert video.status_code == 206
+        assert video.content == payload[4:12]
+        assert video.headers["content-range"] == f"bytes 4-11/{len(payload)}"
+        assert video.headers["accept-ranges"] == "bytes"
+
+        beyond = http.get(found[0]["url"], headers={**headers, "Range": "bytes=999999-"})
+        assert beyond.status_code == 416
+        missing = http.get(
+            f"/api/annotations/{row['id']}/episodes/episode_000000/clips/wrist_left",
+            headers=headers,
+        )
+        assert missing.status_code == 404
+        assert http.get(found[0]["url"]).status_code == 401
+
+
 def test_failure_error_names_why_an_episode_was_not_labelled(tmp_path):
     log = tmp_path / "run.log"
     log.write_text("== label\nreview finished with label failures\n")

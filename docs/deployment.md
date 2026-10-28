@@ -482,6 +482,13 @@ Server 内存中，任务结束、取消或 Server 重启后清除；不会写�
   `Authorization: Bearer` 发送，不写入日志或响应，错误信息也会脱敏。
 - Argus 退出码非 0 但已产生部分标注时记为“部分完成”，逐 Episode 结果仍可查看
   和导出。费用账本与内容分析共用每日预算，按已结算费用统计。
+- 每个成功 Episode 在页面上有“查看预览”：播放 Argus 生成的各相机片段
+  （`argus/clips/`，主相机、腕部、其他相机与深度按目录自动发现），并把
+  `event_labels`、`key_events`、`state_changes` 和完成判定画在时间线上；
+  点击时间线或事件行会跳转到对应时刻。`原始结果` 仍显示完整 JSON。
+  预览视频通过 `/api/annotations/<id>/episodes/<episode>/clips[..]` 提供，
+  只接受已发现的相机名，返回 `video/mp4` 并支持 HTTP Range 拖动进度；
+  clips 阶段未生成视频时页面只展示时间线。
 - 机器人差异只来自 Provider / Profile：`annotation_context()` 提供 Argus rig 与
   相机安装关系，页面和 API 不按机器人型号分支。当前 Profile 默认使用
   `teleop_arms`；其他采集方式应在 Profile 中声明 `annotation_rig`

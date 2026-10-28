@@ -5,8 +5,10 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import Body, FastAPI, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from pipeline.shared.collections import collection_metadata, group_uploads
@@ -583,6 +585,31 @@ def create_app(settings, background=True):
     @app.get("/api/annotations/{aid}/episodes/{episode_id}")
     def annotation_episode(aid: str, episode_id: str):
         return annotations.episode(aid, episode_id)
+
+    @app.get("/api/annotations/{aid}/episodes/{episode_id}/clips")
+    def annotation_clips(aid: str, episode_id: str):
+        ingest.store.get("annotation", aid)
+        base = f"/api/annotations/{aid}/episodes/{episode_id}/clips"
+        return {
+            "clips": [
+                {**row, "url": f"{base}/{quote(row['camera'], safe='')}"}
+                for row in annotations.clips(aid, episode_id)
+            ]
+        }
+
+    @app.get("/api/annotations/{aid}/episodes/{episode_id}/clips/{camera}")
+    def annotation_clip(aid: str, episode_id: str, camera: str):
+        ingest.store.get("annotation", aid)
+        path = annotations.clip(aid, episode_id, camera)
+        if path is None:
+            raise DomainError("预览视频不存在", 404)
+        # FileResponse answers byte ranges itself, which is what a <video>
+        # element needs to seek inside the clip.
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     @app.get("/api/annotations/{aid}/logs")
     def annotation_log_list(aid: str):

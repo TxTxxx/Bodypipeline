@@ -483,6 +483,13 @@
                     <tbody id="annotation-episode-list"></tbody>
                   </table></div>
                 </div>
+                <section class="annotation-viewer" id="annotation-episode-viewer" hidden>
+                  <div class="episode-toolbar">
+                    <strong id="annotation-viewer-title">Episode 预览</strong>
+                    <span class="annotation-log-tools"><span id="annotation-viewer-meta" class="small muted"></span><button class="text-button" type="button" data-annotation-viewer-close>收起预览</button></span>
+                  </div>
+                  <div id="annotation-viewer-body"></div>
+                </section>
                 <div class="annotation-log">
                   <div class="episode-toolbar"><strong>执行日志</strong><span class="annotation-log-tools"><select id="annotation-log-select"></select><button class="text-button" type="button" data-annotation-log-refresh>刷新日志</button></span></div>
                   <pre id="annotation-log-output">选择日志查看 Argus 执行过程。</pre>

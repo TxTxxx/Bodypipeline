@@ -853,6 +853,14 @@ class AnnotationRunner:
             raise DomainError("标注 Episode 不存在", 404)
         return result
 
+    def clips(self, aid: str, episode_id: str) -> list[dict]:
+        row = self.store.get("annotation", aid)
+        return argus_annotation.clips(self.work(row), episode_id)
+
+    def clip(self, aid: str, episode_id: str, camera: str) -> Path | None:
+        row = self.store.get("annotation", aid)
+        return argus_annotation.clip(self.work(row), episode_id, camera)
+
     def log_names(self, aid: str) -> list[str]:
         row = self.store.get("annotation", aid)
         return argus_annotation.log_names(self.work(row))
