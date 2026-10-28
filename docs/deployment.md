@@ -432,7 +432,8 @@ OpenRouter 形状的密钥）；已知模型按 OpenAI 列表价计入费用上�
 
 侧栏“自动标注”直接用同一个 Argus 环境调用官方 `review` 流程，由 Server
 子进程执行。模型访问凭据可在页面按任务填写：每次提交或续跑都可以指定
-`baseURL` 与 `API Key`，留空时使用服务器配置或环境变量中的默认值。密钥只保存在
+`baseURL` 与 `API Key`，留空时使用服务器配置或环境变量中的默认值。配置
+`argus_base_url` 后，页面会自动把该地址填入 `baseURL`。密钥只保存在
 Server 内存中，任务结束、取消或 Server 重启后清除；不会写入任务记录、工作目录
 `context.json`、运行日志或导出结果。安装脚本会在安装结束时执行
 `python -m review --help`，确认 `--rig`、`--inspection` 等开关存在；若检出目录
