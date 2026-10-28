@@ -162,7 +162,10 @@ def _rewrite_shard(path: Path, lookups: dict, unannotated: int, observed: dict) 
                 labels = _labels(episodes, frames, lookups, unannotated)
                 _observe(observed, episodes, labels, unannotated)
                 labelled += int((labels != unannotated).sum())
-                table = pa.Table.from_batches([batch], schema=batch.schema).append_column(
+                table = pa.Table.from_batches([batch], schema=batch.schema)
+                if "subtask_index" in table.column_names:
+                    table = table.drop_columns(["subtask_index"])
+                table = table.append_column(
                     "subtask_index",
                     pa.array(labels, type=pa.int64(), from_pandas=False),
                 )

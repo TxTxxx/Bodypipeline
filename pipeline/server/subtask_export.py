@@ -548,14 +548,67 @@ class SubtaskExportRunner:
                 return job
 
     # -------------------------------------------------------------------- run
+    def enqueue_review(self, dataset_id, body):
+        """Freeze a saved human revision; subsequent draft edits cannot change it."""
+        from .subtask_review import SubtaskReview
+
+        tool = executable_path(self.settings.letools_bin)
+        if not tool or not Path(tool).with_name("python").is_file():
+            raise DomainError("生成修订数据集需要 LeTools Python 环境", 503)
+        review = SubtaskReview(self.settings, self.store)
+        with self.runner.lock:
+            lock_key, source, _ = review.resolve(dataset_id)
+            with dataset_lock(self.store, lock_key):
+                self.runner.merges._check_recycle(source)
+                source_job, source, snapshot, plan = review.export_plan(dataset_id, body)
+                source_name = source_job.get("dataset_name") or dataset_id
+                output_name = dataset_name(body.name or f"{str(source_name)[:1970]}-revised")
+                key = "subtask-review:" + digest({"source": str(source), "plan": plan["digest"], "name": output_name})
+                for existing in self.store.all("job"):
+                    if existing.get("key") == key and existing["state"] not in DEDUP_STATES:
+                        return existing
+                job = {
+                    "id": str(uuid.uuid4()), "key": key, "operation": "subtask_export",
+                    "source_kind": "lerobot_subtask_revision",
+                    "source_job_id": dataset_id, "source_dataset_name": source_name,
+                    "source_annotation_id": source_job.get("source_annotation_id") or source_job.get("annotation_id"),
+                    "source_path": str(source), "source_format": plan["dataset"]["format"],
+                    "target_format": TARGET_FORMAT, "source_snapshot": snapshot,
+                    "source_episode_count": plan["dataset"]["total_episodes"],
+                    "plan_digest": plan["digest"], "revision_plan": plan,
+                    "subtask_summary": plan_summary(plan), "dataset_name": output_name,
+                    "instruction": "", "state": "QUEUED", "stage": "等待生成 Subtask 修订数据集",
+                    "created_at": now(), "error": None,
+                    "robot_type": source_job.get("robot_type") or plan["dataset"]["robot_type"],
+                    "capture_mode": "mock" if source_job.get("capture_mode") == "mock" else "subtask_export",
+                    "processing_mode": "real", "run_doctor": False,
+                    "source_count": plan["dataset"]["total_episodes"],
+                    "episode_count": plan["dataset"]["total_episodes"], "frame_count": None,
+                }
+                for field in ("runtime_id", "provider", "profile", "profile_hash"):
+                    if source_job.get(field) is not None:
+                        job[field] = source_job[field]
+                if self.settings.data_root is not None:
+                    job["data_layout"] = ROBOT_LAYOUT
+                if storage_path(self.settings, job, "work", job["id"]).is_relative_to(source):
+                    raise DomainError("修订输出不能位于来源数据集内", 400)
+                self.store.put("job", job["id"], job)
+                return job
+
     def run(self, job):
         save = self.runner.save
         save(job, state="RUNNING", stage="核验标注与来源数据集", started_at=now())
         try:
             source = Path(job["source_path"])
             with dataset_lock(self.store, self._key(source)):
-                annotation = self.store.get("annotation", job["annotation_id"])
-                plan = build_plan(self.settings, annotation)
+                if job.get("source_kind") == "lerobot_subtask_revision":
+                    self.runner.merges._check_recycle(source)
+                    plan = job["revision_plan"]
+                    if digest({k: v for k, v in plan.items() if k != "digest"}) != plan["digest"]:
+                        raise DomainError("修订导出计划校验失败", 409)
+                else:
+                    annotation = self.store.get("annotation", job["annotation_id"])
+                    plan = build_plan(self.settings, annotation)
                 if plan["digest"] != job["plan_digest"]:
                     raise DomainError("标注结果在提交后发生变化，请重新生成 Subtask 数据集", 409)
                 if not plan["episodes"]:
@@ -661,7 +714,8 @@ class SubtaskExportRunner:
                 lineage = {
                     "operation": "subtask_export",
                     "job_id": job["id"],
-                    "annotation_id": job["annotation_id"],
+                    "annotation_id": job.get("annotation_id") or job.get("source_annotation_id"),
+                    "review": plan.get("review"),
                     "source_job_id": job["source_job_id"],
                     "source_path": str(source),
                     "source_format": job["source_format"],

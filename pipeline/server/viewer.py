@@ -30,6 +30,7 @@ from pipeline.shared.web import themed_html
 from .datasets import dataset_for_job
 from .episode_scores import EpisodeScoreCache
 from .recycle import RecycleBin
+from .subtask_review import DraftRequest, RevisionExportRequest
 from .viewer_data import PreviewRegistry, serve_dataset_file
 
 SERVICE_KEY = "service"
@@ -455,6 +456,45 @@ def create_gateway(settings):
         if row is None:
             raise DomainError("预览已过期或不存在，请在管理台重新打开", 404)
         return row
+
+    async def review_proxy(dataset_id, suffix, body=None):
+        # Only server-owned preview identities are accepted, never a local_path
+        # or arbitrary proxy destination. The Server alone writes draft state.
+        score_preview(dataset_id)
+        url = settings.server_url.rstrip("/") + f"/api/subtask-review/{dataset_id}/{suffix}"
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.request(
+                    "GET" if body is None else "POST", url,
+                    json=body.model_dump() if body is not None else None,
+                    headers={"Authorization": "Bearer " + settings.token},
+                    timeout=settings.command_timeout,
+                )
+        except httpx.HTTPError as exc:
+            raise DomainError("Server 标注服务暂不可用，请稍后重试", 503) from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise DomainError("Server 标注服务返回无效响应", 502) from exc
+        return JSONResponse(payload, status_code=response.status_code, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/subtask-review/{dataset_id}/episodes/{episode}")
+    async def review_episode(dataset_id: str, episode: int):
+        return await review_proxy(dataset_id, f"episodes/{episode}")
+
+    @app.post("/api/subtask-review/{dataset_id}/episodes/{episode}")
+    async def review_save(dataset_id: str, episode: int, body: DraftRequest):
+        return await review_proxy(dataset_id, f"episodes/{episode}", body)
+
+    @app.post("/api/subtask-review/{dataset_id}/exports")
+    async def review_export(dataset_id: str, body: RevisionExportRequest):
+        return await review_proxy(dataset_id, "exports", body)
+
+    @app.get("/api/subtask-review/{dataset_id}/exports/{export_id}")
+    async def review_export_status(dataset_id: str, export_id: str):
+        if not export_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in export_id):
+            raise DomainError("修订导出任务编号无效", 404)
+        return await review_proxy(dataset_id, f"exports/{export_id}")
 
     @app.get("/api/episode-scores/{dataset_id}")
     async def score_status(dataset_id: str):

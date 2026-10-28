@@ -29,6 +29,7 @@ from .jobs import JobRunner
 from .providers import RuntimeCatalog
 from .quality import robot_profile_blockers
 from .storage import storage_path
+from .subtask_review import DraftRequest, RevisionExportRequest, SubtaskReview
 from .viewer import ViewerManager
 
 
@@ -123,6 +124,7 @@ def create_app(settings, background=True):
     runtimes = RuntimeCatalog(settings)
     imports = ImportService(settings, ingest, runtimes)
     runner = JobRunner(settings, ingest)
+    subtask_review = SubtaskReview(settings, ingest.store)
     checks = QualityRunner(
         settings,
         ingest.store,
@@ -520,6 +522,27 @@ def create_app(settings, background=True):
     def analysis_budget(aid: str):
         row = ingest.store.get("analysis", aid)
         return analyses.budget(row["job_id"], row["episode_count"], "full")
+
+    @app.get("/api/subtask-review/{dataset_id}/episodes/{episode}")
+    def review_episode(dataset_id: str, episode: int):
+        return subtask_review.episode(dataset_id, episode)
+
+    @app.post("/api/subtask-review/{dataset_id}/episodes/{episode}")
+    def review_save(dataset_id: str, episode: int, body: DraftRequest):
+        return subtask_review.save(dataset_id, episode, body)
+
+    @app.post("/api/subtask-review/{dataset_id}/exports", status_code=202)
+    def review_export(dataset_id: str, body: RevisionExportRequest):
+        job = runner.subtask_exports.enqueue_review(dataset_id, body)
+        return {k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")}
+
+    @app.get("/api/subtask-review/{dataset_id}/exports/{export_id}")
+    def review_export_status(dataset_id: str, export_id: str):
+        subtask_review.resolve(dataset_id)
+        job = ingest.store.get("job", export_id)
+        if job.get("source_kind") != "lerobot_subtask_revision" or job.get("source_job_id") != dataset_id:
+            raise DomainError("修订导出任务不存在", 404)
+        return {k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")}
 
     @app.get("/api/annotations/options")
     def annotation_options():

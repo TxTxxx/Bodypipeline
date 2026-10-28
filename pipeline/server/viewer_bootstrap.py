@@ -141,6 +141,7 @@ def patch_presentation(cache: Path):
     else:
         raise RuntimeError("Unexpected Visualizer source; cannot apply camera order")
     patch_score_filter(cache)
+    patch_subtask_review(cache)
     destinations = {
         "data-recharts.tsx": "src/components/data-recharts.tsx",
         "theme-toggle.tsx": "src/components/theme-toggle.tsx",
@@ -150,6 +151,9 @@ def patch_presentation(cache: Path):
         "episode-scores.tsx": "src/components/episode-scores.tsx",
         "episode-score-filter.tsx": "src/components/episode-score-filter.tsx",
         "episode-score-filter-model.ts": "src/utils/episode-score-filter-model.ts",
+        "subtask-review-model.ts": "src/utils/subtask-review-model.ts",
+        "subtask-review.tsx": "src/components/subtask-review.tsx",
+        "subtask-review.css": "src/components/subtask-review.css",
     }
     for name, target in destinations.items():
         (source / target).write_bytes((UI_ASSETS / name).read_bytes())
@@ -213,6 +217,34 @@ def patch_score_filter(cache: Path):
     raise RuntimeError("Unexpected Visualizer source; cannot apply score filtering")
 
 
+def patch_subtask_review(cache: Path):
+    """Mount the frame-interval editor in the existing annotation tab only."""
+    path = cache / "source/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    text = path.read_text()
+    marker = "// bodypipeline: server-owned Subtask review v1"
+    if marker in text:
+        return
+    anchor = 'import { AnnotationsPanel } from "@/components/annotations-panel";'
+    if text.count(anchor) != 1:
+        raise RuntimeError("Unexpected Visualizer annotations import")
+    text = text.replace(anchor, anchor + '\n' + marker + '\nimport { SubtaskReview } from "@/components/subtask-review";')
+    start = text.index('              <div className="grounding-intro">')
+    end = text.index("              <PlaybackBar />", start)
+    text = text[:start] + "              {!datasetInfo.repoId.startsWith('bp/') && <>\n" + text[start:end] + "              </>}\n" + text[end:]
+    anchor = '''              <AnnotationsTimeline duration={data.duration} />
+              <AnnotationsPanel
+                cameraKeys={videosInfo.map((v) => v.filename)}
+              />'''
+    if text.count(anchor) != 1:
+        raise RuntimeError("Unexpected Visualizer annotation tab layout")
+    text = text.replace(anchor, '''              {datasetInfo.repoId.startsWith("bp/") ? (
+                <SubtaskReview key={`${datasetInfo.repoId}:${episodeId}`} repoId={datasetInfo.repoId} episodeId={episodeId} />
+              ) : (<>
+''' + anchor + '''
+              </>)}''')
+    path.write_text(text)
+
+
 def _fingerprint(cache: Path, data_origin: str) -> str:
     """Identify the build inputs; the origin is baked into the browser bundle."""
 
@@ -230,6 +262,7 @@ def _fingerprint(cache: Path, data_origin: str) -> str:
                     + CAMERA_ORDER_PATCH.read_bytes()
                     + SCORE_FILTER_PATCH.read_bytes()
                     + THEME_SCRIPT.read_bytes()
+                    + Path(__file__).read_bytes()
                     + b"".join(
                         path.name.encode() + path.read_bytes()
                         for path in sorted(UI_ASSETS.iterdir())

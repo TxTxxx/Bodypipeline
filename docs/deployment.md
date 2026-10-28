@@ -570,6 +570,40 @@ curl -s -b cookie.txt -X POST "http://100.64.0.71:8081/api/annotations/$AID/subt
 letools validate "/path/to/example-subtasks" --deep
 ```
 
+### 6.4.3 在数据预览中查看和修订 Subtask
+
+从数据集管理打开预览后，进入原有的“标注”标签页，可对照视频查看
+`subtask_index + meta/subtasks.parquet` 还原的逐段文本与区间。此页不依赖
+`NEXT_PUBLIC_ANNOTATE_BACKEND_URL`，也不会调用预览器自带的 language 导出后端。
+
+- 开始、结束边界使用显式 `[start_frame, end_frame)`；可逐段修改文本、输入帧号或
+  拖动时间线两端、在当前未标注帧新增、在播放位置拆分、删除区间。同文本区间相互独立。
+  合并仅允许紧邻且文本相同的两段，不会跨越间隙。删除后对应帧保持 `-1`。
+- **保存服务端草稿**：通过 Viewer gateway 转发给 Server，持久化在
+  `state/subtask_draft`，每次保存的审计快照在 `state/subtask_draft_history`。
+  草稿版本以数据集为单位；多窗口或其他 Episode 更新后，旧版本保存会返回 409，
+  不覆盖新草稿。来源快照变化也会拒绝套用旧草稿。空数组表示删除全部区间。
+- **生成独立修订数据集**：必须先保存当前修改，使用整个数据集的最新草稿；没有草稿的
+  Episode 保留来源标注。默认名称为 `<原名称>-revised`，仍输出 LeRobot v3.0、逐帧
+  `subtask_index`、词表和统计，经深度验证后登记。入队时冻结修订计划，后续草稿保存
+  不改变已提交任务；原数据集、Argus 标注结果不改写，不需要 API Key。
+- 本地未保存备份只用于本窗口恢复提示，不能代替服务端保存。刷新、关闭后可恢复的
+  正式版本以 Server 草稿为准。存在回收站 Episode 时，先还原或永久清理再导出。
+
+Server 与 Viewer 均需升级。Gateway 使用部署配置 `server_url` 访问 Server
+（默认 `http://127.0.0.1:8081`，分机部署需显式配置），使用服务端凭据转发；浏览器
+只访问同源 `/api/subtask-review/{dataset_id}/...`。接口只接受未过期且与已登记 job
+匹配的 `bp/<job_id>`，不接受任意本地路径。Parquet 读取在隔离 LeTools Python 中执行。
+
+API（Server 和 Viewer gateway 均提供；沿用登录及 Origin 校验）：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/api/subtask-review/{id}/episodes/{index}` | 读取原标注或服务端草稿及版本/来源签名 |
+| POST | 同上 | `{revision, source_signature, segments: [{start_frame,end_frame,text}]}` 保存 |
+| POST | `/api/subtask-review/{id}/exports` | `{revision, source_signature, name?}` 提交修订导出 |
+| GET | `/api/subtask-review/{id}/exports/{export_id}` | 查询该数据集的修订导出状态 |
+
 ## 6.5 Slurm 转换资源（可选）
 
 转换是 CPU 密集型（每个 episode、每路相机都要重新编码），在计算节点上应通过
