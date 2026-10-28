@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +9,64 @@ from pathlib import Path
 from .core import digest
 from .hdf5 import AGILEX_HDF5_FORMAT, LEGACY_AGILEX_RAW_FORMAT
 from .runtime import RobotRuntime
+
+PRICE_TIER_KEYS = ("input", "cached_input", "output")
+
+
+def _price_rate(model, value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"argus_prices[{model!r}] 的单价必须是数值")
+    rate = float(value)
+    if not math.isfinite(rate) or rate < 0:
+        raise ValueError(f"argus_prices[{model!r}] 的单价必须是非负有限数")
+    return rate
+
+
+def validate_argus_prices(prices) -> dict:
+    """Validate the declared model rates once, at configuration load.
+
+    A malformed table would otherwise surface as a refused paid run, so it fails
+    here where the fix is obvious.
+    """
+
+    if prices is None:
+        return {}
+    if not isinstance(prices, dict):
+        raise ValueError("argus_prices 必须是 model -> 单价 的对象")
+    table = {}
+    for name, tiers in prices.items():
+        model = str(name or "").strip()
+        if not model:
+            raise ValueError("argus_prices 包含空模型名")
+        # Argus looks rates up by base name, the last ``/`` segment, so a
+        # provider-qualified key prices the same model.
+        base = model.split("/")[-1].strip()
+        if not base:
+            raise ValueError(f"argus_prices[{model!r}] 的模型名无效")
+        if base in table:
+            raise ValueError(f"argus_prices 重复声明了模型 {base!r}")
+        if isinstance(tiers, dict):
+            tiers = [tiers]
+        if not isinstance(tiers, (list, tuple)) or not 1 <= len(tiers) <= 2:
+            raise ValueError(
+                f"argus_prices[{model!r}] 必须是一档或两档（标准/长上下文）"
+            )
+        rows = []
+        for tier in tiers:
+            if isinstance(tier, dict):
+                missing = [key for key in PRICE_TIER_KEYS if key not in tier]
+                if missing:
+                    raise ValueError(
+                        f"argus_prices[{model!r}] 缺少字段：{', '.join(missing)}"
+                    )
+                values = [tier[key] for key in PRICE_TIER_KEYS]
+            elif isinstance(tier, (list, tuple)) and len(tier) == 3:
+                values = list(tier)
+            else:
+                raise ValueError(f"argus_prices[{model!r}] 每档必须是三个数值")
+            rows.append([_price_rate(model, value) for value in values])
+        table[base] = [rows[0], rows[-1]]
+    return table
 
 
 @dataclass
@@ -60,6 +119,12 @@ class Settings:
     argus_models: list[str] = field(
         default_factory=lambda: ["openai/gpt-6-astra", "openai/gpt-6.1-sol"]
     )
+    # Model rates the pinned Argus does not list, in USD per token.  A gateway
+    # publishes model names Argus never heard of, and a spend cap refuses a model
+    # it cannot price; this table lets the operator price them without editing
+    # the Argus checkout.  Shape: model -> [[input, cached, output], ...], one
+    # tier for all contexts or two (standard, then long context).
+    argus_prices: dict = field(default_factory=dict)
     argus_annotation_timeout: int = 24 * 3600
     argus_annotation_concurrency: int = 8
     argus_annotation_reasoning: str = ""
@@ -71,6 +136,11 @@ class Settings:
     devices: list[dict] = field(default_factory=list)
     accepted_capture_profile_hashes: list[str] = field(default_factory=list)
     replay: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        # A price table is written by hand in server.json. Validate it once,
+        # where the fix is obvious, rather than when a paid run is refused.
+        self.argus_prices = validate_argus_prices(self.argus_prices)
 
     @classmethod
     def load(cls, role: str, path: str | None = None):
@@ -123,6 +193,7 @@ class Settings:
             for value in settings.argus_models
         ):
             raise ValueError("argus_models 必须是模型标识符列表")
+        settings.argus_prices = validate_argus_prices(settings.argus_prices)
         if settings.argus_annotation_timeout < 60:
             raise ValueError("argus_annotation_timeout 不能小于 60 秒")
         if not 1 <= settings.argus_annotation_concurrency <= 64:

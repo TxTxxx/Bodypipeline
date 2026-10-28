@@ -86,6 +86,84 @@ def source_path(settings) -> Path:
     return Path(settings.argus_src).expanduser()
 
 
+# ---------------------------------------------------------------- price table
+# Argus reserves the worst case of a model call before dispatching it, and
+# refuses a capped run whose model it cannot price.  A gateway publishes model
+# names Argus never listed, so the operator can declare their rates here, in USD
+# per token, exactly in Argus's shape: [input, cached input, output] for the
+# standard context tier, optionally followed by the long-context tier.
+#
+# This mirrors the table pinned Argus ships (label/harness.py OPENAI_PRICES at
+# 383ca11); it only answers "can a cap bound this model", while the actual bound
+# is computed inside Argus from PIPELINE_ARGUS_PRICES and its own table.
+ARGUS_LIST_PRICES = {
+    "gpt-6-astra": [[1e-5, 1e-6, 5e-5], [2e-5, 2e-6, 7.5e-5]],
+    "gpt-6-sol": [[2e-6, 2e-7, 1e-5], [4e-6, 4e-7, 1.5e-5]],
+    "gpt-6.1-sol": [[2e-6, 1e-7, 1e-5], [4e-6, 2e-7, 1.5e-5]],
+}
+MAX_PRICE_MODELS = 200
+
+
+def normalize_prices(prices) -> dict:
+    """Validate an operator-declared rate table for one call.
+
+    ``Settings.load`` validates the same table at startup; this keeps an
+    in-process Settings (tests, reloads) honest and reports the reason as a
+    request error instead of a refused paid run.
+    """
+
+    from pipeline.shared.config import validate_argus_prices
+
+    if prices is None or prices == "":
+        return {}
+    try:
+        table = validate_argus_prices(prices)
+    except ValueError as exc:
+        raise DomainError(f"模型价目表无效：{exc}", 400) from exc
+    if len(table) > MAX_PRICE_MODELS:
+        raise DomainError("模型价目表条目过多", 400)
+    return table
+
+
+def configured_prices(settings) -> dict:
+    """The Server's declared rates, validated once per call."""
+
+    return normalize_prices(getattr(settings, "argus_prices", None))
+
+
+def price_table(settings) -> dict:
+    """Rates for the page: Argus's list prices plus the operator's overrides."""
+
+    table = {
+        name: [list(tier) for tier in tiers]
+        for name, tiers in ARGUS_LIST_PRICES.items()
+    }
+    table.update(configured_prices(settings))
+    return table
+
+
+def pricing_gap(settings, model: str) -> str:
+    """Why a spend-capped run would refuse this model, or an empty string.
+
+    Argus reserves the worst case of the final call before it dispatches, and a
+    cap it cannot bound is refused -- but only after prepare, checks and clips
+    have run.  Checking here fails in the submit request instead, naming the
+    models that would work.
+    """
+
+    name = str(model or "").split("/")[-1]
+    if not name:
+        return ""
+    priced = price_table(settings)
+    if name in priced:
+        return ""
+    known = ", ".join(sorted(priced)) or "（无）"
+    return (
+        f"模型 {model} 没有已知单价，费用上限无法保证；"
+        f"请在服务器 argus_prices 中补充该模型单价，或改用：{known}"
+    )
+
+
 MAX_BASE_URL = 2048
 MAX_API_KEY = 4096
 MAX_MODELS_BYTES = 2_000_000
@@ -305,6 +383,11 @@ def environment(
         route_model = str(annotation.get("model") or "").strip()
         if route_model:
             env["PIPELINE_ARGUS_ROUTE_MODEL"] = route_model
+    prices = configured_prices(settings)
+    if prices:
+        # Without this a capped run refuses a gateway model Argus never listed:
+        # it cannot reserve the worst case of a call it cannot price.
+        env["PIPELINE_ARGUS_PRICES"] = json.dumps(prices, ensure_ascii=False)
     jobs = max(1, int(annotation.get("concurrency") or 2))
     env["RDA_DECODE_CONCURRENCY"] = str(max(2, 2 * jobs))
     return env

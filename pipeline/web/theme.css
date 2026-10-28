@@ -69,4 +69,5 @@ html[data-theme="dark"] :is(.viewer-login-card label, .doctor-check h2) { color:
 html[data-theme="dark"] :is(.viewer-login-card .hint, .doctor-header .meta, .doctor-check ul, .viewer-starting-card p) { color: #a5b6cd !important; }
 html[data-theme="dark"] .doctor-header .pass { color: #82dabb; }
 html[data-theme="dark"] .doctor-header .warn { color: #f1c576; }
+html[data-theme="dark"] .annotation-model-warning { color: #f1c576; }
 html[data-theme="dark"] .doctor-header .fail { color: #ffabb9; }

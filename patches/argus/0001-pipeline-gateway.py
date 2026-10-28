@@ -23,6 +23,9 @@ What it changes:
 6. ``label.route`` can route with the gateway's own model through
    ``PIPELINE_ARGUS_ROUTE_MODEL`` instead of Argus's OpenRouter-only
    ``openai/gpt-6-sol``.
+7. ``label.harness.OPENAI_PRICES`` also carries the rates the operator supplies
+   in ``PIPELINE_ARGUS_PRICES``, so a spend cap can bound a gateway model that
+   has no entry in Argus's list-price table.
 
 The patch is deliberately conservative: with none of the environment variables
 set, Argus behaves exactly as upstream.
@@ -35,12 +38,114 @@ import os
 import re
 from pathlib import Path
 
-VERSION = 5
+VERSION = 6
 MARKER = "# pipeline-argus-integration:v1"
 GATEWAY_MARKER = "# pipeline-argus-gateway-key:v3"
 GENERIC_MODEL_MARKER = "# pipeline-argus-generic-models:v4"
 GENERIC_ROUTE_MARKER = "# pipeline-argus-generic-route:v5"
 GENERIC_PRICING_MARKER = "# pipeline-argus-generic-pricing:v5"
+CONFIGURED_PRICES_MARKER = "# pipeline-argus-configured-prices:v6"
+GENERIC_DRY_RUN_MARKER = "# pipeline-argus-generic-dry-run:v6"
+
+# Injected into label/harness.py, right after the upstream OPENAI_PRICES table.
+# The operator can price a gateway model without editing the pinned checkout;
+# the same table then serves the spend bound, the cost estimate and routing.
+CONFIGURED_PRICES_BLOCK = '''
+# pipeline-argus-configured-prices:v6
+# BodyPipeline: add the rates the operator declared for gateway models, in USD
+# per token as (input, cached input, output) per context tier -- standard then
+# long -- exactly like the upstream table. Unknown names are left unpriced, so a
+# spend cap still refuses a model it cannot bound.
+def _pipeline_configured_prices() -> dict:
+    raw = os.environ.get("PIPELINE_ARGUS_PRICES") or ""
+    if not raw:
+        return {}
+    try:
+        declared = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(declared, dict):
+        return {}
+    priced = {}
+    for name, tiers in declared.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(tiers, list) or len(tiers) not in (1, 2):
+            continue
+        rows = []
+        for tier in tiers:
+            if not isinstance(tier, (list, tuple)) or len(tier) != 3:
+                rows = []
+                break
+            try:
+                rates = tuple(float(value) for value in tier)
+            except (TypeError, ValueError):
+                rows = []
+                break
+            if any(not math.isfinite(rate) or rate < 0 for rate in rates):
+                rows = []
+                break
+            rows.append(rates)
+        if not rows:
+            continue
+        # A single declared tier prices both, which is what a model whose long
+        # context is billed the same (or unknown) needs.
+        tiers = rows[0] if len(rows) == 1 else rows[1]
+        priced[name.strip()] = (rows[0], tiers)
+    return priced
+
+
+OPENAI_PRICES.update(_pipeline_configured_prices())
+'''
+
+
+def patch_configured_prices(path: Path) -> None:
+    """Let the Server declare the rates of a model Argus does not list.
+
+    Argus reserves the worst case of a call before dispatching it, and refuses
+    a capped run whose model has no rate.  A private gateway publishes model
+    names Argus never heard of, so the Server must be able to add their rates
+    rather than leaving those models unusable under a cap.
+    """
+
+    text = path.read_text()
+    if CONFIGURED_PRICES_MARKER in text:
+        return
+
+    anchor = "LONG_PROMPT_TOKENS = 272000\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError("unexpected Argus layout: LONG_PROMPT_TOKENS missing")
+    text = text.replace(anchor, anchor + CONFIGURED_PRICES_BLOCK.lstrip("\n"), 1)
+    path.write_text(text)
+
+
+def patch_generic_dry_run(path: Path) -> None:
+    """Let a priced gateway model record what its final call reserves.
+
+    Upstream only prices the dry run for an ``openai/`` model already in its
+    table, so a gateway model left no reserve to check the cap against and the
+    run only failed once a unit was dispatched.  Priced models of any provider
+    are bounded the same way, and an unpriced one is still skipped.
+    """
+
+    text = path.read_text()
+    if GENERIC_DRY_RUN_MARKER in text:
+        return
+
+    original = (
+        "        if model.startswith('openai/') and model.split('/', 1)[-1] in OPENAI_PRICES:"
+    )
+    if text.count(original) != 1:
+        raise RuntimeError("unexpected Argus layout: dry-run pricing guard missing")
+    text = text.replace(
+        original,
+        "        " + GENERIC_DRY_RUN_MARKER + "\n"
+        "        if ((_GENERIC or model.startswith('openai/'))\n"
+        "                and model.split('/', 1)[-1] in OPENAI_PRICES):",
+        1,
+    )
+    path.write_text(text)
+
 
 
 def _insert_after(text: str, anchor: str, addition: str) -> str:
@@ -448,6 +553,8 @@ def apply(root: Path) -> dict:
     patch_generic_models(root / "label" / "harness.py")
     patch_route(root / "label" / "route.py")
     patch_pricing(root / "label" / "pricing.py")
+    patch_configured_prices(root / "label" / "harness.py")
+    patch_generic_dry_run(root / "label" / "harness.py")
     patch_label_module(root)
     patch_mounting(root)
     return {"version": VERSION, "root": str(root)}

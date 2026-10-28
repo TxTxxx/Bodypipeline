@@ -110,17 +110,26 @@ class AnnotationRunner:
         today = self._daily_spend()
         models = list(self.settings.argus_models)
         configured = (self.settings.argus_model or "").strip()
-        # Never offer a default the allowlist would reject at enqueue time.
+        prices = argus_annotation.price_table(self.settings)
+
+        def priced(name: str) -> bool:
+            return str(name or "").split("/")[-1] in prices
+
+        # Never offer a default the allowlist would reject at enqueue time, and
+        # prefer one a spend cap can actually bound.
+        candidates = [name for name in models if priced(name)] or models
         default_model = (
             configured
-            if configured and (not models or configured in models)
-            else (models[0] if models else configured)
+            if configured and (not candidates or configured in candidates)
+            else (candidates[0] if candidates else configured)
         )
         return {
             "available": ok,
             "reason": why,
             "models": models,
             "default_model": default_model,
+            "priced_models": sorted(prices),
+            "prices": prices,
             "default_base_url": (self.settings.argus_base_url or "").strip(),
             "rigs": list(ANNOTATION_RIGS),
             "api_key_configured": argus_annotation.server_key_configured(
@@ -281,6 +290,9 @@ class AnnotationRunner:
                 model = allowed_models[0]
             if not model:
                 raise DomainError("未配置标注模型", 400)
+            gap = argus_annotation.pricing_gap(self.settings, model)
+            if gap:
+                raise DomainError(gap, 400)
             note = (note or self.settings.argus_annotation_note or "").strip()
             if len(note) > 4000:
                 raise DomainError("任务说明不能超过 4000 个字符", 400)
@@ -469,6 +481,9 @@ class AnnotationRunner:
             ok, why = self.available()
             if not ok:
                 raise DomainError(f"Argus 自动标注不可用：{why}", 503)
+            gap = argus_annotation.pricing_gap(self.settings, row.get("model") or "")
+            if gap:
+                raise DomainError(gap, 400)
             job = self.store.get("job", row["job_id"])
             data = dataset_for_job(self.settings, job)
             if str(data) != row.get("dataset_path"):

@@ -59,7 +59,9 @@ if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-gateway-key:v3" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-generic-models:v4" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-generic-route:v5" "$SRC/label/route.py" \
-   || ! grep -q "pipeline-argus-generic-pricing:v5" "$SRC/label/pricing.py"; then
+   || ! grep -q "pipeline-argus-generic-pricing:v5" "$SRC/label/pricing.py" \
+   || ! grep -q "pipeline-argus-configured-prices:v6" "$SRC/label/harness.py" \
+   || ! grep -q "pipeline-argus-generic-dry-run:v6" "$SRC/label/harness.py"; then
   git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
@@ -84,6 +86,14 @@ grep -q "pipeline-argus-generic-route:v5" "$SRC/label/route.py" || {
 }
 grep -q "pipeline-argus-generic-pricing:v5" "$SRC/label/pricing.py" || {
   echo "Argus generic gateway pricing hook was not applied" >&2
+  exit 1
+}
+grep -q "pipeline-argus-configured-prices:v6" "$SRC/label/harness.py" || {
+  echo "Argus configured price hook was not applied" >&2
+  exit 1
+}
+grep -q "pipeline-argus-generic-dry-run:v6" "$SRC/label/harness.py" || {
+  echo "Argus generic dry-run pricing hook was not applied" >&2
   exit 1
 }
 
@@ -137,4 +147,14 @@ Argus reads them. With argus_base_url set, PIPELINE_ARGUS_API_KEY is sent to
 that gateway. The automatic annotation page resolves the `review` module above;
 it must stay on the pinned commit so its stage names and sidecar layout match
 the parser.
+
+A spend cap only dispatches a model whose rate is known. Argus ships rates for
+openai/gpt-6-astra, openai/gpt-6-sol and openai/gpt-6.1-sol; price any other
+gateway model in the Server config, in USD per token as
+[input, cached input, output] per tier (one tier, or standard then long):
+
+  "argus_prices": {
+    "gpt-6.1-terra": [[1e-6, 5e-8, 5e-6], [2e-6, 1e-7, 7.5e-6]],
+    "gpt-6-luna": [[1e-7, 1e-8, 5e-7], [2e-7, 2e-8, 7.5e-7]]
+  }
 EOF

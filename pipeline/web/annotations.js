@@ -122,12 +122,30 @@
     updateSubmit();
   }
 
+  function pricedModels() {
+    // A spend-capped run can only dispatch a model whose rate the server (or
+    // Argus's own table) knows; the server rejects the rest with the same rule.
+    const names = options?.priced_models;
+    return Array.isArray(names) ? new Set(names) : null;
+  }
+
+  function modelPriced(model) {
+    const priced = pricedModels();
+    if (!priced) return true;
+    return priced.has(String(model || "").split("/").pop());
+  }
+
   function renderModelOptions(models) {
     const select = $("annotation-model");
     const previous = select.value;
+    const priced = pricedModels();
     select.innerHTML = models.length
       ? models
-          .map((model) => `<option value="${esc(model)}">${esc(model)}</option>`)
+          .map((model) => {
+            const base = String(model).split("/").pop();
+            const note = priced && !priced.has(base) ? " · 无单价" : "";
+            return `<option value="${esc(model)}">${esc(model + note)}</option>`;
+          })
           .join("")
       : '<option value="">网关未返回模型</option>';
     if (models.includes(previous)) {
@@ -135,7 +153,24 @@
     } else {
       select.value = models[0] || "";
     }
+    updateModelPricing();
     updateSubmit();
+  }
+
+  function updateModelPricing() {
+    const model = $("annotation-model").value;
+    const status = $("annotation-model-price");
+    if (!status) return;
+    if (!model || modelPriced(model)) {
+      status.textContent = "";
+      status.hidden = true;
+      return;
+    }
+    const names = Array.from(pricedModels() || []);
+    status.hidden = false;
+    status.textContent =
+      "该模型没有已知单价，费用上限无法保证；请服务器在 argus_prices 中补充单价，或改用：" +
+      (names.join("、") || "已知单价的模型");
   }
 
   async function fetchModels(force = false) {
@@ -228,6 +263,10 @@
     $("annotation-base-url").addEventListener("change", scheduleModelFetch);
     $("annotation-model-refresh").addEventListener("click", () => {
       void fetchModels(true);
+    });
+    $("annotation-model").addEventListener("change", () => {
+      updateModelPricing();
+      updateSubmit();
     });
     $("annotation-resume-form").addEventListener("submit", submitResume);
     $("annotation-resume-close").addEventListener("click", closeResume);
@@ -351,6 +390,7 @@
       .map((model) => `<option value="${esc(model)}">${esc(model)}</option>`)
       .join("") || '<option value="">服务器未配置模型</option>';
     $("annotation-model").value = options.default_model || (options.models || [])[0] || "";
+    updateModelPricing();
     $("annotation-cap").value = Number(defaults.cap_usd || 0).toFixed(2);
     $("annotation-concurrency").value = String(defaults.concurrency || 8);
     $("annotation-reasoning").value = defaults.reasoning || "";
@@ -477,10 +517,12 @@
   function updateSubmit() {
     const button = $("annotation-submit");
     const needsKey = !options?.api_key_configured;
+    const model = $("annotation-model").value;
     const usable =
       Boolean(options?.available) &&
       Boolean($("annotation-dataset").value) &&
-      Boolean($("annotation-model").value) &&
+      Boolean(model) &&
+      modelPriced(model) &&
       (!needsKey || Boolean($("annotation-api-key").value.trim())) &&
       !modelFetching &&
       !submitting;

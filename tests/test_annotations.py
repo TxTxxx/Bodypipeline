@@ -313,6 +313,9 @@ def test_custom_gateway_can_use_a_model_outside_the_server_allowlist(service):
     runner.settings.argus_models = ["openai/gpt-6-astra"]
     with pytest.raises(DomainError, match="允许列表"):
         runner.enqueue("job-1", model="acme/vision")
+    # The allowlist only governs the server's default upstream; a task gateway
+    # still needs a rate the spend cap can bound.
+    runner.settings.argus_prices = {"acme/vision": [[1e-6, 1e-7, 5e-6]]}
     row = runner.enqueue(
         "job-1",
         model="acme/vision",
@@ -388,6 +391,102 @@ def test_gateway_model_list_needs_a_base_url(service):
     runner, _store, _src, _data = service
     with pytest.raises(DomainError, match="baseURL"):
         runner.models(api_key="task-secret")
+
+
+def test_declared_prices_reach_argus_and_gate_the_allowlist(service):
+    """A gateway model is usable only once the cap can bound it.
+
+    Argus prices the worst case of a call from ``OPENAI_PRICES``, which the
+    pinned checkout only fills with three OpenAI models.  Anything else is
+    refused before dispatch, so the server must pass its declared rates and
+    reject an unpriced model at submit time instead.
+    """
+
+    runner, _store, _src, _data = service
+    runner.settings.argus_models = ["gpt-6-luna", "gpt-6.1-terra"]
+
+    with pytest.raises(DomainError, match="没有已知单价"):
+        runner.enqueue("job-1", model="gpt-6-luna")
+    options = runner.options()
+    assert "gpt-6-luna" not in options["priced_models"]
+    assert "gpt-6.1-sol" in options["priced_models"]
+
+    runner.settings.argus_prices = {
+        "gpt-6-luna": [[1e-7, 1e-8, 5e-7], [2e-7, 2e-8, 7.5e-7]]
+    }
+    row = runner.enqueue("job-1", model="gpt-6-luna")
+    assert row["model"] == "gpt-6-luna"
+    assert "gpt-6-luna" in runner.options()["priced_models"]
+
+    env = argus_annotation.environment(runner.settings, row, {})
+    declared = json.loads(env["PIPELINE_ARGUS_PRICES"])
+    assert declared["gpt-6-luna"] == [[1e-7, 1e-8, 5e-7], [2e-7, 2e-8, 7.5e-7]]
+    # A model without a rate keeps being refused, never silently priced.
+    with pytest.raises(DomainError, match="gpt-6.1-terra"):
+        runner.enqueue("job-1", model="gpt-6.1-terra")
+
+
+def test_prices_are_optional_and_absent_from_the_environment_when_unset(service):
+    runner, _store, _src, _data = service
+    env = argus_annotation.environment(runner.settings, {"model": "gpt-6.1-sol"}, {})
+    assert "PIPELINE_ARGUS_PRICES" not in env
+    assert runner.options()["prices"]["gpt-6.1-sol"]
+
+
+def test_default_model_prefers_one_the_cap_can_price(service):
+    """A configured default Argus cannot price would fail after prepare."""
+
+    runner, _store, _src, _data = service
+    runner.settings.argus_models = ["gpt-6-luna", "gpt-6.1-sol"]
+    runner.settings.argus_model = "gpt-6-luna"
+    assert runner.options()["default_model"] == "gpt-6.1-sol"
+
+    runner.settings.argus_prices = {"gpt-6-luna": [[1e-7, 1e-8, 5e-7]]}
+    assert runner.options()["default_model"] == "gpt-6-luna"
+    # Nothing priced: keep the configured default rather than inventing one.
+    runner.settings.argus_prices = {}
+    runner.settings.argus_models = ["gpt-6-luna"]
+    assert runner.options()["default_model"] == "gpt-6-luna"
+
+
+@pytest.mark.parametrize(
+    "prices",
+    [
+        {"gpt-6-luna": [[1e-7, 1e-8]]},
+        {"gpt-6-luna": [[1e-7, 1e-8, 5e-7], [2e-7, -1, 7.5e-7]]},
+        {"gpt-6-luna": [[1e-7, "x", 5e-7]]},
+        {"gpt-6-luna": [[1e-7, True, 5e-7]]},
+        {"gpt-6-luna": [[1e-7, 1e-8, 5e-7], [2e-7, 2e-8, 7.5e-7], [3e-7, 3e-8, 9e-7]]},
+        {"": [[1e-7, 1e-8, 5e-7]]},
+        {"gpt-6-luna": {"input": 1e-7, "output": 5e-7}},
+        {"gpt-6-luna": [[1e-7, 1e-8, 5e-7]], "openai/gpt-6-luna": [[1e-7, 1e-8, 5e-7]]},
+    ],
+)
+def test_malformed_price_tables_fail_at_config_load(settings_factory, prices):
+    with pytest.raises(ValueError, match="argus_prices"):
+        settings_factory("server", argus_prices=prices)
+
+
+def test_config_accepts_named_and_provider_qualified_prices(settings_factory):
+    settings = settings_factory(
+        "server",
+        argus_prices={
+            "openai/gpt-6-luna": {
+                "input": 1e-7,
+                "cached_input": 1e-8,
+                "output": 5e-7,
+            },
+            "gpt-6.1-terra": [[1e-6, 5e-8, 5e-6]],
+        },
+    )
+    assert settings.argus_prices["gpt-6-luna"] == [
+        [1e-7, 1e-8, 5e-7],
+        [1e-7, 1e-8, 5e-7],
+    ]
+    assert settings.argus_prices["gpt-6.1-terra"] == [
+        [1e-6, 5e-8, 5e-6],
+        [1e-6, 5e-8, 5e-6],
+    ]
 
 
 def test_budget_is_shared_with_analyses(service):
