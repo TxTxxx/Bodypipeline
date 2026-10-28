@@ -10,7 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pipeline.server import argus_annotation
-from pipeline.server.annotations import AnnotationRunner, BudgetExceeded
+from pipeline.server.annotations import (
+    AnnotationRunner,
+    BudgetExceeded,
+    _failure_error,
+)
 from pipeline.server.app import create_app
 from pipeline.shared.core import DomainError, Store
 
@@ -590,6 +594,26 @@ def test_outputs_episode_and_cost_are_read_from_argus_sidecars(tmp_path):
     cost = argus_annotation.cost(work)
     assert cost["cost_usd"] == 0.42
     assert cost["reserved_cost_usd"] == 0.5
+
+
+def test_failure_error_names_why_an_episode_was_not_labelled(tmp_path):
+    log = tmp_path / "run.log"
+    log.write_text("== label\nreview finished with label failures\n")
+    episodes = [
+        {
+            "id": "episode_000000",
+            "episode_id": "episode_000000",
+            "labels_available": False,
+            "label_failure": {
+                "status": "failed",
+                "why": "ValueError: gateway rejected the key",
+            },
+        }
+    ]
+    message = _failure_error(log, episodes)
+    assert "review finished" in message
+    assert "episode_000000: ValueError: gateway rejected the key" in message
+    assert _failure_error(log, []) == "== label\nreview finished with label failures"
 
 
 def test_cost_falls_back_to_episode_usage(tmp_path):

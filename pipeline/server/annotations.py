@@ -774,16 +774,16 @@ class AnnotationRunner:
                 elif labelled:
                     state = PARTIAL
                     stage = "部分标注完成"
-                    error = _failure_tail(log)
+                    error = _failure_error(log, episodes)
                 else:
                     state = FAILED
                     stage = "标注失败"
-                    error = _failure_tail(log)
+                    error = _failure_error(log, episodes)
             elif state == FAILED and labelled:
                 # A timeout still leaves the episodes labelled before it usable.
                 state = PARTIAL
                 stage = "部分标注完成"
-                error = _failure_tail(log)
+                error = _failure_error(log, episodes)
             self.save(
                 row,
                 state=state,
@@ -946,6 +946,32 @@ def _failure_tail(log: Path) -> str:
         return "Argus 未生成可用标注"
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
     return "\n".join(lines[-8:])[-1600:] or "Argus 未生成可用标注"
+
+
+def _failure_error(log: Path, episodes: list[dict]) -> str:
+    """The run tail plus why each failed episode produced nothing.
+
+    Argus writes the useful reason (an unreachable gateway, a rejected key, a
+    truncated reply) to its own per-stage log and the episode sidecar, while the
+    Server-visible tail only says that labelling failed.  Put the reason back
+    where the task list can show it.
+    """
+
+    text = _failure_tail(log)
+    reasons: list[str] = []
+    for item in episodes:
+        failure = item.get("label_failure")
+        why = ""
+        if isinstance(failure, dict):
+            why = str(failure.get("why") or "").strip()
+        if not why:
+            continue
+        line = f"{item.get('episode_id') or item.get('id')}: {why}"
+        if line not in reasons:
+            reasons.append(line)
+    if reasons:
+        text = (text + "\n" + "\n".join(reasons[:3]))[:1600]
+    return text
 
 
 def _number(value):
