@@ -1,3 +1,4 @@
+from .arx_kinesthetic import ARXKinestheticProvider
 from .base import RobotProvider, RobotRuntime
 from .g1_sonic import G1SONICProvider
 from .registry import RuntimeCatalog, get_provider, provider_ids, register_provider
@@ -16,6 +17,7 @@ __all__ = [
     "provider_ids",
     "register_provider",
     "G1SONICProvider",
+    "ARXKinestheticProvider",
     "TianjiProvider",
     "TIANJI_RAW_FORMAT",
     "TIANJI_RAW_FORMAT_ALIASES",

@@ -11,6 +11,7 @@ from pipeline.shared.core import DomainError, confined, digest, file_hash, now
 from pipeline.shared.hdf5 import AGILEX_HDF5_FORMAT, ALOHA_HDF5_FORMAT, is_hdf5_path
 
 from .providers import RuntimeCatalog
+from .providers.arx_direct_teaching import RAW_FORMAT as ARX_DIRECT_HDF5_FORMAT
 from .storage import robot_type
 
 LEROBOT_VERSIONS = {"v2.1", "v3.0"}
@@ -237,10 +238,16 @@ class ImportService:
                 400,
             )
         provider = self.runtimes.provider(runtime)
-        if ALOHA_HDF5_FORMAT not in runtime.raw_formats:
+        formats = [
+            value
+            for value in (ALOHA_HDF5_FORMAT, ARX_DIRECT_HDF5_FORMAT)
+            if value in runtime.raw_formats
+        ]
+        if not formats:
             raise DomainError(
-                f"Runtime {runtime.id!r} 不接受 {ALOHA_HDF5_FORMAT} 原始格式", 400
+                f"Runtime {runtime.id!r} 不支持可导入的 HDF5 episode 格式", 400
             )
+        raw_format = formats[0]
         inspect = getattr(provider, "episode_metadata", None)
         if inspect is None:
             raise DomainError(
@@ -271,7 +278,7 @@ class ImportService:
                 "dataset_name": dataset,
                 "profile": runtime.profile,
                 "profile_hash": runtime.profile_hash,
-                "raw_format": ALOHA_HDF5_FORMAT,
+                "raw_format": raw_format,
                 "files": [
                     {
                         "path": episode.name,

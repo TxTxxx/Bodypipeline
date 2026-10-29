@@ -300,10 +300,15 @@ def create_app(settings, background=True):
             data = json.loads(body)
             if not isinstance(data, dict):
                 raise ValueError()
-            runtime = runtimes.for_device(request.state.device)
+            manifest = data["manifest"]
+            if not isinstance(manifest, dict):
+                raise ValueError()
+            runtime = runtimes.for_device(
+                request.state.device, raw_format=manifest.get("raw_format")
+            )
             return await asyncio.to_thread(
                 ingest.create,
-                data["manifest"],
+                manifest,
                 data["target"],
                 data.get("prefix", ""),
                 request.state.device,

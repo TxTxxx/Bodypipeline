@@ -9,6 +9,7 @@ from ..conversion_options import provider_capabilities
 from .agilex import AgileXProvider
 from .aloha_hdf5 import AlohaHDF5Provider
 from .arx_direct_teaching import ARXDirectTeachingProvider
+from .arx_kinesthetic import ARXKinestheticProvider
 from .base import RobotProvider
 from .g1_sonic import G1SONICProvider
 from .tianji import TianjiProvider
@@ -17,6 +18,7 @@ _PROVIDERS: dict[str, RobotProvider] = {
     "agilex": AgileXProvider(),
     "aloha_hdf5": AlohaHDF5Provider(),
     "arx_direct_teaching": ARXDirectTeachingProvider(),
+    "arx_kinesthetic": ARXKinestheticProvider(),
     "g1_sonic": G1SONICProvider(),
     "tianji": TianjiProvider(),
 }
@@ -59,7 +61,7 @@ class RuntimeCatalog:
                 configure(settings)
         identities = set()
         for _, device in settings.device_registry():
-            self.for_device(device)
+            self._validate_device_routes(device)
             identity = (device.get("robot_id"), device.get("project_id"))
             if identity in identities:
                 raise DomainError(
@@ -98,7 +100,37 @@ class RuntimeCatalog:
             raise DomainError(f"未注册的机器人 Runtime：{runtime_id!r}", 503)
         return self.runtimes[runtime_id]
 
-    def for_device(self, device: dict) -> RobotRuntime:
+    def _validate_device_routes(self, device: dict) -> None:
+        routes = device.get("runtime_by_raw_format") or {}
+        runtime_ids = {
+            *routes.values(),
+            *filter(
+                None,
+                (
+                    device.get("runtime_id"),
+                    device.get("profile"),
+                    self.settings.default_profile if not routes else None,
+                ),
+            ),
+        }
+        if not runtime_ids:
+            raise DomainError("设备注册项没有绑定 Runtime", 503)
+        for runtime_id in runtime_ids:
+            self.get(runtime_id)
+
+    def for_device(
+        self, device: dict, *, raw_format: str | None = None
+    ) -> RobotRuntime:
+        routes = device.get("runtime_by_raw_format")
+        if routes:
+            if not isinstance(raw_format, str) or not raw_format:
+                raise DomainError("设备按原始格式路由时必须提供 raw_format", 400)
+            runtime_id = routes.get(raw_format)
+            if runtime_id is None:
+                raise DomainError(
+                    f"设备未绑定 raw_format={raw_format!r} 的 Runtime", 400
+                )
+            return self.get(runtime_id)
         runtime_id = (
             device.get("runtime_id")
             or device.get("profile")

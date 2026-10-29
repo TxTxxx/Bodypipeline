@@ -30,11 +30,11 @@ def profile():
     return value
 
 
-def write_capture(path, profile, *, gap=False):
+def write_capture(path, profile, *, gap=False, gap_seconds=1.0):
     n = 4
     times = np.arange(n, dtype=np.float64) / 30
     if gap:
-        times[2:] += 1.0
+        times[2:] += gap_seconds
     exact = 1793070494000000000 + np.round(times * 1e9).astype(np.int64)
     metadata = dict(
         session_id="arx-test-session",
@@ -203,7 +203,41 @@ def test_http_resume_commit_and_persistence(
         rows = http.get(
             "/api/uploads", headers={"Authorization": "Bearer " + settings.token}
         ).json()
-        assert any(row["id"] == uid and row["conversion_blockers"] for row in rows)
+        assert any(row["id"] == uid and not row["conversion_blockers"] for row in rows)
+
+
+def test_trusted_import_accepts_original_episode_basenames(
+    settings_factory, monkeypatch, tmp_path, profile
+):
+    path = tmp_path / "episode1.hdf5"
+    write_capture(path, profile)
+    with h5py.File(path, "r+") as handle:
+        handle.attrs["capture_contract_hash"] = "legacy-client-contract"
+        del handle["metadata"]
+    settings, _ = server(settings_factory, monkeypatch, profile)
+    settings.import_roots = [tmp_path]
+    app = create_app(settings, background=False)
+    admin = {"Authorization": "Bearer " + settings.token}
+    with TestClient(app) as http:
+        response = http.post(
+            "/api/imports",
+            headers=admin,
+            json={"path": str(tmp_path), "runtime_id": "arx_test"},
+        )
+        assert response.status_code == 201, response.text
+        result = response.json()
+        assert result["episode_count"] == 1
+        assert result["provider"] == "arx_direct_teaching"
+        rows = http.get("/api/uploads", headers=admin).json()
+        imported = next(
+            row for row in rows if row["collection_id"] == result["collection_id"]
+        )
+        assert app.state.ingest.manifest(imported)["raw_format"] == RAW_FORMAT
+        assert imported["state"] == "COMMITTED"
+        report = ARXDirectTeachingProvider().prepare(
+            path, tmp_path / "aligned", profile
+        )
+        assert report["capture_contract_match"] is False
 
 
 @pytest.mark.parametrize(
@@ -243,6 +277,7 @@ def test_upload_binding_rejections(
         "schema",
         "complete",
         "profile_hash",
+        "capture_contract_hash",
         "action",
         "link",
         "metadata",
@@ -256,7 +291,7 @@ def test_invalid_raw_cannot_commit(
     path = tmp_path / "episode.hdf5"
     metadata = write_capture(path, profile)
     with h5py.File(path, "r+") as h:
-        if corruption in {"schema", "profile_hash"}:
+        if corruption in {"schema", "profile_hash", "capture_contract_hash"}:
             h.attrs[corruption] = "bad"
         elif corruption == "complete":
             h.attrs["complete"] = False
@@ -307,6 +342,7 @@ def test_alignment_preserves_source_and_does_not_approve(profile, tmp_path):
     original = path.read_bytes()
     provider = ARXDirectTeachingProvider()
     report = provider.prepare(path, tmp_path / "aligned", profile)
+    json.dumps(report)
     assert report["frames"] == 4
     assert report["alignment_clock"] == "source"
     assert path.read_bytes() == original
@@ -314,12 +350,41 @@ def test_alignment_preserves_source_and_does_not_approve(profile, tmp_path):
         np.testing.assert_allclose(h["timestamp"][:], np.arange(4) / 30)
         np.testing.assert_array_equal(h["source_frame_index"][:], np.arange(4))
         np.testing.assert_array_equal(h["action"][:], h["observation.state"][:])
-    assert {b["field"] for b in provider.profile_blockers(profile)} == {
+    assert provider.profile_blockers(profile) == []
+    unapproved = {
+        **profile,
+        "semantics_approved": False,
+        "clock_verified": False,
+    }
+    assert {b["field"] for b in provider.profile_blockers(unapproved)} == {
         "semantics_approved",
         "clock_verified",
     }
-    approved = {**profile, "semantics_approved": True, "clock_verified": True}
-    provider.prepare(path, tmp_path / "approved-aligned", approved)
+
+
+def test_server_conversion_config_does_not_change_capture_contract(profile, tmp_path):
+    changed = copy.deepcopy(profile)
+    changed["conversion"]["gripper_closure"]["default_percent"] = 95
+    changed["max_capture_gap_ms"] = 500
+    assert capture_contract_hash(changed) == capture_contract_hash(profile)
+    provider = ARXDirectTeachingProvider()
+    assert provider.conversion_capabilities(profile)["gripper_closure"] == {
+        "minimum_percent": 0,
+        "maximum_percent": 100,
+        "default_percent": 90,
+        "algorithm": "closing_hold_plateaus_v1",
+        "calibration_id": "arx_x5_nominal_motor_travel_v1",
+        "percentage_definition": "nominal_motor_travel",
+    }
+    path = tmp_path / "episode.hdf5"
+    write_capture(path, profile)
+    report = provider.prepare(
+        path,
+        tmp_path / "adjusted",
+        profile,
+        options={"gripper_closure": {"minimum_percent": 90}},
+    )
+    assert "gripper_closure" in report["action_corrections"]
 
 
 def test_long_capture_gaps_are_not_filled(profile, tmp_path):
@@ -327,6 +392,36 @@ def test_long_capture_gaps_are_not_filled(profile, tmp_path):
     write_capture(path, profile, gap=True)
     with pytest.raises(DomainError, match="间隙"):
         ARXDirectTeachingProvider().prepare(path, tmp_path / "aligned", profile)
+
+
+def test_sensor_skew_is_reported_without_rejecting_aligned_capture(profile, tmp_path):
+    path = tmp_path / "episode.hdf5"
+    write_capture(path, profile)
+    with h5py.File(path, "r+") as handle:
+        source = np.asarray(handle["timestamps/source_ns"]).copy()
+        source[:, 4] += 100_000_000
+        handle["timestamps/source_ns"][:] = source
+        handle["timestamps/source/right_arm"][:] = source[:, 4].astype(np.float64) / 1e9
+    provider = ARXDirectTeachingProvider()
+    report = provider.prepare(path, tmp_path / "aligned", profile)
+    json.dumps(report)
+    assert report["sensor_skew_exceeded"] is True
+    assert report["quality_warnings"]
+    quality = provider.quality(Path(report["aligned_path"]), profile)
+    assert quality["status"] == "WARN"
+    assert quality["max_sensor_skew_ms"] > profile["max_sensor_skew_ms"]
+
+
+def test_bounded_capture_gap_is_repeated_with_warning(profile, tmp_path):
+    path = tmp_path / "episode.hdf5"
+    write_capture(path, profile, gap=True, gap_seconds=0.06)
+    provider = ARXDirectTeachingProvider()
+    report = provider.prepare(path, tmp_path / "aligned", profile)
+    json.dumps(report)
+    assert report["capture_gap_exceeded"] is True
+    assert report["max_capture_gap_ms"] > 2 * profile["max_frame_skew_ms"]
+    assert report["quality_warnings"]
+    assert provider.quality(Path(report["aligned_path"]), profile)["status"] == "WARN"
 
 
 def test_resampling_uses_source_clock_instead_of_row_numbers(profile, tmp_path):

@@ -228,6 +228,71 @@ def test_devices_route_to_distinct_runtimes_and_cannot_cross_formats(
         assert row["conversion_blockers"] == []
 
 
+def test_device_routes_each_raw_format_to_explicit_runtime(
+    settings_factory, monkeypatch
+):
+    monkeypatch.setenv("ROBOT_ROUTE_SECRET", "robot-route-" + "r" * 32)
+    profile = robot_profile()
+    settings = settings_factory(
+        "server",
+        profiles={
+            "robot_b_v1": {
+                "profile": profile,
+                "provider": "test_robot_b",
+                "raw_formats": ["robot_b_v1"],
+            },
+            "robot_b_v2": {
+                "profile": profile,
+                "provider": "test_robot_b",
+                "raw_formats": ["robot_b_v2"],
+            },
+        },
+        default_profile="robot_b_v1",
+        devices=[
+            {
+                "robot_id": "robot-routed",
+                "project_id": "project-routed",
+                "token_env": "ROBOT_ROUTE_SECRET",
+                "targets": ["default"],
+                "runtime_by_raw_format": {
+                    "robot_b_v1": "robot_b_v1",
+                    "robot_b_v2": "robot_b_v2",
+                },
+            }
+        ],
+    )
+    app = create_app(settings, background=False)
+    headers = {"Authorization": "Bearer robot-route-" + "r" * 32}
+    with TestClient(app) as http:
+        for index, raw_format in enumerate(("robot_b_v1", "robot_b_v2"), start=1):
+            manifest, data = manifest_for(
+                settings,
+                profile,
+                robot_id="robot-routed",
+                project_id="project-routed",
+                raw_format=raw_format,
+            )
+            manifest["session_id"] = f"routed-session-{index}"
+            uid = upload(http, headers, manifest, data)
+            assert app.state.ingest.store.get("upload", uid)["runtime_id"] == raw_format
+
+        unmapped, data = manifest_for(
+            settings,
+            profile,
+            robot_id="robot-routed",
+            project_id="project-routed",
+            raw_format="robot_b_unknown",
+        )
+        unmapped["session_id"] = "routed-session-unknown"
+        response = http.post(
+            "/device/uploads",
+            headers=headers,
+            json={"manifest": unmapped, "target": "default"},
+        )
+        assert response.status_code == 400
+        assert "未绑定 raw_format" in response.json()["detail"]
+
+
 def test_job_uses_upload_runtime_provider(settings_factory, monkeypatch):
     settings = multi_runtime_settings(settings_factory, monkeypatch)
     app = create_app(settings, background=False)

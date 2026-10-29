@@ -16,11 +16,14 @@ from pipeline.shared.hdf5 import (
 class RawFileContract:
     single_file: bool = False
     filename: str | None = None
+    basename_only: bool = False
 
     def validate_path(self, path: str) -> None:
         if self.single_file:
             if self.filename is not None and path != self.filename:
                 raise DomainError(f"采集包文件必须为 {self.filename}", 400)
+            if self.basename_only and Path(path).name != path:
+                raise DomainError("单文件采集包只能包含一个文件名，不能带目录", 400)
             if not is_hdf5_path(Path(path)):
                 raise DomainError("HDF5 episode 文件必须是 .hdf5 或 .h5", 400)
         elif not path.startswith("episode0/"):

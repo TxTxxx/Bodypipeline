@@ -251,16 +251,34 @@ class Settings:
             bound = device.get("runtime_id") or device.get("profile")
             if bound is not None and bound not in runtime_ids:
                 raise ValueError(f"设备绑定了未注册的 Runtime：{bound!r}")
+            routes = device.get("runtime_by_raw_format")
+            if routes is not None:
+                if not isinstance(routes, dict) or not routes:
+                    raise ValueError(
+                        "设备的 runtime_by_raw_format 必须是非空 raw_format -> Runtime 对象"
+                    )
+                for raw_format, runtime_id in routes.items():
+                    if (
+                        not isinstance(raw_format, str)
+                        or not raw_format
+                        or not isinstance(runtime_id, str)
+                        or runtime_id not in runtime_ids
+                    ):
+                        raise ValueError(
+                            "设备的 runtime_by_raw_format 包含无效格式或 Runtime"
+                        )
 
     def device_registry(self):
         if self.devices:
             rows = []
             for device in self.devices:
                 row = dict(device)
-                row.setdefault(
-                    "runtime_id",
-                    device.get("profile") or self.default_profile or "default",
-                )
+                if (
+                    not row.get("runtime_id")
+                    and not row.get("profile")
+                    and not row.get("runtime_by_raw_format")
+                ):
+                    row["runtime_id"] = self.default_profile or "default"
                 rows.append((os.environ.get(device["token_env"], ""), row))
             return rows
         return [
