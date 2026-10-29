@@ -67,9 +67,9 @@ class AnnotationRequest(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=200)
     cap_usd: float | None = Field(default=None, gt=0, le=1_000_000)
     concurrency: int | None = Field(default=None, ge=1, le=64)
-    reasoning: (
-        Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None
-    ) = None
+    reasoning: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = (
+        None
+    )
     sample_fps: float | None = Field(default=None, gt=0, le=10)
     inspection: Literal["auto", "all", "off"] | None = None
     field_dictionary: StrictBool | None = None
@@ -145,7 +145,13 @@ def create_app(settings, background=True):
         while not stopping.is_set():
             # One failing worker must not stop the shared loop: a dead loop means
             # every later job, check and analysis silently stops being picked up.
-            for worker in (datasets.tick, runner.tick, checks.tick, analyses.tick):
+            for worker in (
+                datasets.tick,
+                runner.tick,
+                checks.tick,
+                analyses.tick,
+                app.state.manual_annotation_exports.tick,
+            ):
                 if stopping.is_set():
                     break
                 try:
@@ -193,6 +199,7 @@ def create_app(settings, background=True):
         annotations.recover()
         viewer.recover()
         datasets.recover()
+        app.state.manual_annotation_exports.recover()
         tasks = (
             [
                 asyncio.create_task(loop()),
@@ -223,6 +230,9 @@ def create_app(settings, background=True):
     app.state.datasets = datasets
     install_security(app, settings, device_prefix="/device/")
     mount_ui(app, report=True)
+    from .manual_annotation_routes import install_manual_annotation_routes
+
+    install_manual_annotation_routes(app, settings, ingest.store)
 
     @app.get("/healthz")
     def live():
@@ -454,7 +464,11 @@ def create_app(settings, background=True):
 
     @app.get("/api/jobs")
     def jobs():
-        return [job_response(row) for row in ingest.store.all("job") if row["state"] not in DELETION_STATES]
+        return [
+            job_response(row)
+            for row in ingest.store.all("job")
+            if row["state"] not in DELETION_STATES
+        ]
 
     @app.get("/api/merge-candidates")
     def merge_candidates():
@@ -539,15 +553,22 @@ def create_app(settings, background=True):
     @app.post("/api/subtask-review/{dataset_id}/exports", status_code=202)
     def review_export(dataset_id: str, body: RevisionExportRequest):
         job = runner.subtask_exports.enqueue_review(dataset_id, body)
-        return {k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")}
+        return {
+            k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")
+        }
 
     @app.get("/api/subtask-review/{dataset_id}/exports/{export_id}")
     def review_export_status(dataset_id: str, export_id: str):
         subtask_review.resolve(dataset_id)
         job = ingest.store.get("job", export_id)
-        if job.get("source_kind") != "lerobot_subtask_revision" or job.get("source_job_id") != dataset_id:
+        if (
+            job.get("source_kind") != "lerobot_subtask_revision"
+            or job.get("source_job_id") != dataset_id
+        ):
             raise DomainError("修订导出任务不存在", 404)
-        return {k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")}
+        return {
+            k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")
+        }
 
     @app.get("/api/annotations/options")
     def annotation_options():

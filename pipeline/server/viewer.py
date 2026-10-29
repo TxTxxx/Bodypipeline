@@ -457,15 +457,112 @@ def create_gateway(settings):
             raise DomainError("预览已过期或不存在，请在管理台重新打开", 404)
         return row
 
+    async def manual_proxy(request, route, dataset_id=None):
+        # Only these fixed API prefixes are forwarded, never arbitrary URLs.
+        if dataset_id is not None:
+            score_preview(dataset_id)
+        client = httpx.AsyncClient(trust_env=False)
+        try:
+            upstream = client.build_request(
+                request.method,
+                settings.server_url.rstrip("/") + "/api/" + route,
+                params=request.query_params,
+                content=await request.body() if request.method == "POST" else None,
+                headers={
+                    "Authorization": "Bearer " + settings.token,
+                    "Content-Type": "application/json",
+                },
+                timeout=settings.command_timeout,
+            )
+            response = await client.send(upstream, stream=True)
+            if "application/zip" in response.headers.get("content-type", ""):
+
+                async def chunks():
+                    try:
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+                    finally:
+                        await response.aclose()
+                        await client.aclose()
+
+                return StreamingResponse(
+                    chunks(),
+                    status_code=response.status_code,
+                    media_type="application/zip",
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Disposition": response.headers.get(
+                            "content-disposition",
+                            'attachment; filename="annotations.zip"',
+                        ),
+                    },
+                )
+            content = await response.aread()
+            await response.aclose()
+            await client.aclose()
+            from fastapi.responses import Response
+
+            return Response(
+                content,
+                status_code=response.status_code,
+                media_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            raise DomainError("Server 标注服务暂不可用，请稍后重试", 503) from exc
+
+    @app.api_route("/api/annotation-schemes", methods=["GET", "POST"])
+    @app.api_route("/api/annotation-schemes/{suffix:path}", methods=["GET", "POST"])
+    async def scheme_proxy(request: Request, suffix: str = ""):
+        if suffix and any(
+            not part
+            or any(
+                c
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                for c in part
+            )
+            for part in suffix.split("/")
+        ):
+            raise DomainError("标注方案路径无效", 404)
+        return await manual_proxy(
+            request, "annotation-schemes" + ("/" + suffix if suffix else "")
+        )
+
+    @app.api_route("/api/manual-annotations/{dataset_id}", methods=["GET", "POST"])
+    @app.api_route(
+        "/api/manual-annotations/{dataset_id}/{suffix:path}", methods=["GET", "POST"]
+    )
+    async def workspace_proxy(request: Request, dataset_id: str, suffix: str = ""):
+        if suffix and any(
+            not part
+            or any(
+                c
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                for c in part
+            )
+            for part in suffix.split("/")
+        ):
+            raise DomainError("标注路径无效", 404)
+        return await manual_proxy(
+            request,
+            "manual-annotations/" + dataset_id + ("/" + suffix if suffix else ""),
+            dataset_id,
+        )
+
     async def review_proxy(dataset_id, suffix, body=None):
         # Only server-owned preview identities are accepted, never a local_path
         # or arbitrary proxy destination. The Server alone writes draft state.
         score_preview(dataset_id)
-        url = settings.server_url.rstrip("/") + f"/api/subtask-review/{dataset_id}/{suffix}"
+        url = (
+            settings.server_url.rstrip("/")
+            + f"/api/subtask-review/{dataset_id}/{suffix}"
+        )
         try:
             async with httpx.AsyncClient(trust_env=False) as client:
                 response = await client.request(
-                    "GET" if body is None else "POST", url,
+                    "GET" if body is None else "POST",
+                    url,
                     json=body.model_dump() if body is not None else None,
                     headers={"Authorization": "Bearer " + settings.token},
                     timeout=settings.command_timeout,
@@ -476,7 +573,11 @@ def create_gateway(settings):
             payload = response.json()
         except ValueError as exc:
             raise DomainError("Server 标注服务返回无效响应", 502) from exc
-        return JSONResponse(payload, status_code=response.status_code, headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            payload,
+            status_code=response.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/subtask-review/{dataset_id}/episodes/{episode}")
     async def review_episode(dataset_id: str, episode: int):
@@ -492,7 +593,10 @@ def create_gateway(settings):
 
     @app.get("/api/subtask-review/{dataset_id}/exports/{export_id}")
     async def review_export_status(dataset_id: str, export_id: str):
-        if not export_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in export_id):
+        if not export_id or any(
+            c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for c in export_id
+        ):
             raise DomainError("修订导出任务编号无效", 404)
         return await review_proxy(dataset_id, f"exports/{export_id}")
 
