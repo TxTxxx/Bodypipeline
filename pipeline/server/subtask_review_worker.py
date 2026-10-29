@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import sys
@@ -11,10 +12,19 @@ from pathlib import Path
 def language_atom(raw, fallback=0):
     """Match the original viewer's language-column coercion and defaults."""
     return {
-        "role": raw["role"], "style": raw.get("style"),
-        "content": raw.get("content"), "timestamp": raw.get("timestamp") if raw.get("timestamp") is not None else fallback,
-        "camera": raw.get("camera") or None, "tool_calls": raw.get("tool_calls"),
-        **({"end_timestamp": raw["end_timestamp"]} if raw.get("end_timestamp") is not None else {}),
+        "role": raw["role"],
+        "style": raw.get("style"),
+        "content": raw.get("content"),
+        "timestamp": raw.get("timestamp")
+        if raw.get("timestamp") is not None
+        else fallback,
+        "camera": raw.get("camera") or None,
+        "tool_calls": raw.get("tool_calls"),
+        **(
+            {"end_timestamp": raw["end_timestamp"]}
+            if raw.get("end_timestamp") is not None
+            else {}
+        ),
     }
 
 
@@ -58,35 +68,80 @@ def read_subtasks(root: Path) -> dict:
             persistent_rows = data.get("language_persistent")
             event_rows = data.get("language_events")
             timestamps = data.get("timestamp")
-            for offset, (ep, frame, label) in enumerate(zip(data["episode_index"], data["frame_index"], labels)):
+            for offset, (ep, frame, label) in enumerate(
+                zip(data["episode_index"], data["frame_index"], labels)
+            ):
                 if any(type(v) is not int for v in (ep, frame, label)) or ep < 0:
                     raise ValueError("Episode、帧或标签编号无效")
-                item = episodes.setdefault(ep, {"episode_index": ep, "frames": 0, "segments": [], "atoms": [], "persistent_seen": False, "language_subtasks": [], "indexed": labelled})
+                item = episodes.setdefault(
+                    ep,
+                    {
+                        "episode_index": ep,
+                        "frames": 0,
+                        "segments": [],
+                        "atoms": [],
+                        "persistent_seen": False,
+                        "language_subtasks": [],
+                        "indexed": labelled,
+                        "frame_timestamps": [],
+                    },
+                )
                 if frame != item["frames"]:
                     raise ValueError("Episode 帧序不连续或重复，无法安全编辑")
+                if timestamps is None:
+                    raise ValueError("标注需要实际帧时间戳，数据缺少 timestamp 列")
+                ts = timestamps[offset]
+                if (
+                    type(ts) not in (float, int)
+                    or not math.isfinite(ts)
+                    or ts < 0
+                    or (item["frame_timestamps"] and ts <= item["frame_timestamps"][-1])
+                ):
+                    raise ValueError("帧时间戳必须有限、非负且严格递增")
+                item["frame_timestamps"].append(float(ts))
                 item["frames"] += 1
                 persistent = persistent_rows[offset] if persistent_rows else None
                 events = event_rows[offset] if event_rows else None
                 if persistent and not item["persistent_seen"]:
-                    item["atoms"].extend(language_atom(a) for a in persistent if a.get("role") and a.get("style") != "subtask")
-                    item["language_subtasks"].extend(language_atom(a) for a in persistent if a.get("role") and a.get("style") == "subtask")
+                    item["atoms"].extend(
+                        language_atom(a)
+                        for a in persistent
+                        if a.get("role") and a.get("style") != "subtask"
+                    )
+                    item["language_subtasks"].extend(
+                        language_atom(a)
+                        for a in persistent
+                        if a.get("role") and a.get("style") == "subtask"
+                    )
                     item["persistent_seen"] = True
                 for atom in events or []:
                     if atom.get("role"):
-                        item["atoms"].append(language_atom(atom, timestamps[offset] if timestamps else frame / fps))
+                        item["atoms"].append(
+                            language_atom(
+                                atom, timestamps[offset] if timestamps else frame / fps
+                            )
+                        )
                 if label == -1:
                     continue
                 if label < 0 or label not in vocabulary:
                     raise ValueError(f"Subtask 编号 {label} 没有有效词表项")
                 text = vocabulary[label]
                 segments = item["segments"]
-                if segments and segments[-1]["end_frame"] == frame and segments[-1]["text"] == text:
+                if (
+                    segments
+                    and segments[-1]["end_frame"] == frame
+                    and segments[-1]["text"] == text
+                ):
                     segments[-1]["end_frame"] += 1
                 else:
-                    segments.append({"start_frame": frame, "end_frame": frame + 1, "text": text})
+                    segments.append(
+                        {"start_frame": frame, "end_frame": frame + 1, "text": text}
+                    )
                     if len(segments) > 2000:
                         raise ValueError("单个 Episode 超过 2000 段，暂不支持编辑")
-    if len(episodes) != info.get("total_episodes") or sum(e["frames"] for e in episodes.values()) != info.get("total_frames"):
+    if len(episodes) != info.get("total_episodes") or sum(
+        e["frames"] for e in episodes.values()
+    ) != info.get("total_frames"):
         raise ValueError("实际 Episode / 帧数与数据集声明不一致")
     sidecar = root / "meta/bodypipeline-manual-annotations.json"
     manual = json.loads(sidecar.read_text())["episodes"] if sidecar.is_file() else {}
@@ -95,15 +150,39 @@ def read_subtasks(root: Path) -> dict:
         subtasks = sorted(item.pop("language_subtasks"), key=lambda a: a["timestamp"])
         if not item.pop("indexed"):
             for i, atom in enumerate(subtasks):
-                start = round(float(atom["timestamp"]) * fps)
-                end = round(float(atom.get("end_timestamp") or (subtasks[i + 1]["timestamp"] if i + 1 < len(subtasks) else item["frames"] / fps)) * fps)
+                start = bisect.bisect_left(
+                    item["frame_timestamps"], float(atom["timestamp"])
+                )
+                end = bisect.bisect_left(
+                    item["frame_timestamps"],
+                    float(
+                        atom.get("end_timestamp")
+                        or (
+                            subtasks[i + 1]["timestamp"]
+                            if i + 1 < len(subtasks)
+                            else math.inf
+                        )
+                    ),
+                )
                 if 0 <= start < end <= item["frames"] and atom.get("content"):
-                    item["segments"].append({"start_frame": start, "end_frame": end, "text": atom["content"]})
+                    item["segments"].append(
+                        {
+                            "start_frame": start,
+                            "end_frame": end,
+                            "text": atom["content"],
+                        }
+                    )
         if str(item["episode_index"]) in manual:
             item["atoms"] = manual[str(item["episode_index"])]
         if len(item["atoms"]) > 10000:
             raise ValueError("单个 Episode 超过 10000 条手动标注")
-    return {"fps": fps, "episodes": [episodes[i] for i in sorted(episodes)]}
+    return {
+        "fps": fps,
+        "cameras": [
+            k for k in info.get("features", {}) if k.startswith("observation.images.")
+        ],
+        "episodes": [episodes[i] for i in sorted(episodes)],
+    }
 
 
 if __name__ == "__main__":
