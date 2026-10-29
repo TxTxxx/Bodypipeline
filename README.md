@@ -388,6 +388,8 @@ patches/                    # AgileX ALOHA recorder 修复补丁与 Visualizer �
 | [Server 工作台](docs/server-workbench.md) | 导入、批量转换、预览与 Doctor 操作说明 |
 | [代码导读](docs/code-tour.md) | 模块职责、关键调用链、状态机与测试入口 |
 | [letools 集成](docs/letools-integration.md) | 固定版本、CLI 调用、Doctor 与 Visualizer 集成边界 |
+| [自定义人工标注](docs/manual-annotations.md) | 标注方案、动态字段、服务端草稿、筛选及导出 |
+| [自定义标注功能计划](docs/custom-annotation-plan.md) | 功能范围、阶段与验收依据 |
 | [新机器人适配](docs/robots/new-robot-adaptation.md) | 文件级适配矩阵、接口契约与验收清单 |
 | [AgileX ALOHA 数据契约](docs/robots/agilex-aloha.md) | ROS2 接口、state/action 映射、时间戳与限位策略 |
 | [AgileX ALOHA recorder 启动空洞修复](docs/robots/agilex-recorder-fix.md) | 根因、预热门控补丁、部署与回归结果 |

@@ -1,0 +1,29 @@
+name: Custom annotation validation
+on:
+  pull_request:
+    branches: [server]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  annotations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.1'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+      - run: uv sync --locked
+      - run: uv run --locked ruff check pipeline scripts tests
+      - run: uv run --locked pytest -q
+      - run: bun test tests/viewer_annotation_bridge.test.ts tests/viewer_custom_annotations.test.ts
+      - name: Install pinned real dataset toolchain
+        run: bash scripts/install_letools.sh
+      - name: Verify real dataset read, revision export and Linux cleanup
+        env:
+          PIPELINE_TEST_LETOOLS_BIN: ${{ github.workspace }}/.runtime/letools-venv/bin/letools
+        run: uv run --locked pytest -q tests/test_manual_annotation_service.py tests/test_manual_annotation_exports.py tests/test_subtask_review.py tests/test_subtask_export.py tests/test_recycle.py
