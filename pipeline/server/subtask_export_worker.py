@@ -217,7 +217,9 @@ def _write_subtasks(path: Path, vocabulary: list[dict], unannotated: int, text: 
 
         pq.write_table(pa.Table.from_pylist(rows), path, compression="snappy")
         return
-    frame = pd.DataFrame(rows, columns=["subtask", "subtask_index"]).set_index("subtask")
+    frame = pd.DataFrame(rows, columns=["subtask", "subtask_index"]).set_index(
+        "subtask"
+    )
     frame.to_parquet(path, engine="pyarrow", compression="snappy")
 
 
@@ -237,6 +239,26 @@ def _subtask_stats(counts: dict, total: int) -> dict:
         "std": [float(variance**0.5)],
         "count": [int(total)],
     }
+
+
+def write_custom_annotation_sidecar(destination: Path, snapshot: dict) -> None:
+    """Carry an immutable, self-describing annotation revision into a new copy.
+
+    UUIDs identify the origin here; the import service creates a fresh local
+    dataset/Episode identity rather than sharing the original workspace.
+    """
+
+    def portable(value):
+        return {
+            key: item
+            for key, item in value.items()
+            if not key.startswith("_")
+            and key not in {"dataset_path", "source_path", "storage_dir"}
+        }
+
+    path = destination / "meta/bodypipeline-custom-annotations.json"
+    path.unlink(missing_ok=True)  # May be a hard link inherited from the source.
+    _write_json(path, portable(snapshot))
 
 
 def patch(destination: Path, spec: dict) -> dict:
@@ -291,9 +313,19 @@ def patch(destination: Path, spec: dict) -> dict:
     # Lossless manual annotations (including arbitrary VQA/tool arguments).
     # Keep the original language columns untouched; this sidecar is authoritative
     # for reviewed episodes and travels with the independent dataset copy.
-    manual = {str(item["episode_index"]): item["atoms"] for item in spec["episodes"] if "atoms" in item}
+    manual = {
+        str(item["episode_index"]): item["atoms"]
+        for item in spec["episodes"]
+        if "atoms" in item
+    }
     if manual:
-        _write_json(destination / "meta/bodypipeline-manual-annotations.json", {"version": 1, "episodes": manual})
+        _write_json(
+            destination / "meta/bodypipeline-manual-annotations.json",
+            {"version": 1, "episodes": manual},
+        )
+
+    if spec.get("custom_annotations") is not None:
+        write_custom_annotation_sidecar(destination, spec["custom_annotations"])
 
     _write_subtasks(
         destination / "meta/subtasks.parquet",

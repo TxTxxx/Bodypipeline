@@ -172,6 +172,7 @@ class DatasetManager:
                 "check",
                 "analysis",
                 "annotation",
+                "manual_annotation_export",
                 "dataset_deletion",
                 "recycle",
             )
@@ -198,7 +199,9 @@ class DatasetManager:
                         path = path.resolve()
                         snapshot["reference_owners"].setdefault(path, set()).add(owner)
                         for parent in path.parents:
-                            snapshot["descendant_owners"].setdefault(parent, set()).add(owner)
+                            snapshot["descendant_owners"].setdefault(parent, set()).add(
+                                owner
+                            )
                 except (DomainError, OSError, ValueError, KeyError) as exc:
                     snapshot["reference_errors"][(kind, row["id"])] = str(exc)
         return snapshot
@@ -208,7 +211,11 @@ class DatasetManager:
         context = self._safety_context()
         candidates = {self._safe(p, context) for p in paths}
         paths = sorted(
-            (p for p in candidates if not any(parent in candidates for parent in p.parents)),
+            (
+                p
+                for p in candidates
+                if not any(parent in candidates for parent in p.parents)
+            ),
             key=str,
         )
         selected = {(kind, row["id"]) for kind, row in records}
@@ -239,6 +246,13 @@ class DatasetManager:
                 raise DomainError(
                     "删除范围与另一个已登记数据集重叠，请先核对重复登记", 409
                 )
+        for row in snapshot["manual_annotation_export"]:
+            ref = row.get("dataset_path")
+            if row["state"] in ACTIVE and (
+                row.get("job_id") in job_ids
+                or (ref and any(overlaps(p, Path(ref).resolve()) for p in paths))
+            ):
+                raise DomainError("数据集正在生成标注包，请等待任务完成", 409)
         for kind in ("check", "analysis", "annotation"):
             for row in snapshot[kind]:
                 ref = row.get("dataset_path")
@@ -246,7 +260,9 @@ class DatasetManager:
                     row.get("job_id") in job_ids
                     or (ref and any(overlaps(p, Path(ref).resolve()) for p in paths))
                 ):
-                    raise DomainError("数据集正在质检、分析或自动标注，请等待任务完成", 409)
+                    raise DomainError(
+                        "数据集正在质检、分析或自动标注，请等待任务完成", 409
+                    )
         for deletion in snapshot["dataset_deletion"]:
             if deletion["state"] == "COMPLETED":
                 continue
@@ -519,6 +535,10 @@ class DatasetManager:
                     elif trash.exists():
                         trash.unlink()
                     fsync_dir(path.parent)
+                from .manual_annotations import archive_workspace
+
+                for target in operation["targets"]:
+                    archive_workspace(self.store, Path(target["path"]), operation["id"])
                 self._mark(operation, "DELETED")
                 operation.update(state="COMPLETED", finished_at=now(), error=None)
         except Exception as exc:

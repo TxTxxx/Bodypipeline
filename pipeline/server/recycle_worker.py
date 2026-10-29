@@ -49,6 +49,12 @@ def recover_operation(store, row):
             for key, entry in op["entries_before"].items()
             if key in mapping
         }
+        # The canonical annotations must follow the replacement before it is
+        # exposed as completed or the old data is removed. This is idempotent
+        # after a crash between publishing the annotation head and the journal.
+        from .manual_annotations import remap_workspace
+
+        remap_workspace(store, Path(row["dataset_path"]), mapping, op["id"])
         # Keep the journal until the old payload is actually gone. Retrying after
         # a crash uses the original selection/mapping exactly once.
         if stage.exists():
@@ -237,6 +243,36 @@ def _trim_video(source, output, segments, fps):
         raise ValueError(f"视频解码帧数不符：{actual} / {expected}")
 
 
+def remap_annotation_sidecars(stage, mapping):
+    """Detach hard-linked sidecars before changing their Episode association."""
+    meta = Path(stage) / "meta"
+    for name in (
+        "bodypipeline-manual-annotations.json",
+        "bodypipeline-custom-annotations.json",
+    ):
+        path = meta / name
+        if not path.is_file():
+            continue
+        value = json.loads(path.read_text())
+        episodes = value.get("episodes")
+        if isinstance(episodes, dict):
+            value["episodes"] = {
+                str(mapping[key]): record
+                for key, record in episodes.items()
+                if key in mapping
+            }
+        elif isinstance(episodes, list):
+            value["episodes"] = [
+                {**record, "episode_index": mapping[str(record["episode_index"])]}
+                for record in episodes
+                if str(record["episode_index"]) in mapping
+            ]
+        else:
+            raise ValueError("标注 sidecar 缺少有效 episodes，拒绝清理")
+        path.unlink()  # Never write through the ancillary-file hard link.
+        atomic_json(path, value)
+
+
 def rebuild(root, stage, deleted, progress):
     import numpy as np
     import pyarrow as pa
@@ -266,6 +302,7 @@ def rebuild(root, stage, deleted, progress):
             n for n in names if Path(path) == root and n in {"data", "videos", MARKER}
         ],
     )
+    remap_annotation_sidecars(stage, mapping)
     info = copy.deepcopy(source.metadata.info)
     fps = int(info["fps"])
     version = info["codebase_version"]
@@ -455,6 +492,29 @@ def rebuild(root, stage, deleted, progress):
     }
 
 
+def check_annotation_source(store, root):
+    """Never turn a stale annotation binding into a valid one by reindexing."""
+    from pipeline.shared.core import DomainError
+
+    from .manual_annotations import STATE_KIND, workspace_key
+    from .merges import source_snapshot
+
+    key = workspace_key(root)
+    signature = source_snapshot(root)["signature"]
+    for kind in (STATE_KIND, "subtask_draft"):
+        try:
+            head = store.get(kind, key)
+        except DomainError as exc:
+            if exc.code == 404:
+                continue
+            raise
+        if head["source_signature"] != signature:
+            raise DomainError("标注来源已变化，请核对来源后再永久清理", 409)
+        if kind == STATE_KIND:
+            break  # Superseded legacy drafts are immutable history.
+    return signature
+
+
 def run(store, key, operation):
     lock_path = store.path / "recycle-locks" / f"{key}.lock"
     lock_path.parent.mkdir(exist_ok=True)
@@ -480,6 +540,8 @@ def run(store, key, operation):
             ]:
                 if not os.access(directory, os.W_OK | os.X_OK):
                     raise PermissionError(f"无法清理数据目录：{directory}")
+            op["annotation_source_signature"] = check_annotation_source(store, root)
+            store.put("recycle", key, row)
             snapshot = _snapshot(root)
             result = rebuild(root, stage, set(op["episodes"]), progress)
             atomic_json(stage / MARKER, {**result, "operation": operation})
