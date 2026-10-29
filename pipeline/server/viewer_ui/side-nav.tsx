@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import React, { useEffect, useMemo, useState } from "react";
+import {CustomAnnotationFilter} from "./custom-annotation-filter";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
 import { EpisodeScoreBadge, EpisodeScorePanel, useEpisodeScores } from "@/components/episode-scores";
 
@@ -36,6 +37,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowFlaggedOnlyChange,
   onEpisodeSelect,
 }) => {
+  const [annotationIds, setAnnotationIds] = useState<number[] | null>(null);
+  const onAnnotationFilter = useCallback((ids: number[] | null) => setAnnotationIds(ids), []);
   const [mobileVisible, setMobileVisible] = useState(false);
   const { flagged, count, toggle } = useFlaggedEpisodes();
   const { result: scores, retry: retryScores } = useEpisodeScores(datasetInfo.repoId);
@@ -96,8 +99,8 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const displayEpisodes = useMemo(() => {
     const episodes = !showFlaggedOnly || count === 0 ? paginatedEpisodes : [...flagged].sort((a, b) => a - b);
-    return episodes.filter(episode => !trashed.has(episode));
-  }, [paginatedEpisodes, showFlaggedOnly, flagged, count, trashed]);
+    return (annotationIds ?? episodes).filter(episode => !trashed.has(episode));
+  }, [paginatedEpisodes, showFlaggedOnly, flagged, count, trashed, annotationIds]);
 
   return (
     <div className="flex z-10 shrink-0">
@@ -126,6 +129,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <dd className="text-slate-200">{datasetInfo.fps}</dd>
         </dl>
 
+        <CustomAnnotationFilter repoId={datasetInfo.repoId} onFilter={onAnnotationFilter} />
         <EpisodeScorePanel result={scores} episodeId={episodeId} retry={retryScores} />
 
         <a href={`/${datasetInfo.repoId}/trash`} className="pipeline-recycle-link"><TrashIcon /> 回收站 <span>{recycle?.entries.length ?? "…"}</span></a>

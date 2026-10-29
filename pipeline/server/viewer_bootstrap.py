@@ -154,6 +154,9 @@ def patch_presentation(cache: Path):
         "subtask-review-model.ts": "src/utils/subtask-review-model.ts",
         "annotation-review-client.ts": "src/utils/annotation-review-client.ts",
         "use-annotation-review.ts": "src/utils/use-annotation-review.ts",
+        "custom-annotation-model.ts": "src/utils/custom-annotation-model.ts",
+        "custom-annotations.tsx": "src/components/custom-annotations.tsx",
+        "custom-annotation-filter.tsx": "src/components/custom-annotation-filter.tsx",
     }
     for name, target in destinations.items():
         (source / target).write_bytes((UI_ASSETS / name).read_bytes())
