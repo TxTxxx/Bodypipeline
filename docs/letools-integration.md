@@ -218,10 +218,29 @@ bash scripts/install_visualizer_zh_patch.sh
 - 这是展示层补丁，不改变 Doctor 检查项、数据读取、转换或任何质量判定；
 - 上游业务逻辑与组件结构不变，升级 letools 时需要重新核对补丁是否仍能干净应用；
 - 报告中 Doctor 的逐条明细仍保留英文原文，便于与上游工具对照；
-- `--no-annotations` 仍然生效，标注页只做本地会话内编辑，不写回数据集；
+- `--no-annotations` 仍然生效，不写回数据集。任务模板、Subtask 尝试、自定义字段、NULL 片段和单帧记录保存在浏览器 `localStorage`；原有语言 / VQA 编辑仍使用 `sessionStorage`；
 - Doctor 标签页里的报告由 letools 以硬编码深色样式渲染，因此宿主在
   `pipeline/server/viewer.py` 的 Viewer Gateway 中给 `/_data/doctor` 注入共享主题，
   不 fork 固定版本工具链。该路由只在 Viewer 进程内生效，改动后需重启 `bodypipeline-viewer`。
+
+任务标注时，视频与播放条固定在标注区上方，向下编辑字段时仍可查看画面。时间轴的普通点击和拖动只定位视频；按住 **Shift** 在空白轨道拖动新建片段，在已有片段上拖动移动片段，在左右边缘拖动调整边界。片段边界吸附源帧，视频预览按鼠标所在的实际时间定位；点击片段不会强制跳回其起点。
+
+右键时间轴片段或左侧记录可删除这条标注，右下角提供撤销。`NULL · 无任务片段` 表示已经确认没有任务内容，和仍未标注的空白区分保存；NULL 与 Subtask 不能重叠。浏览器记录仅在当前浏览器中可见，清理站点数据会清除记录。
+
+### 3.7 本机 Mock 标注预览
+
+已有 Python 基础环境、固定版本 letools、Node.js、Bun 和 FFmpeg 时，可准备一份独立的 Viewer 缓存并启动本机演示：
+
+```bash
+.runtime/letools-venv/bin/letools visualizer setup --cache-dir .runtime/annotation-preview/viewer
+uv run --with pyarrow python scripts/preview_annotations.py
+```
+
+脚本会应用本仓库的 Viewer 补丁，生成两条含三路合成视频的 LeRobot v2.1 数据，并启动 Mock Client（18080）、Server（18081）和 Viewer（18082，内部 UI 13100）。这些服务只监听 `127.0.0.1`，运行数据及配置位于 `.runtime/annotation-preview/`。打开 `http://127.0.0.1:18082/annotation-demo.html`，演示登录密码为 `annotation-demo`，按 Ctrl+C 停止本次服务。
+
+首次打开演示入口会在浏览器内填充示例模板、重试片段和评价，已有浏览器记录不会被覆盖。可用 `--viewer-source <独立缓存>/source` 选择其他固定版本的演示源码缓存；该缓存会被应用界面补丁并采用本机字体，不要指向正在使用的生产 Viewer 缓存。
+
+本阶段的草稿按预览数据集、Episode 索引和模板隔离，不提供跨浏览器同步，也不自动迁移重新转换或永久清理后重排的 Episode 标注；数据变更后需要重新核对。尚未接入服务端标注保存或训练数据导出。
 
 ## 4. 与上游协作
 

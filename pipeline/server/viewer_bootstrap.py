@@ -192,6 +192,10 @@ def patch_presentation(cache: Path):
         )
         versions.write_text(text)
 
+    from pipeline.server.viewer_task_annotations import patch_task_annotations
+
+    patch_task_annotations(cache)
+
 
 def _fingerprint(cache: Path, data_origin: str) -> str:
     """Identify the build inputs; the origin is baked into the browser bundle."""
@@ -209,6 +213,9 @@ def _fingerprint(cache: Path, data_origin: str) -> str:
                     PRESENTATION_PATCH.read_bytes()
                     + CAMERA_ORDER_PATCH.read_bytes()
                     + THEME_SCRIPT.read_bytes()
+                    + Path(__file__)
+                    .with_name("viewer_task_annotations.py")
+                    .read_bytes()
                     + b"".join(
                         path.name.encode() + path.read_bytes()
                         for path in sorted(UI_ASSETS.iterdir())
