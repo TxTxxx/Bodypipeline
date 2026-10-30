@@ -72,7 +72,7 @@ class IngestService:
             raise DomainError("非法 session_id", 400)
         if m.get("control_mode") != "teleoperation":
             raise DomainError("此版本仅支持主从臂遥操作", 400)
-        if m.get("capture_mode") not in {"mock", "ros2"}:
+        if m.get("capture_mode") not in {"mock", "ros2", "real"}:
             raise DomainError("未声明采集模式", 400)
         if not isinstance(m.get("instruction"), str) or len(m["instruction"]) > 2000:
             raise DomainError("instruction 必须为字符串且不超过 2000 字符", 400)

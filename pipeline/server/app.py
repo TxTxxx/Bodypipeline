@@ -408,7 +408,7 @@ def create_app(settings, background=True):
                             "message": "采集 Profile 与 Runtime 批准版本不同；需核实后加入兼容摘要",
                         }
                     )
-                if manifest["capture_mode"] == "ros2":
+                if manifest["capture_mode"] != "mock":
                     blockers.extend(provider.profile_blockers(runtime.profile))
             except (DomainError, OSError, ValueError, KeyError) as exc:
                 blockers.append(
