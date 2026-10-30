@@ -1,10 +1,61 @@
-"""Install the browser-only task studio into the pinned Viewer annotation tab."""
+"""Install the task studio and shared server draft into the pinned Viewer."""
 
 import re
 from pathlib import Path
 
 MARKER = "// bodypipeline: browser task annotation studio v1"
 PLAYER_MARKER = "// bodypipeline: precise annotation video seeks v1"
+
+
+def patch_task_review(source: Path):
+    """Expose the single server draft to the studio; keep VQA in its panel."""
+    from .viewer_annotations import _replace
+
+    context = source / "src/context/annotations-context.tsx"
+    _replace(
+        context,
+        'import type { LanguageAtom } from "../types/language.types";',
+        'import type { LanguageAtom } from "../types/language.types";\nimport type { TaskDocument } from "../utils/task-annotation-model";',
+    )
+    _replace(
+        context,
+        "  atoms: LanguageAtom[];",
+        """  taskDocument: TaskDocument | null;
+  updateTaskDocument: React.Dispatch<React.SetStateAction<TaskDocument | null>>;
+  reviewRevision: number;
+  reviewHasDraft: boolean;
+  reviewExporting: boolean;
+  atoms: LanguageAtom[];""",
+    )
+    # Insert outside the v1 bridge's context so it remains repeatable on restart.
+    _replace(
+        context,
+        "      atoms,\n",
+        """      taskDocument: managed ? serverReview.taskDocument : null,
+      updateTaskDocument: serverReview.setTaskDocument,
+      reviewRevision: serverReview.review?.revision || 0,
+      reviewHasDraft: !!serverReview.review?.has_draft,
+      reviewExporting: serverReview.exporting,
+      atoms,
+""",
+    )
+    panel = source / "src/components/annotations-panel.tsx"
+    _replace(
+        panel,
+        'useState<QuickAddKind>("subtask")',
+        'useState<QuickAddKind>(ident.repoId?.startsWith("bp/") ? "plan" : "subtask")',
+    )
+    _replace(
+        panel,
+        "{QUICK_ADD_DEFS.map((d) => (",
+        '{QUICK_ADD_DEFS.filter(d => !ident.repoId?.startsWith("bp/") || d.kind !== "subtask").map((d) => (',
+    )
+    page = source / "src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    _replace(
+        page,
+        "                <AnnotationsTimeline duration={data.duration} />",
+        '                {!datasetInfo.repoId.startsWith("bp/") && <AnnotationsTimeline duration={data.duration} />}',
+    )
 
 
 def patch_annotation_preview_layout(text: str) -> str:
@@ -98,6 +149,7 @@ def patch_task_annotations(cache: Path):
         "task-annotation-studio.tsx": "src/components/task-annotation-studio.tsx",
         "task-annotation-timeline.tsx": "src/components/task-annotation-timeline.tsx",
         "task-annotation-menu.tsx": "src/components/task-annotation-menu.tsx",
+        "task-review-client.ts": "src/utils/task-review-client.ts",
         "task-annotation.css": "src/app/task-annotation.css",
     }.items():
         (source / destination).write_bytes((assets / name).read_bytes())
@@ -113,6 +165,7 @@ def patch_task_annotations(cache: Path):
     if MARKER in text:
         viewer.write_text(patch_annotation_preview_layout(text))
         patch_annotation_player(source)
+        patch_task_review(source)
         return
     anchor = 'import { AnnotationsPanel } from "@/components/annotations-panel";'
     old = """              <AnnotationsTimeline duration={data.duration} />
@@ -148,3 +201,4 @@ def patch_task_annotations(cache: Path):
     )
     viewer.write_text(patch_annotation_preview_layout(text))
     patch_annotation_player(source)
+    patch_task_review(source)

@@ -4,6 +4,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { useAnnotations } from "../context/annotations-context";
 import { useTime } from "../context/time-context";
 import { TaskAnnotationTimeline } from "./task-annotation-timeline";
+import { reviewRequest } from "../utils/annotation-review-client";
+import {
+  retargetDocument,
+  taskSegments,
+  type TemplateLibrary,
+} from "../utils/task-review-client";
 import {
   SegmentContextMenu,
   segmentMenuAnchor,
@@ -206,10 +212,14 @@ function TemplateEditor({
   initial,
   onSave,
   onClose,
+  serverError = "",
+  busy = false,
 }: {
   initial: TaskTemplate;
   onSave: (template: TaskTemplate) => void;
   onClose: () => void;
+  serverError?: string;
+  busy?: boolean;
 }) {
   const [draft, setDraft] = useState<TaskTemplate>(() =>
     structuredClone(initial),
@@ -423,17 +433,17 @@ function TemplateEditor({
         <p className="ta-muted">
           移除定义不会删除旧记录中的值；已有片段会保留创建时的子任务名称。
         </p>
-        {error && (
+        {(error || serverError) && (
           <p role="alert" className="ta-error">
-            {error}
+            {error || serverError}
           </p>
         )}
         <footer className="ta-dialog-foot">
           <button type="button" onClick={onClose}>
             取消
           </button>
-          <button className="ta-primary" type="submit">
-            保存任务模板
+          <button className="ta-primary" type="submit" disabled={busy}>
+            {busy ? "正在保存…" : "保存任务模板"}
           </button>
         </footer>
       </form>
@@ -445,17 +455,25 @@ function Workspace({
   template,
   dataset,
   episode,
+  serverDocument,
+  onDocumentChange,
+  serverDirty = false,
 }: {
   template: TaskTemplate;
   dataset: string;
   episode: number;
+  serverDocument?: TaskDocument;
+  onDocumentChange?: (fn: (doc: TaskDocument) => TaskDocument) => void;
+  serverDirty?: boolean;
 }) {
-  const { frameTimestamps, setDrawMode } = useAnnotations();
+  const { frameTimestamps } = useAnnotations();
+  const managed = !!serverDocument;
   const { currentTime, seek, duration, setIsPlaying } = useTime();
   const count = frameTimestamps.length;
   const key = documentKey(dataset, episode, template.id);
   const [initial] = useState(() => {
     try {
+      if (serverDocument) return { doc: serverDocument, raw: null, error: "" };
       const raw = localStorage.getItem(key);
       return {
         doc: raw ? readDocument(raw, template, count) : emptyDocument(template),
@@ -466,7 +484,8 @@ function Workspace({
       return { doc: emptyDocument(template), raw: null, error: message(e) };
     }
   });
-  const [doc, setDoc] = useState(initial.doc);
+  const [localDoc, setDoc] = useState(initial.doc);
+  const doc = serverDocument || localDoc;
   const [storageError, setStorageError] = useState(initial.error);
   const [saved, setSaved] = useState(true);
   const [changed, setChanged] = useState(false);
@@ -497,16 +516,16 @@ function Workspace({
   const selectedFrame = doc.frames.find((f) => f.id === frameSelection);
   const selectedStep = template.subtasks.find((s) => s.id === step);
   const update = (fn: (d: TaskDocument) => TaskDocument) => {
+    if (onDocumentChange) {
+      onDocumentChange((d) => ({ ...fn(d), templateSnapshot: template }));
+      return;
+    }
     setDoc((d) => ({ ...fn(d), templateSnapshot: template }));
     setChanged(true);
     setSaved(false);
   };
   useEffect(() => {
-    setDrawMode("off");
-    return () => setDrawMode("auto");
-  }, [setDrawMode]);
-  useEffect(() => {
-    if (!changed || storageError) return;
+    if (managed || !changed || storageError) return;
     try {
       if (localStorage.getItem(key) !== expectedRaw.current)
         throw new Error(
@@ -520,15 +539,16 @@ function Workspace({
       setStorageError(`浏览器保存失败：${message(e)}`);
       setSaved(false);
     }
-  }, [doc, key, changed, storageError]);
+  }, [doc, key, changed, storageError, managed]);
   useEffect(() => {
+    if (managed) return;
     const listener = (e: StorageEvent) => {
       if (e.key === key && e.newValue !== expectedRaw.current)
         setStorageError("另一窗口修改了这条标注，请核对当前内容后刷新页面。");
     };
     window.addEventListener("storage", listener);
     return () => window.removeEventListener("storage", listener);
-  }, [key]);
+  }, [key, managed]);
   const previewTime = (time: number) => {
     setIsPlaying(false);
     seek(Math.max(0, Math.min(duration, time)));
@@ -605,6 +625,15 @@ function Workspace({
     const invalid = validateRange(range.start, range.end, count);
     if (invalid) {
       setError(invalid);
+      return;
+    }
+    if (
+      managed &&
+      doc.attempts.some(
+        (a) => a.id !== id && range.start < a.end && range.end > a.start,
+      )
+    ) {
+      setError("Subtask 区间不能重叠，请调整范围后再标注。");
       return;
     }
     setScope("attempt");
@@ -704,11 +733,15 @@ function Workspace({
           帧
         </span>
         <span className="ta-save-state" role="status">
-          {storageError
-            ? "● 保存需处理"
-            : changed && !saved
-              ? "正在保存…"
-              : "● 已保存在此浏览器"}
+          {managed
+            ? serverDirty
+              ? "● 尚未保存到服务器"
+              : "● 服务端标注已加载"
+            : storageError
+              ? "● 保存需处理"
+              : changed && !saved
+                ? "正在保存…"
+                : "● 已保存在此浏览器"}
         </span>
       </div>
       {storageError && (
@@ -1182,7 +1215,13 @@ function Workspace({
               }
               if (
                 deleted.attempt &&
-                conflictsWithNull(doc, deleted.attempt, false)
+                (conflictsWithNull(doc, deleted.attempt, false) ||
+                  (managed &&
+                    doc.attempts.some(
+                      (a) =>
+                        deleted.attempt!.start < a.end &&
+                        deleted.attempt!.end > a.start,
+                    )))
               ) {
                 setError(
                   "原位置已有 NULL 片段，无法恢复子任务，请先调整范围。",
@@ -1227,7 +1266,7 @@ function Workspace({
   );
 }
 
-export function TaskAnnotationStudio() {
+function BrowserStudio() {
   const { episodeId, ident } = useAnnotations();
   const dataset = ident.localPath || ident.repoId || "";
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -1344,5 +1383,280 @@ export function TaskAnnotationStudio() {
         />
       )}
     </section>
+  );
+}
+
+function ManagedStudio({
+  dataset,
+  episode,
+}: {
+  dataset: string;
+  episode: number;
+}) {
+  const {
+    taskDocument: doc,
+    updateTaskDocument,
+    reviewLoading,
+    reviewReady,
+    reviewError,
+    reviewRevision,
+    reviewHasDraft,
+    reviewExporting,
+    frameTimestamps,
+    save,
+    saving,
+    dirty,
+    exportReview,
+  } = useAnnotations();
+  const [library, setLibrary] = useState<TemplateLibrary | null>(null);
+  const [editing, setEditing] = useState<TaskTemplate | null>(null);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [templateBusy, setTemplateBusy] = useState(false);
+  const [browserDraft, setBrowserDraft] = useState<TaskDocument | null>(null);
+  const appliedLibrary = useRef("");
+  useEffect(() => {
+    if (!doc || !library) return;
+    const key = `${library.revision}:${doc.templateId}`;
+    if (appliedLibrary.current === key) return;
+    appliedLibrary.current = key;
+    const shared = library.templates.find((t) => t.id === doc.templateId);
+    if (!shared) return;
+    try {
+      const next = retargetDocument(doc, shared);
+      if (JSON.stringify(next) !== JSON.stringify(doc)) {
+        updateTaskDocument(next);
+        setStatus(
+          "已应用共用模板的最新字段，旧记录保留；请核对后保存 Episode。",
+        );
+      }
+    } catch (e) {
+      setError(`共用模板未套用：${message(e)}`);
+    }
+  }, [library, doc, updateTaskDocument]);
+  useEffect(() => {
+    let alive = true;
+    reviewRequest<TemplateLibrary>("/api/task-templates")
+      .then((value) => {
+        if (alive) setLibrary(value);
+      })
+      .catch((e) => {
+        if (alive) setError(`模板库读取失败：${message(e)}`);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [dataset]);
+  useEffect(() => {
+    try {
+      const templateId = localStorage.getItem(bindingKey(dataset));
+      const raw = templateId
+        ? localStorage.getItem(documentKey(dataset, episode, templateId))
+        : null;
+      if (raw) {
+        const candidate = JSON.parse(raw) as TaskDocument;
+        if (candidate?.version === 1) setBrowserDraft(candidate);
+      }
+    } catch {
+      /* The original browser records are left untouched. */
+    }
+  }, [dataset, episode]);
+  const update = (fn: (doc: TaskDocument) => TaskDocument) =>
+    updateTaskDocument((d) => (d ? fn(d) : d));
+  const templates = [...(library?.templates || [])];
+  if (doc && !templates.some((t) => t.id === doc.templateId))
+    templates.push(doc.templateSnapshot);
+  const choose = (template: TaskTemplate) => {
+    try {
+      if (doc) updateTaskDocument(retargetDocument(doc, template));
+      setError("");
+    } catch (e) {
+      setError(message(e));
+    }
+  };
+  const saveTemplate = async (next: TaskTemplate) => {
+    if (!library) return;
+    setTemplateBusy(true);
+    setError("");
+    try {
+      const list = templates.some((t) => t.id === next.id)
+        ? templates.map((t) => (t.id === next.id ? next : t))
+        : [...templates, next];
+      const result = await reviewRequest<TemplateLibrary>(
+        "/api/task-templates",
+        { revision: library.revision, templates: list },
+      );
+      setLibrary(result);
+      choose(next);
+      setEditing(null);
+      setStatus("任务模板已保存到服务器；当前 Episode 的修改仍需保存。");
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setTemplateBusy(false);
+    }
+  };
+  const saveServer = async () => {
+    setStatus("");
+    setError("");
+    const result = await save();
+    if (result.ok) setStatus("已保存到服务器。");
+    else setError(result.error || "保存失败，当前标注保留在页面中。");
+  };
+  const exportDataset = async () => {
+    setStatus("正在导出修订数据集…");
+    setError("");
+    try {
+      const result = await exportReview();
+      setStatus(`导出完成：${result.output_dir}`);
+    } catch (e) {
+      setError(message(e));
+      setStatus("");
+    }
+  };
+  const importBrowser = () => {
+    if (!browserDraft || !doc) return;
+    try {
+      taskSegments(browserDraft, frameTimestamps.length);
+    } catch (e) {
+      setError(`旧标注无法导入：${message(e)}`);
+      return;
+    }
+    if (
+      window.confirm(
+        "用这条数据的浏览器旧标注替换当前任务标注？服务端内容在点击保存前保持不变，原浏览器记录保留。",
+      )
+    ) {
+      updateTaskDocument(browserDraft);
+      setBrowserDraft(null);
+      setStatus("已导入浏览器草稿，请核对后保存到服务器。");
+    }
+  };
+  const busy = saving || reviewExporting || templateBusy;
+  return (
+    <section className="ta-studio" aria-label="任务模板标注工作区">
+      <header className="ta-header">
+        <div>
+          <span className="ta-kicker">TASK ANNOTATION</span>
+          <h2>任务标注</h2>
+          <p>
+            {reviewHasDraft
+              ? `服务端草稿 v${reviewRevision}`
+              : "AI / 来源初标 · 请核对片段后保存"}{" "}
+            · 模板、评分与备注随标注保存
+          </p>
+        </div>
+        <div className="ta-template-picker">
+          <label>
+            任务模板
+            <select
+              aria-label="当前任务模板"
+              value={doc?.templateId || ""}
+              disabled={!reviewReady || busy || !library}
+              onChange={(e) => {
+                const t = templates.find((t) => t.id === e.target.value);
+                if (t) choose(t);
+              }}
+            >
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={!reviewReady || busy || !library}
+            onClick={() => doc && setEditing(doc.templateSnapshot)}
+          >
+            管理任务模板
+          </button>
+          <button
+            disabled={!reviewReady || busy || !library}
+            onClick={() =>
+              setEditing({
+                ...defaultTemplate(),
+                id: uid(),
+                name: "新任务模板",
+                subtasks: [],
+              })
+            }
+          >
+            ＋ 新模板
+          </button>
+        </div>
+      </header>
+      <div className="ta-server-actions">
+        <button
+          className="ta-primary"
+          disabled={!reviewReady || busy || (!dirty && reviewHasDraft)}
+          onClick={saveServer}
+        >
+          {saving ? "正在保存…" : "保存到服务器"}
+        </button>
+        <button
+          disabled={!reviewReady || busy || dirty}
+          onClick={exportDataset}
+        >
+          {reviewExporting ? "正在导出…" : "导出修订数据集"}
+        </button>
+        {browserDraft && (
+          <button disabled={!reviewReady || busy} onClick={importBrowser}>
+            导入浏览器旧标注
+          </button>
+        )}
+        <span className="ta-muted">
+          {dirty ? "有未保存修改" : ""} · 导出生成独立副本
+        </span>
+      </div>
+      {(error || reviewError) && (
+        <p className="ta-error" role="alert">
+          {error || reviewError}
+        </p>
+      )}
+      {status && (
+        <p role="status" className="ta-local-note">
+          {status}
+        </p>
+      )}
+      {reviewLoading && <p role="status">正在读取服务端标注…</p>}
+      {reviewReady && doc && (
+        <Workspace
+          key={`${dataset}:${episode}:${doc.templateId}`}
+          template={doc.templateSnapshot}
+          dataset={dataset}
+          episode={episode}
+          serverDocument={doc}
+          onDocumentChange={update}
+          serverDirty={dirty}
+        />
+      )}
+      {editing && (
+        <TemplateEditor
+          initial={editing}
+          serverError={error}
+          busy={templateBusy}
+          onClose={() => {
+            if (!templateBusy) setEditing(null);
+          }}
+          onSave={(next) => {
+            if (!templateBusy) void saveTemplate(next);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+export function TaskAnnotationStudio() {
+  const { ident, episodeId } = useAnnotations();
+  return ident.repoId?.startsWith("bp/") && episodeId != null ? (
+    <ManagedStudio
+      key={`${ident.repoId}:${episodeId}`}
+      dataset={ident.repoId}
+      episode={episodeId}
+    />
+  ) : (
+    <BrowserStudio />
   );
 }

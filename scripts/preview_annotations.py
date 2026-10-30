@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Run the real Server/Viewer with synthetic LeRobot data and browser annotations.
+"""Run the real Server/Viewer with synthetic data and a server-owned task draft.
 
 The pinned Viewer must already be prepared at --viewer-source (normal LeTools
-setup, or a local cached copy). No robot or conversion/Doctor toolchain is used.
+setup, or a local cached copy). LeTools reads and exports the synthetic dataset;
+no robot or paid AI request is used.
 """
 
 from __future__ import annotations
@@ -167,6 +168,7 @@ def generate_dataset(dataset: Path):
         "frame_index": {"dtype": "int64", "shape": [1], "names": None},
         "episode_index": {"dtype": "int64", "shape": [1], "names": None},
         "task_index": {"dtype": "int64", "shape": [1], "names": None},
+        "index": {"dtype": "int64", "shape": [1], "names": None},
     }
     for camera in cameras:
         features[f"observation.images.{camera}"] = {
@@ -183,6 +185,7 @@ def generate_dataset(dataset: Path):
         }
     folder = dataset / "data/chunk-000"
     folder.mkdir(parents=True, exist_ok=True)
+    episode_stats, numeric_values = [], {}
     for episode in range(2):
         table = pa.table(
             {
@@ -190,6 +193,9 @@ def generate_dataset(dataset: Path):
                 "frame_index": pa.array(range(FRAMES), type=pa.int64()),
                 "episode_index": pa.array([episode] * FRAMES, type=pa.int64()),
                 "task_index": pa.array([0] * FRAMES, type=pa.int64()),
+                "index": pa.array(
+                    range(episode * FRAMES, (episode + 1) * FRAMES), type=pa.int64()
+                ),
                 "action": pa.array(
                     [
                         [math.sin(frame / 26 + j) * 0.6 for j in range(6)]
@@ -210,6 +216,36 @@ def generate_dataset(dataset: Path):
         pq.write_table(
             table, folder / f"episode_{episode:06d}.parquet", compression="NONE"
         )
+        stats = {}
+        for key, feature in features.items():
+            if feature["dtype"] == "video":
+                continue
+            values = np.asarray(table[key].to_pylist(), dtype=np.float64).reshape(
+                FRAMES, -1
+            )
+            numeric_values.setdefault(key, []).append(values)
+            stats[key] = {
+                "min": values.min(axis=0).tolist(),
+                "max": values.max(axis=0).tolist(),
+                "mean": values.mean(axis=0).tolist(),
+                "std": values.std(axis=0).tolist(),
+                "count": [FRAMES],
+            }
+        episode_stats.append({"episode_index": episode, "stats": stats})
+    (dataset / "meta/episodes_stats.jsonl").write_text(
+        "".join(json.dumps(item) + "\n" for item in episode_stats)
+    )
+    stats = {}
+    for key, chunks in numeric_values.items():
+        values = np.concatenate(chunks, axis=0)
+        stats[key] = {
+            "min": values.min(axis=0).tolist(),
+            "max": values.max(axis=0).tolist(),
+            "mean": values.mean(axis=0).tolist(),
+            "std": values.std(axis=0).tolist(),
+            "count": [len(values)],
+        }
+    (dataset / "meta/stats.json").write_text(json.dumps(stats))
     info = {
         "codebase_version": "v2.1",
         "robot_type": "mock_demo",
@@ -362,6 +398,7 @@ try {
 </script></body></html>""".replace("FIXTURE", payload)
     (source / "public").mkdir(exist_ok=True)
     (source / "public/annotation-demo.html").write_text(html)
+    return template, doc
 
 
 def run_role(role: str):
@@ -426,6 +463,10 @@ def main():
         with os.fdopen(descriptor, "w") as handle:
             json.dump(config, handle, indent=2)
     config = json.loads(config_path.read_text())
+    tool = ROOT / ".runtime/letools-venv/bin/letools"
+    if tool.is_file():
+        config["letools_bin"] = str(tool)
+        config_path.write_text(json.dumps(config, indent=2))
     client = json.loads((ROOT / "configs/client.mock.json").read_text())
     client.update(
         root=str(RUNTIME / "client"),
@@ -437,24 +478,42 @@ def main():
     client_path = RUNTIME / "client.json"
     client_path.write_text(json.dumps(client, indent=2))
     client_path.chmod(0o600)
-    dataset = RUNTIME / "datasets/mock-annotation-demo"
+    dataset = RUNTIME / "datasets/mock-annotation-demo-v2"
     generate_dataset(dataset)
     from pipeline.server.app import create_app
+    from pipeline.server.subtask_review import DraftRequest, SubtaskReview
+    from pipeline.server.task_annotations import (
+        TemplateLibrary,
+        TemplateRequest,
+        document_segments,
+    )
     from pipeline.server.viewer_bootstrap import (
         patch_cache,
         patch_channel_charts,
         patch_presentation,
     )
-    from pipeline.server.viewer_task_annotations import MARKER, patch_task_annotations
     from pipeline.shared.config import Settings
 
-    viewer = source / "src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
-    if MARKER not in viewer.read_text():
-        patch_cache(source.parent)
-        patch_channel_charts(source.parent)
-        patch_presentation(source.parent)
-    else:
-        patch_task_annotations(source.parent)
+    # Restore this demo's font substitution before checking production patches.
+    layout = source / "src/app/layout.tsx"
+    text = layout.read_text()
+    standin = 'const inter = { className: "pipeline-font", variable: "" };'
+    if standin in text:
+        definition = (
+            'const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });'
+            if "inter.variable" in text
+            else 'const inter = Inter({ subsets: ["latin"] });'
+        )
+        text = text.replace(standin, definition)
+        if 'import { Inter } from "next/font/google";' not in text:
+            text = text.replace(
+                'import type { Metadata } from "next";',
+                'import type { Metadata } from "next";\nimport { Inter } from "next/font/google";',
+            )
+        layout.write_text(text)
+    patch_cache(source.parent)
+    patch_channel_charts(source.parent)
+    patch_presentation(source.parent)
     settings = Settings.load("server", str(config_path))
     app = create_app(settings)
     imported = app.state.imports.import_path(str(dataset))
@@ -465,7 +524,33 @@ def main():
         "service",
         {"id": "service", "state": "READY", "mode": "local-mock-preview"},
     )
-    demo_bootstrap(source, dataset_id)
+    template, document = demo_bootstrap(source, dataset_id)
+    review = SubtaskReview(settings, app.state.ingest.store)
+    initial = review.episode(dataset_id, 0)
+    if not initial["has_draft"]:
+        review.save(
+            dataset_id,
+            0,
+            DraftRequest.model_validate(
+                {
+                    "revision": initial["revision"],
+                    "source_signature": initial["source_signature"],
+                    "segments": document_segments(document),
+                    "task_document": document,
+                }
+            ),
+        )
+    library = TemplateLibrary(app.state.ingest.store)
+    catalog = library.read()
+    if not any(t["id"] == template["id"] for t in catalog["templates"]):
+        library.save(
+            TemplateRequest.model_validate(
+                {
+                    "revision": catalog["revision"],
+                    "templates": [*catalog["templates"], template],
+                }
+            )
+        )
     env = {
         **os.environ,
         "DATASET_URL": "http://127.0.0.1:18082/_data",
@@ -478,6 +563,10 @@ def main():
     text = layout.read_text().replace('import { Inter } from "next/font/google";', "")
     text = text.replace(
         'const inter = Inter({ subsets: ["latin"] });',
+        'const inter = { className: "pipeline-font", variable: "" };',
+    )
+    text = text.replace(
+        'const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });',
         'const inter = { className: "pipeline-font", variable: "" };',
     )
     layout.write_text(text)

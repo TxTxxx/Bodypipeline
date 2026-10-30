@@ -1,4 +1,4 @@
-/** Browser-only task templates; independent of robot and LeRobot schemas. */
+/** Task annotation contract, independent of robot-specific capture schemas. */
 export type Scope = "episode" | "attempt" | "frame";
 export type FieldKind =
   | "rating"
