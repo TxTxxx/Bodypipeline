@@ -233,6 +233,7 @@ function VideoCard({
           type="button"
           className={`batch-flag ${has(episode) ? "active" : ""}`}
           aria-pressed={has(episode)}
+          title={has(episode) ? "已标记待检查，点击取消" : "标为待检查"}
           aria-label={`${has(episode) ? "取消" : "标为"}待检查 Episode ${episode}`}
           onClick={() => toggle(episode)}
         >
