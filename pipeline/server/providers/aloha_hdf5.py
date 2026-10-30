@@ -27,6 +27,7 @@ from ..episode_validation import EpisodeValidationError
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
 from .base import annotation_rig
 from .gripper_closure import capabilities, correct_actions
+from .hdf5_images import copy_images
 from .hdf5_preset import write_hdf5_preset
 
 DEFAULT_STATE_KEY = "observations/qpos"
@@ -228,11 +229,7 @@ class AlohaHDF5Provider:
                     dataset.attrs["height"] = height
                     dataset.attrs["encoded_format"] = "jpeg"
                     with h5py.File(package, "r") as source:
-                        encoded = source[source_key]
-                        for index in range(frames):
-                            dataset[index] = np.frombuffer(
-                                _encoded_frame(encoded, index), dtype=np.uint8
-                            )
+                        copy_images(source[source_key], dataset)
             os.replace(temporary, aligned)
         except BaseException:
             temporary.unlink(missing_ok=True)

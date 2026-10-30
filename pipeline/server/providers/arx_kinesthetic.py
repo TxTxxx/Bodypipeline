@@ -20,6 +20,7 @@ from ..episode_validation import EpisodeValidationError
 from ..quality import robot_profile_blockers, robot_quality, validate_robot_policy
 from .aloha_hdf5 import AlohaHDF5Provider
 from .gripper_closure import capabilities, correct_actions
+from .hdf5_images import copy_images, inspect_images
 from .hdf5_preset import write_hdf5_preset
 from .raw_contract import RawFileContract
 
@@ -46,11 +47,6 @@ def _self_contained(group, seen=None):
         _self_contained(group[key], seen)
 
 
-def _encoded_frame(dataset, index: int) -> bytes:
-    value = dataset[index]
-    return value.tobytes() if isinstance(value, np.ndarray) else bytes(value)
-
-
 def _image_report(dataset, name: str, frames: int) -> tuple[int, int, str]:
     if dataset.ndim not in (1, 2) or len(dataset) != frames:
         raise EpisodeValidationError(f"ARX DAgger 相机帧数不匹配：{name}")
@@ -61,8 +57,9 @@ def _image_report(dataset, name: str, frames: int) -> tuple[int, int, str]:
         raise EpisodeValidationError(f"ARX DAgger 相机编码未声明或不受支持：{name}")
     size = None
     observed = None
-    for index in range(frames):
-        payload = _encoded_frame(dataset, index)
+
+    def inspect_frame(frame):
+        payload = frame.tobytes() if isinstance(frame, np.ndarray) else bytes(frame)
         try:
             with Image.open(io.BytesIO(payload)) as image:
                 image.load()
@@ -76,18 +73,19 @@ def _image_report(dataset, name: str, frames: int) -> tuple[int, int, str]:
                     raise EpisodeValidationError(
                         f"ARX DAgger 相机实际编码与声明不一致：{name}"
                     )
-                if size is not None and size != image.size:
-                    raise EpisodeValidationError(
-                        f"ARX DAgger 相机分辨率发生变化：{name}"
-                    )
-                size = image.size
-                observed = current
+                return image.size, current
         except DomainError:
             raise
         except (OSError, ValueError) as exc:
             raise EpisodeValidationError(
                 f"ARX DAgger 相机图像无法解码：{name}"
             ) from exc
+
+    for current_size, current in inspect_images(dataset, inspect_frame):
+        if size is not None and size != current_size:
+            raise EpisodeValidationError(f"ARX DAgger 相机分辨率发生变化：{name}")
+        size = current_size
+        observed = current
     if size is None or observed is None:
         raise EpisodeValidationError(f"ARX DAgger 相机没有图像：{name}")
     return size[0], size[1], observed
@@ -387,10 +385,7 @@ class ARXKinestheticProvider(AlohaHDF5Provider):
                         height=camera["height"],
                         encoded_format=camera["encoded_format"],
                     )
-                    for index, source_index in enumerate(indices):
-                        dataset[index] = source[f"observation.images.{name}"][
-                            int(source_index)
-                        ]
+                    copy_images(source[f"observation.images.{name}"], dataset, indices)
             os.replace(temporary, aligned)
         except BaseException:
             temporary.unlink(missing_ok=True)
