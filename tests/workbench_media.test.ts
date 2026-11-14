@@ -29,6 +29,8 @@ test("one in-flight seek and only latest pending target, including backwards", (
   expect(queue.take()).toBeNull();
   queue.request(0); queue.finish();
   expect(queue.take()).toBe(0);
+  queue.finish();
+  expect(queue.take()).toBeNull(); // seeked without rVFC must not reissue endlessly
 });
 
 // A DOM-independent clock harness. Actual pixels, codec seeks and timing are
@@ -52,6 +54,9 @@ function harness(native = true) {
       load() {}
       finish(pts: number) {
         this.seeking = false; this.dispatchEvent(new Event("seeked"));
+        this.present(pts);
+      }
+      present(pts: number) {
         const callbacks = [...this.callbacks.values()]; this.callbacks.clear();
         callbacks.forEach(fn => fn(0, { mediaTime: pts }));
       }
@@ -148,5 +153,16 @@ test("obsolete play Promise rejection cannot pause the newer play intent", async
   promises.slice(3).forEach(p => p.resolve());
   await latest;
   expect(h.controller.playing).toBe(true);
+  h.controller.dispose();
+});
+
+test("playing away from a completed seek does not suppress seeking back to it", async () => {
+  const h = harness();
+  h.controller.seek(5); h.flush();
+  h.hosts.forEach((c, i) => c.video.finish(media.cameras[i].start + 5 / 30));
+  await h.controller.play();
+  h.hosts.forEach((c, i) => c.video.present(media.cameras[i].start + 15 / 30));
+  h.controller.seek(5); h.flush();
+  expect(h.hosts.map(c => c.video.seeks.length)).toEqual([2, 2, 2]);
   h.controller.dispose();
 });

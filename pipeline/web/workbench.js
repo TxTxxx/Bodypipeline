@@ -26,15 +26,17 @@ function seekTime(media, camera, frame) {
 class LatestSeek {
   target = 0;
   issued = null;
+  completed = null;
   request(frame) {
     this.target = frame;
   }
   take() {
-    if (this.issued !== null)
+    if (this.issued !== null || this.completed === this.target)
       return null;
     return this.issued = this.target;
   }
   finish() {
+    this.completed = this.issued;
     this.issued = null;
   }
 }
@@ -52,6 +54,7 @@ class VideoTransport {
   pumpFrame = 0;
   fallbackTimer;
   fallback;
+  fallbackFrame = null;
   objects = [];
   listeners = [];
   published = -1;
@@ -212,15 +215,19 @@ class VideoTransport {
   async precise() {
     if (this.disposed || this.playing || this.browsing || this.alignedFrame !== null)
       return;
+    if (this.fallback && !this.fallback.signal.aborted && this.fallbackFrame === this.target)
+      return;
     this.fallback?.abort();
     const abort = this.fallback = new AbortController, generation = this.generation, target = this.target;
+    this.fallbackFrame = target;
+    let objects = [];
     try {
       const frames = await this.options.exact(target, abort.signal);
       if (abort.signal.aborted || this.disposed || generation !== this.generation)
         return;
       if (frames.length !== this.cameras.length || frames.some((f, i) => f.frame !== target || presentedFrame(this.options.media, i, f.pts) !== target))
         throw Error("精确画面时间戳与数据帧不一致");
-      const objects = frames.map((f) => URL.createObjectURL(f.blob));
+      objects = frames.map((f) => URL.createObjectURL(f.blob));
       const images = await Promise.all(objects.map(async (url) => {
         const image = new Image;
         image.src = url;
@@ -233,9 +240,13 @@ class VideoTransport {
       }
       this.objects.forEach(URL.revokeObjectURL);
       this.objects = objects;
+      objects = [];
       this.cameras.forEach((c, i) => {
-        c.image.src = images[i].src;
-        c.image.hidden = false;
+        const image = images[i];
+        image.alt = c.image.alt;
+        image.dataset.frameImage = c.image.dataset.frameImage;
+        c.image.replaceWith(image);
+        c.image = image;
         c.shown = target;
         c.host.dataset.displayedFrame = String(target);
         c.host.dataset.mediaPts = String(frames[i].pts);
@@ -246,6 +257,10 @@ class VideoTransport {
     } catch (e) {
       if (!abort.signal.aborted && !this.disposed && generation === this.generation)
         this.options.error(`精确画面暂不可用：${e.message}。目标帧未被标为已对齐。`);
+    } finally {
+      objects.forEach(URL.revokeObjectURL);
+      if (this.fallback === abort)
+        this.fallbackFrame = null;
     }
   }
   ready() {
@@ -277,6 +292,7 @@ class VideoTransport {
     this.browsing = false;
     this.cameras.forEach((c) => {
       c.image.hidden = true;
+      c.queue.completed = null;
     });
     try {
       await Promise.all(this.cameras.map((c) => c.video.play()));

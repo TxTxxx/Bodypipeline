@@ -38,12 +38,13 @@ export function seekTime(media: Media, camera: number, frame: number): number {
 export class LatestSeek {
   target = 0;
   issued: number | null = null;
+  completed: number | null = null;
   request(frame: number) { this.target = frame; }
   take(): number | null {
-    if (this.issued !== null) return null;
+    if (this.issued !== null || this.completed === this.target) return null;
     return this.issued = this.target;
   }
-  finish() { this.issued = null; }
+  finish() { this.completed = this.issued; this.issued = null; }
 }
 
 interface Camera {
@@ -79,6 +80,7 @@ export class VideoTransport {
   private pumpFrame = 0;
   private fallbackTimer?: ReturnType<typeof setTimeout>;
   private fallback?: AbortController;
+  private fallbackFrame: number | null = null;
   private objects: string[] = [];
   private listeners: { frame: number; resolve: (ready: boolean) => void }[] = [];
   private published = -1;
@@ -237,16 +239,19 @@ export class VideoTransport {
 
   private async precise() {
     if (this.disposed || this.playing || this.browsing || this.alignedFrame !== null) return;
+    if (this.fallback && !this.fallback.signal.aborted && this.fallbackFrame === this.target) return;
     this.fallback?.abort();
     const abort = this.fallback = new AbortController(), generation = this.generation,
       target = this.target;
+    this.fallbackFrame = target;
+    let objects: string[] = [];
     try {
       const frames = await this.options.exact(target, abort.signal);
       if (abort.signal.aborted || this.disposed || generation !== this.generation) return;
       if (frames.length !== this.cameras.length || frames.some((f, i) =>
         f.frame !== target || presentedFrame(this.options.media, i, f.pts) !== target))
         throw Error("精确画面时间戳与数据帧不一致");
-      const objects = frames.map(f => URL.createObjectURL(f.blob));
+      objects = frames.map(f => URL.createObjectURL(f.blob));
       const images = await Promise.all(objects.map(async url => {
         const image = new Image(); image.src = url; await image.decode(); return image;
       }));
@@ -255,9 +260,15 @@ export class VideoTransport {
       }
       this.objects.forEach(URL.revokeObjectURL);
       this.objects = objects;
+      objects = [];
       this.cameras.forEach((c, i) => {
-        c.image.src = images[i].src;
-        c.image.hidden = false;
+        // Mount the already-decoded image, rather than certifying a new src
+        // assignment whose visible image might still be the previous frame.
+        const image = images[i];
+        image.alt = c.image.alt;
+        image.dataset.frameImage = c.image.dataset.frameImage;
+        c.image.replaceWith(image);
+        c.image = image;
         c.shown = target;
         c.host.dataset.displayedFrame = String(target);
         c.host.dataset.mediaPts = String(frames[i].pts);
@@ -268,6 +279,9 @@ export class VideoTransport {
     } catch (e: any) {
       if (!abort.signal.aborted && !this.disposed && generation === this.generation)
         this.options.error(`精确画面暂不可用：${e.message}。目标帧未被标为已对齐。`);
+    } finally {
+      objects.forEach(URL.revokeObjectURL);
+      if (this.fallback === abort) this.fallbackFrame = null;
     }
   }
 
@@ -292,7 +306,10 @@ export class VideoTransport {
     this.generation++;
     this.playing = true;
     this.browsing = false;
-    this.cameras.forEach(c => { c.image.hidden = true; });
+    this.cameras.forEach(c => {
+      c.image.hidden = true;
+      c.queue.completed = null; // Playback advances away from the last seek.
+    });
     try {
       await Promise.all(this.cameras.map(c => c.video.play()));
       if (!this.disposed && intent === this.playIntent) this.publish();
