@@ -90,6 +90,7 @@ interface Session {
   mapping?: Record<string, string>;
   retryAt: number;
   localError?: string;
+  readFailure?: string;
 }
 const sessions = new Map<number, Session>();
 let loadGeneration = 0,
@@ -200,13 +201,19 @@ function schedule() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     for (const s of sessions.values())
-      if (s.dirty && !s.remote && !s.saving && Date.now() >= s.retryAt)
+      if (
+        s.dirty &&
+        !s.remote &&
+        !s.readFailure &&
+        !s.saving &&
+        Date.now() >= s.retryAt
+      )
         safe(() => sync(s));
   }, 500);
 }
 async function sync(s: Session): Promise<void> {
   if (s.saving) return s.saving;
-  if (!s.dirty || s.remote) return;
+  if (!s.dirty || s.remote || s.readFailure) return;
   const snapshot = copy(s.doc);
   const op = s.operation;
   const revision = s.head.revision;
@@ -276,6 +283,7 @@ async function sync(s: Session): Promise<void> {
 async function direct(extra: Record<string, unknown>) {
   const s = current();
   await sync(s);
+  if (s.readFailure) throw Error(s.readFailure);
   if (s.dirty || s.remote) throw Error("请先同步或处理冲突；本地输入保留");
   const original = copy(s.doc);
   const response = await request(
@@ -318,8 +326,10 @@ function renderStatus() {
   $("save-status").innerHTML +=
     `<br><span class="hint">Episode 修订 ${s.head.revision} · ${s.head.complete ? "人工已完成" : "尚未声明完成"}${s.localError ? " · 本地备份失败" : " · 本地备份可恢复"}</span>`;
   const c = $("conflict");
-  c.hidden = !s.remote;
-  if (s.remote) {
+  c.hidden = !s.remote && !s.readFailure;
+  if (s.readFailure) {
+    c.innerHTML = `<strong>旧来源草稿已保留</strong><p>${esc(s.readFailure)}</p>`;
+  } else if (s.remote) {
     c.innerHTML =
       '<strong>这个 Episode 已在其他窗口更新</strong><p>本地修改与服务器内容均保留。其他 Episode 可以继续工作。</p><button id="compare-conflict">对照双方并处理</button>';
     btn("compare-conflict", conflictDialog);
@@ -421,7 +431,9 @@ async function refresh(reset = true) {
     allRows = old.rows;
     rows = allRows;
     signature = old.signature;
-    note("来源列表使用本地备份；未同步修改继续保留。筛选需恢复连接后核实。");
+    note(
+      `${e.message}。来源列表使用本地备份；未同步修改继续保留，筛选需恢复连接后核实。`,
+    );
   }
   if (reset) page = 0;
   renderEpisodes();
@@ -495,13 +507,20 @@ async function openEpisode(ep: number) {
   else {
     const saved = drafts.read(ep);
     let head: Head;
+    let headError = "",
+      readFailure: string | undefined;
     try {
       head = await request(`${dataset}/episodes/${ep}`);
-    } catch (e) {
-      if (!saved)
-        throw Error("这个 Episode 尚未缓存；已缓存的 Episode 仍可离线编辑");
+    } catch (e: any) {
+      const network = e instanceof TypeError;
+      headError = network
+        ? "网络不可用，正在使用本地备份"
+        : `服务器读取失败：${e.message}`;
+      if (!saved) throw Error(`${headError}；这个 Episode 尚未缓存`);
       head = saved.head;
-      note("正在使用本地备份，服务器同步尚未完成");
+      if ([401, 403, 409, 404, 422].includes(e.status))
+        readFailure = `${headError}。保留旧来源草稿，仅在本地编辑；刷新核对前禁止同步到服务器。`;
+      note(readFailure || headError);
     }
     const sameSource =
       !saved || saved.head.source_signature === head.source_signature;
@@ -519,6 +538,8 @@ async function openEpisode(ep: number) {
       operation: saved?.operation || "edit",
       mapping: use ? saved!.mapping : undefined,
       retryAt: 0,
+      error: headError,
+      readFailure,
     };
     if (use) {
       s.undo.past = saved!.past || [];
@@ -552,6 +573,7 @@ async function openEpisode(ep: number) {
   zoomStart = 0;
   zoomEnd = s.head.frames;
   try {
+    if (s.readFailure) throw Error(s.readFailure);
     if (s.remote && s.remote.source_signature !== s.head.source_signature)
       throw Error("来源版本改变，旧草稿与新来源隔离，请先处理冲突");
     s.media = await request(`${sourceDataset}/episodes/${ep}/media`);
@@ -638,6 +660,16 @@ function renderPreview() {
         else high = mid - 1;
       }
       frame = low;
+      $("preview")
+        .querySelectorAll<HTMLVideoElement>("video")
+        .forEach((v, i) => {
+          if (
+            i &&
+            Math.abs(v.currentTime - s.media!.cameras[i].start - time) >
+              0.5 / s.media!.fps
+          )
+            v.currentTime = s.media!.cameras[i].start + time;
+        });
       updateFrameNumber("连续播放 · 暂停后定位数据帧");
       renderTimeline();
       if (time >= s.media.duration - 1 / s.media.fps / 2) pause();
@@ -736,6 +768,7 @@ function pause() {
 function play() {
   const s = current();
   if (!s.media) return;
+  if (s.readFailure) throw Error(s.readFailure);
   if (s.remote && s.remote.source_signature !== s.head.source_signature)
     throw Error("来源变化后禁止播放新来源覆盖旧草稿画面");
   playing = true;
@@ -1048,6 +1081,9 @@ async function createSegment(relabel = false, confirm = false) {
 }
 function fieldControl(f: Field, v: Value | undefined, key: string) {
   const desc = f.description || f.scale;
+  const inputKey = `field:${f.scope}:${key}:${f.id}`;
+  const pending = current().input[inputKey];
+  if (pending !== undefined) v = pending;
   let control = "";
   if (f.kind === "single" || f.kind === "bool") {
     const opts =
@@ -1093,13 +1129,15 @@ function bindFields(
               !Number.isFinite(v) ||
               (el instanceof HTMLInputElement && !el.validity.valid)
             ) {
-              current().input[`field:${scope}:${f.id}`] = el.value;
+              current().input[`field:${scope}:${el.dataset.key}:${f.id}`] =
+                el.value;
               backup(current());
               note("输入尚未有效，已保留在编辑中草稿");
               return;
             }
           }
           if (v !== null && f.kind === "bool") v = v === "true";
+          delete current().input[`field:${scope}:${el.dataset.key}:${f.id}`];
           edit("field", (d) => update(d, f.id, v));
         }),
       ),
@@ -1874,12 +1912,14 @@ btn("forward", () => {
 });
 btn("play", () => (playing ? pause() : play()));
 value("frame").onchange = () => {
+  const target = Number(value("frame").value);
   pause();
-  safe(() => seek(Number(value("frame").value)));
+  safe(() => seek(target));
 };
 value("scrub").oninput = () => {
+  const target = Number(value("scrub").value);
   pause();
-  safe(() => seek(Number(value("scrub").value)));
+  safe(() => seek(target));
 };
 value("scrub").onchange = () => safe(() => seek(Number(value("scrub").value)));
 function setTool(next: typeof tool) {
@@ -2020,7 +2060,14 @@ btn("history", historyDialog);
 btn("candidates", candidateDialog);
 btn("templates", templateDialog);
 btn("delivery", deliveryDialog);
-btn("refresh", () => refresh(false));
+btn("refresh", async () => {
+  await refresh(false);
+  if (active?.readFailure) {
+    backup(active);
+    sessions.delete(episode);
+    await openEpisode(episode);
+  }
+});
 btn("filter", async () => {
   await sync(current());
   filterState = {
@@ -2100,10 +2147,23 @@ window.addEventListener("offline", () =>
 );
 setInterval(() => {
   for (const s of sessions.values())
-    if (s.dirty && !s.remote && !s.saving && Date.now() >= s.retryAt)
+    if (
+      s.dirty &&
+      !s.remote &&
+      !s.readFailure &&
+      !s.saving &&
+      Date.now() >= s.retryAt
+    )
       safe(() => sync(s));
 }, 2000);
 async function init() {
+  if (window.top !== window) {
+    document.body.classList.add("embedded");
+    $("embedded-context").hidden = false;
+    value("dataset").disabled = true;
+    const target = new URL(location.href);
+    $("open-workspace").setAttribute("href", target.href);
+  }
   try {
     const result = await request("datasets");
     value("dataset").innerHTML = result.datasets

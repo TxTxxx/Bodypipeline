@@ -179,7 +179,7 @@ def integrated(argus, work, source):
                     content = "{"
                 elif attempt == 3:
                     bad = json.loads(content)
-                    bad["bodypipeline_task"]["attempts"][0]["subtask_id"] = "unknown-ID"
+                    bad["bodypipeline_task"]["attempts"][0]["continues_before"] = True
                     content = json.dumps(bad)
             counts[kind] += 1
             seen.append(
@@ -278,6 +278,10 @@ def integrated(argus, work, source):
         trial = json.loads(files[0].read_text())
         before = counts.copy()
         assert trial["labels"]["bodypipeline_task"]["version"] == 2
+        assert any(
+            "continuation" in (invoice.get("labels") or {}).get("_parse_error", "")
+            for invoice in trial["final_cost_history"]
+        )
         assert trial["pipeline_boundary"]["pending"] == []
         assert trial["pipeline_boundary"]["requests"]
         trial_ep = next(k for k in counts if k.startswith("coarse:"))
@@ -309,6 +313,7 @@ def integrated(argus, work, source):
             "trial_success_reused": counts[trial_ep] == 4,
             "trial_logical_sends": counts[trial_ep],
             "prepared_receipt_verified": True,
+            "continuation_rejected_before_retry": True,
             "synthetic_model": True,
         }
     finally:

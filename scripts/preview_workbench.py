@@ -22,8 +22,37 @@ from pipeline.shared.config import Settings
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def app_for(viewer=False):
+def app_for(viewer=False, model_fixture=False):
     root = ROOT / ".runtime/body2-preview"
+    model_options = {}
+    if model_fixture and not viewer:
+        import os
+        import sys
+
+        sys.path.insert(0, str(ROOT / "tests/fixtures"))
+        from workbench_mock_model import serve
+
+        serve(18104, root / "mock-model-requests.jsonl")
+        # Public dummy credential accepted only by this local fixture.
+        os.environ["BODY2_SYNTHETIC_MODEL_KEY"] = "synthetic-local-fixture"
+        os.environ["FFMPEG"] = str(ROOT / ".runtime/toolchain/usr/bin/ffmpeg")
+        os.environ["FFPROBE"] = str(ROOT / ".runtime/toolchain/usr/bin/ffprobe")
+        os.environ["LD_LIBRARY_PATH"] = str(
+            ROOT / ".runtime/toolchain/usr/lib/x86_64-linux-gnu"
+        )
+        model_options = dict(
+            argus_src=str(ROOT / ".runtime/vendor/argus"),
+            argus_python=str(ROOT / ".runtime/argus-venv/bin/python"),
+            argus_base_url="http://127.0.0.1:18104/v1",
+            argus_api_key_env="BODY2_SYNTHETIC_MODEL_KEY",
+            argus_model="synthetic-fixture",
+            argus_models=["synthetic-fixture"],
+            argus_prices={"synthetic-fixture": [[0.000001, 0, 0.000001]]},
+            argus_max_tokens=2048,
+            argus_annotation_concurrency=1,
+            argus_annotation_reasoning="none",
+            argus_annotation_inspection="off",
+        )
     settings = Settings(
         role="viewer" if viewer else "server",
         root=root / "state",
@@ -38,6 +67,7 @@ def app_for(viewer=False):
         server_url="http://127.0.0.1:18102",
         viewer_origin="http://127.0.0.1:18103",
         viewer_ui_port=13121,
+        **model_options,
     )
     if viewer:
         from pipeline.server.viewer import create_gateway
@@ -224,7 +254,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--viewer", action="store_true")
+    parser.add_argument("--model-fixture", action="store_true")
     args = parser.parse_args()
     uvicorn.run(
-        app_for(args.viewer), host="127.0.0.1", port=18103 if args.viewer else 18102
+        app_for(args.viewer, args.model_fixture),
+        host="127.0.0.1",
+        port=18103 if args.viewer else 18102,
     )

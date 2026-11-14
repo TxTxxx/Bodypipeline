@@ -39,6 +39,9 @@ def specification(tmp_path, monkeypatch):
             }
         ],
     }
+    from pipeline.server.task_annotations import TaskTemplate
+
+    template = TaskTemplate.model_validate(template).model_dump(exclude_none=True)
     spec = {
         "version": 2,
         "template": template,
@@ -297,3 +300,83 @@ def test_capability_detection_distinguishes_native_old_template_and_v2(tmp_path)
     )
     assert template_available(settings)
     assert execution_available(settings)
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("continues_before", True),
+        ("continues_after", True),
+        ("continues_before", "false"),
+        ("continues_after", 1),
+    ],
+)
+def test_non_piece_continuations_fail_the_shared_parser_and_retry(
+    specification, flag, value
+):
+    import json
+
+    task = business(specification)
+    task["attempts"][0][flag] = value
+    ctx = {"fps": 10, "n_state_frames": 10}
+    with pytest.raises(ValueError, match="continuation"):
+        validate_task_reply(task, specification, ctx)
+    _, valid = parse_template_reply(
+        json.dumps({"bodypipeline_task": task}), {"bodypipeline_context": ctx}
+    )
+    assert not valid
+    for index in range(1, 5):
+        reason = logical_retry_reason(
+            {"parse_ok": False, "response": {}, "final_attempt_index": index}
+        )
+        assert bool(reason) == (index < 4)
+
+
+def test_piece_continuations_require_real_clipped_edges(specification):
+    from copy import deepcopy
+
+    ctx = {
+        "fps": 10,
+        "n_state_frames": 10,
+        "piece": {"t0_s": 1, "index": 2, "count": 3},
+    }
+    task = business(specification)
+    task["attempts"][0]["continues_before"] = True
+    task["attempts"][1]["continues_after"] = True
+    task["segments"][-1].update(label="UNKNOWN", attempt_id="try-b")
+    validate_task_reply(task, specification, ctx)
+    last = deepcopy(ctx)
+    last["piece"]["index"] = 3
+    with pytest.raises(ValueError, match="continuation after"):
+        validate_task_reply(task, specification, last)
+    task["segments"][0]["start_s"] = 0.1
+    with pytest.raises(ValueError, match="continuation before"):
+        validate_task_reply(task, specification, ctx)
+
+
+def test_resume_classifies_bad_continuation_only(specification, tmp_path):
+    from copy import deepcopy
+    from pipeline.server.template_annotation import (
+        invalid_received_units,
+        retry_manifest,
+    )
+
+    for ep in (0, 1):
+        name = f"episode_{ep:06}"
+        atomic_json(
+            tmp_path / f"argus/episodes/{name}/context.json",
+            {"episode_id": name, "fps": 10, "n_state_frames": 10},
+        )
+        task = deepcopy(business(specification))
+        if ep == 1:
+            task["attempts"][0]["continues_before"] = True
+        atomic_json(
+            tmp_path / f"argus/run/out/{name}.json",
+            {
+                "parse_ok": True,
+                "labels": {"bodypipeline_task": task},
+                "response_text": str(ep),
+            },
+        )
+    assert invalid_received_units(tmp_path) == ["episode_000001"]
+    assert len(retry_manifest(tmp_path)["invalid_replies"]) == 1

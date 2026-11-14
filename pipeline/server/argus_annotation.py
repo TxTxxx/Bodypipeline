@@ -491,10 +491,28 @@ def command(settings, annotation: dict, data: Path, work: Path) -> list[str]:
     max_tokens = annotation.get("max_tokens")
     if max_tokens:
         args += ["--max-tokens", str(int(max_tokens))]
-    if annotation.get("task_template") and int(annotation.get("attempts") or 0) > 1:
-        from .template_annotation import invalid_received_units
+    if int(annotation.get("attempts") or 0) > 1:
+        if annotation.get("task_template"):
+            from .template_annotation import invalid_received_units
 
-        for name in invalid_received_units(work):
+            invalid = invalid_received_units(work)
+        else:
+            invalid = [
+                name
+                for name, path in _raw_files(Path(work) / "argus").items()
+                if (data := _read_json(path))
+                and (
+                    data.get("response") is not None
+                    or data.get("response_text") is not None
+                )
+                and not data.get("dry_run")
+                and (
+                    data.get("parse_ok") is False
+                    or (data.get("labels") or {}).get("_incomplete")
+                    or (data.get("labels") or {}).get("_schema_violations")
+                )
+            ]
+        for name in invalid:
             args += ["--retry-received", name]
     return [python, *args]
 
@@ -828,25 +846,13 @@ def cost(work: Path) -> dict:
         "cap_usd": info.get("cap_usd"),
     }
     if value["cost_usd"] is None:
-        billed = 0.0
-        reserved = 0.0
-        complete = True
-        for path in _raw_files(Path(work) / "argus").values():
-            data = _read_json(path)
-            if data.get("dry_run"):
-                continue
-            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-            estimate = usage.get("est_cost_usd")
-            if isinstance(estimate, (int, float)) and not isinstance(estimate, bool):
-                billed += float(estimate)
-            else:
-                complete = False
-            bound = data.get("final_reserved_usd")
-            if isinstance(bound, (int, float)) and not isinstance(bound, bool):
-                reserved += float(bound)
-        value["cost_usd"] = round(billed, 6) if complete else None
-        value["reserved_cost_usd"] = round(reserved, 6)
-        value["cost_complete"] = complete
+        # Read cumulative durable receipts, rather than only the last response.
+        # Fine evidence, retries, dictionary work and unknown invoices all spend
+        # the same allowance even when the process died before run.json settled.
+        from .argus_billing import receipt_spend
+
+        ledger = receipt_spend(Path(work) / "argus")
+        value.update(ledger)
     return value
 
 

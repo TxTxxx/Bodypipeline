@@ -69,6 +69,7 @@ def test_pinned_argus_trial_then_full_reuses_success_and_refines_real_frames(tmp
     assert result.returncode == 0, result.stderr[-7000:] + result.stdout[-2000:]
     summary = json.loads(result.stdout.splitlines()[-1])
     assert summary["native_parser"] and summary["native_retry"]
+    assert summary["continuation_rejected_before_retry"]
     assert summary["mixed_transport_sends"] == 4
     assert summary["trial_success_reused"] and summary["coarse_requests"] == 15
     assert summary["fine_requests"] >= 12

@@ -876,3 +876,26 @@ dialog pre {
 [hidden] {
   display: none !important;
 }
+
+.embedded-context {
+  padding: 10px 16px;
+  background: #e9efff;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.embedded-context a {
+  font-weight: 600;
+  white-space: nowrap;
+}
+body.embedded .episodes {
+  display: none;
+}
+body.embedded .layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+body.embedded .top {
+  position: relative;
+}

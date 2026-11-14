@@ -1157,3 +1157,61 @@ def test_old_native_argus_rejects_free_trial_and_selection_without_dispatch(serv
             runner.enqueue("job-1", run_scope=scope, episodes=[0])
     assert not store.all("annotation")
     assert runner.enqueue("job-1")["run_scope"] == "full"
+
+
+def test_failed_run_cost_retains_retry_fine_and_dictionary_reservations(tmp_path):
+    work = tmp_path / "work"
+    out = work / "argus/run/out"
+    out.mkdir(parents=True)
+    (out / "episode_000000.json").write_text(
+        json.dumps({"usage": {"est_cost_usd": 1}, "final_attempt_index": 1})
+    )
+    (out / "noreply_episode_000000.json").write_text(
+        json.dumps(
+            {
+                "final_attempt_index": 2,
+                "final_dispatch_outcome": "unverified",
+                "final_reserved_usd": 2,
+                "final_cost_history": [{"usage": {"est_cost_usd": 1}}],
+                "auxiliary_cost_history": [
+                    {
+                        "kind": "bodypipeline_boundary",
+                        "cost_usd": 3,
+                        "cost_is_conservative_estimate": True,
+                    },
+                    {"kind": "bodypipeline_boundary", "cost_usd": 0.5},
+                ],
+            }
+        )
+    )
+    (work / "argus/dictionary.claim").write_text("claimed")
+    (work / "argus/dictionary_status.json").write_text(
+        json.dumps({"projected_upper_usd": 1.5})
+    )
+    cost = argus_annotation.cost(work)
+    assert cost["reserved_cost_usd"] == 8.0
+    assert cost["cost_usd"] is None and not cost["cost_complete"]
+
+
+def test_free_resume_retries_only_received_invalid_native_replies(service, tmp_path):
+    runner, _, _, data = service
+    row = runner.enqueue("job-1")
+    row["attempts"] = 2
+    work = tmp_path / "work"
+    out = work / "argus/run/out"
+    out.mkdir(parents=True)
+    for ep, record in enumerate(
+        [
+            {"parse_ok": True, "response": {}, "labels": {"task_summary": "valid"}},
+            {
+                "parse_ok": False,
+                "response": {},
+                "labels": {"_incomplete": ["no timeline"]},
+            },
+            {"parse_ok": False, "no_reply_kind": "client_timeout"},
+        ]
+    ):
+        (out / f"episode_{ep:06}.json").write_text(json.dumps(record))
+    argv = argus_annotation.command(runner.settings, row, data, work)
+    assert argv.count("--retry-received") == 1
+    assert argv[argv.index("--retry-received") + 1] == "episode_000001"

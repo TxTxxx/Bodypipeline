@@ -229,6 +229,9 @@ def validate_task_reply(task: dict, spec: dict, context: dict | None = None) -> 
             if a.get("outcome") not in (None, "success", "failure", "unknown"):
                 raise ValueError("invalid attempt outcome")
             _field_values(a.get("values", {}), "attempt", template)
+            for flag in ("continues_before", "continues_after"):
+                if type(a.get(flag, False)) is not bool:
+                    raise ValueError("continuation flags must be booleans")
         segments = task.get("segments")
         if not isinstance(segments, list) or len(segments) > 10000:
             raise ValueError("segments missing")
@@ -263,6 +266,36 @@ def validate_task_reply(task: dict, spec: dict, context: dict | None = None) -> 
                 raise ValueError("invalid segment text")
             _field_values(s.get("values", {}), "segment", template)
             spans.append(bounds(s))
+        piece = (context or {}).get("piece") or {}
+        for a in attempts:
+            associated = [s for s in segments if s.get("attempt_id") == a["id"]]
+            if a.get("continues_before"):
+                if (
+                    not piece
+                    or not fps
+                    or not associated
+                    or float(piece.get("t0_s", 0)) <= 0
+                    or min(math.ceil(s["start_s"] * fps - 1e-6) for s in associated)
+                    != 0
+                ):
+                    raise ValueError(
+                        "continuation before is not at a synthetic request boundary"
+                    )
+            if a.get("continues_after"):
+                index, parts = piece.get("index"), piece.get("count")
+                if (
+                    not piece
+                    or not fps
+                    or not associated
+                    or type(index) is not int
+                    or type(parts) is not int
+                    or not 1 <= index < parts
+                    or max(math.ceil(s["end_s"] * fps - 1e-6) for s in associated)
+                    != count
+                ):
+                    raise ValueError(
+                        "continuation after is not at a synthetic request boundary"
+                    )
     else:
         raise ValueError("unknown business contract version")
     end = 0
