@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>标注工作区 · BodyPipeline</title>
+    <link rel="stylesheet" href="/workbench-assets/workbench.css" />
+  </head>
+  <body data-gateway="false">
+    <header class="top">
+      <a href="/" class="brand"
+        ><b>B</b> BodyPipeline <span>/ 标注工作区</span></a
+      ><select id="dataset" aria-label="来源数据集">
+        <option>读取数据集…</option></select
+      ><a href="/#annotations">自动标注</a
+      ><button id="templates">共享模板</button
+      ><button id="delivery">
+        交付清单 <strong id="selection-count">0</strong>
+      </button>
+    </header>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <main class="layout">
+      <aside class="episodes">
+        <div class="aside-head">
+          <h2>Episodes</h2>
+          <button id="refresh" title="刷新列表">↻</button>
+        </div>
+        <div class="filters">
+          <label
+            >指定 subtask<select id="filter-step">
+              <option value="">全部 Episode</option>
+            </select></label
+          >
+          <div class="row">
+            <label
+              >恰好次数<input
+                id="filter-count"
+                type="number"
+                min="0"
+                placeholder="不限" /></label
+            ><label
+              >计数口径<select id="filter-basis">
+                <option value="complete">仅次数确定</option>
+                <option value="recorded">按已记录数找草稿</option>
+              </select></label
+            >
+          </div>
+          <button id="filter">查找 Episode</button
+          ><small>按独立尝试去重，不按片段计数。次数不确定仍可手动加入。</small>
+        </div>
+        <div class="selection-tools">
+          <button id="select-page">加入当前页</button
+          ><button id="select-results">加入全部结果</button>
+        </div>
+        <div id="episode-list"></div>
+        <div class="pagination">
+          <button id="prev-page">←</button><span id="page-status"></span
+          ><button id="next-page">→</button>
+        </div>
+        <button id="clear-filter">查看全部，人工逐条加入</button>
+      </aside>
+      <section class="workspace" id="workspace">
+        <div class="episode-heading">
+          <div>
+            <span class="eyebrow">FRAME ALIGNED · SINGLE TRACK</span>
+            <h1 id="episode-title">选择一个 Episode</h1>
+          </div>
+          <div id="save-status"></div>
+        </div>
+        <div id="conflict" hidden></div>
+        <div class="preview" id="preview">
+          <div class="empty">打开数据后在这里比较实际画面</div>
+        </div>
+        <div class="transport">
+          <div class="row">
+            <button id="first" title="首帧">|←</button
+            ><button id="back" title="前一帧">← 帧</button
+            ><button id="play">播放</button
+            ><button id="forward" title="后一帧">帧 →</button
+            ><button id="last" title="末帧">→|</button>
+          </div>
+          <label class="frame-input"
+            >数据帧 <input id="frame" type="number" min="0" value="0" /><span
+              id="total"
+              >/ —</span
+            ></label
+          ><span id="frame-state">尚未定位</span>
+        </div>
+        <input
+          id="scrub"
+          aria-label="粗略浏览整个 Episode"
+          type="range"
+          min="0"
+          value="0"
+          step="1"
+        />
+        <div class="timeline-toolbar">
+          <div class="row">
+            <button id="browse" class="active">浏览</button
+            ><button id="range-tool">框选范围</button
+            ><button id="move-tool">移动选中片段</button>
+          </div>
+          <div class="row">
+            <button id="zoom-in">＋ 放大</button
+            ><button id="zoom-out">－ 缩小</button
+            ><button id="zoom-all">全片</button><button id="undo">撤销</button
+            ><button id="redo">重做</button>
+          </div>
+        </div>
+        <p class="hint" id="tool-hint">
+          标尺浏览画面 · 片段正文只选中 · 两侧把手调界 · 首末帧均包含
+        </p>
+        <div id="timeline" class="timeline" aria-label="单主时间轨道">
+          <div id="ruler" class="ruler"></div>
+          <div id="track" class="track"></div>
+        </div>
+        <div class="row range-navigation">
+          <button id="pan-left">← 局部窗口</button><span id="zoom-status"></span
+          ><button id="pan-right">局部窗口 →</button>
+        </div>
+        <div id="document-summary"></div>
+        <div class="editor-grid">
+          <section class="card">
+            <div class="card-heading">
+              <h2>选范围，再贴标签</h2>
+              <span id="input-status" class="hint"></span>
+            </div>
+            <div class="row">
+              <label
+                >首帧（包含）<input
+                  id="range-first"
+                  type="text"
+                  inputmode="numeric"
+                  value="0" /></label
+              ><label
+                >末帧（包含）<input
+                  id="range-last"
+                  type="text"
+                  inputmode="numeric"
+                  value="0"
+              /></label>
+            </div>
+            <div class="row">
+              <button id="mark-start">当前帧作起点</button
+              ><button id="mark-end">当前帧作终点</button
+              ><button id="continue-range">沿用下一帧起点</button>
+            </div>
+            <label>内容<select id="new-label"></select></label>
+            <div id="definition" class="definition"></div>
+            <label>尝试关联<select id="association"></select></label
+            ><label id="new-outcome-label"
+              >新尝试结果<select id="new-outcome">
+                <option value="">暂缺（草稿）</option>
+                <option value="success">成功</option>
+                <option value="failure">失败</option>
+                <option value="unknown">无法判断</option>
+              </select></label
+            ><label
+              >局部备注 / UNKNOWN 原因<textarea
+                id="new-note"
+                rows="2"
+              ></textarea></label
+            ><label id="description-label"
+              >模板外活动描述<textarea id="new-description" rows="2"></textarea>
+            </label>
+            <div class="row">
+              <button id="create" class="primary">创建片段</button
+              ><button id="create-confirm">创建并确认</button
+              ><button id="replace-range">重标选中范围</button>
+            </div>
+            <p class="hint">
+              局部替换保留两侧原内容。新建尝试表示明确记录一次实际执行。
+            </p>
+          </section>
+          <section class="card">
+            <div class="card-heading">
+              <h2>选中片段</h2>
+              <button id="unselect">取消选中</button>
+            </div>
+            <div id="segment-editor" class="empty">
+              点击主轨道的片段正文，播放头保持原位。
+            </div>
+          </section>
+        </div>
+        <section class="card">
+          <div class="card-heading">
+            <h2>人工核对</h2>
+            <span id="review-state"></span>
+          </div>
+          <div class="row">
+            <button id="confirm-range">确认所选范围内已有片段</button
+            ><button id="complete" class="primary">核查条件并声明完成</button
+            ><button id="count-evidence">记录目标 subtask 的计数依据</button
+            ><button id="history">查看保存历史</button
+            ><button id="candidates">AI 独立候选</button>
+          </div>
+          <p class="hint">
+            保存、人工确认和完成分别记录。确认不填补空白；UNKNOWN /
+            模板外活动可以完成。
+          </p>
+        </section>
+        <details class="card">
+          <summary>Episode 字段与帧观察</summary>
+          <div id="episode-fields"></div>
+          <h3>当前数据帧观察</h3>
+          <div id="frame-fields"></div>
+          <h3>语言、计划与 VQA 标注</h3>
+          <div id="manual-atoms"></div>
+          <div class="row">
+            <label>当前帧的问题<input id="vqa-question" /></label
+            ><label
+              >回答或观察<textarea id="vqa-answer" rows="2"></textarea>
+            </label>
+          </div>
+          <button id="add-vqa">在当前帧添加 VQA</button>
+          <p class="hint">原有语言与工具调用记录随标注包保存，修改可撤销。</p>
+        </details>
+        <div class="footer-note">
+          草稿可随时交付 · 原始数据只读 · 标注包保留稳定身份、实际模板与核对状态
+        </div>
+      </section>
+    </main>
+    <dialog id="dialog">
+      <div id="dialog-body"></div>
+      <button id="dialog-close">关闭</button>
+    </dialog>
+    <script type="module" src="/workbench-assets/workbench.js"></script>
+  </body>
+</html>

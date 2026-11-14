@@ -45,6 +45,9 @@ def make_argus(root):
     python = venv / "python"
     python.write_text("#!/bin/sh\nexit 0\n")
     python.chmod(0o755)
+    for name in ("label/harness.py", "review/__main__.py"):
+        (src / name).write_text("# pipeline-argus-workbench-contract:v2\n")
+    (src / "label/pipeline_runtime.py").write_text("def select_scope(): pass\n")
     return src
 
 
@@ -1108,3 +1111,49 @@ def test_annotation_storage_area(settings_factory, tmp_path):
         storage_path(s, row, "annotations", "abc")
         == (tmp_path / "data/agilex_aloha/annotations/abc").resolve()
     )
+
+
+def test_resume_counts_unsettled_reserve_once_and_keeps_explicit_cap(service):
+    runner, store, _src, _data = service
+    runner.settings.argus_task_budget_usd = 20.0
+    runner.settings.argus_daily_budget_usd = 20.0
+    runner.settings.argus_per_episode_budget_usd = 10.0
+    row = runner.enqueue("job-1", cap_usd=20.0)
+    row.update(
+        state="PARTIAL", cost_usd=5.0, reserved_cost_usd=8.0, cost_complete=False
+    )
+    store.put("annotation", row["id"], row)
+    assert runner.budget("job-1", 2)["available_usd"] == 12.0
+    resumed = runner.resume(row["id"], cap_usd=20.0)
+    assert resumed["cap_usd"] == 20.0
+    resumed.update(state="PARTIAL", cap_usd=10.0)
+    store.put("annotation", row["id"], resumed)
+    assert runner.resume(row["id"])["cap_usd"] == 10.0
+
+
+def test_optional_trial_selection_and_explicit_full_continuation(service):
+    runner, store, _src, _data = service
+    with pytest.raises(DomainError, match="1–5"):
+        runner.enqueue("job-1", run_scope="trial", episodes=None)
+    row = runner.enqueue("job-1", run_scope="trial", episodes=[1])
+    assert row["selected_episodes"] == [1] and row["input_episode_count"] == 1
+    row.update(state="COMPLETED", cost_usd=0.1)
+    store.put("annotation", row["id"], row)
+    with pytest.raises(DomainError):
+        runner.resume(row["id"])
+    resumed = runner.resume(row["id"], continue_full=True)
+    assert resumed["id"] == row["id"]
+    assert resumed["selected_episodes"] is None and resumed["input_episode_count"] == 2
+    assert resumed["cost_usd"] == 0.1
+
+
+def test_old_native_argus_rejects_free_trial_and_selection_without_dispatch(service):
+    runner, store, src, _ = service
+    (src / "label/pipeline_runtime.py").unlink()
+    assert runner.options()["available"]
+    assert not runner.options()["execution_contract_v2"]
+    for scope in ("trial", "selection"):
+        with pytest.raises(DomainError, match="避免误跑全量"):
+            runner.enqueue("job-1", run_scope=scope, episodes=[0])
+    assert not store.all("annotation")
+    assert runner.enqueue("job-1")["run_scope"] == "full"

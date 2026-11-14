@@ -21,6 +21,7 @@ from .annotation_contract import (
     content_key,
     count_attempts,
     formal_segments,
+    migrate_document,
     reconcile_review,
     reviewed,
     span_key,
@@ -225,6 +226,11 @@ class AnnotationWorkbench:
                 raise
             legacy = self.legacy._draft(self.legacy.resolve(dataset)[0], path, snapshot)
             document = self.legacy._document(legacy, item, data, path, job)
+            document = migrate_document(document)
+            if "manualAtoms" not in document:
+                document["manualAtoms"] = deepcopy(
+                    legacy.get("atoms", {}).get(str(ep), item.get("atoms", []))
+                )
             row = {
                 "id": self.key(dataset, ep),
                 "dataset": dataset,
@@ -251,6 +257,7 @@ class AnnotationWorkbench:
             complete=complete,
             updated_at=now(),
             operation=operation,
+            template_signature=template_key(doc),
         )
         self.store.put(
             "annotation_episode_history",
@@ -290,7 +297,16 @@ class AnnotationWorkbench:
                 body.document.model_dump(exclude_none=True), item["frames"]
             )
             old = row["document"]
-            if template_key(doc) != template_key(old):
+            trusted_template_restore = body.operation in {
+                "undo",
+                "redo",
+                "restore",
+            } and any(
+                h.get("episode_id") == row["id"]
+                and content_key(h["document"]) == content_key(doc)
+                for h in self.store.all("annotation_episode_history")
+            )
+            if template_key(doc) != template_key(old) and not trusted_template_restore:
                 mapping = body.template_mapping
                 used = {
                     a["subtaskId"]
@@ -390,7 +406,9 @@ class AnnotationWorkbench:
             self._publish(row, doc, complete=done, operation=body.operation)
             return {**row, "status": status, "saved": True}
 
-    def listing(self, dataset, subtask=None, count=None, recorded=False):
+    def listing(
+        self, dataset, subtask=None, count=None, recorded=False, template_signature=None
+    ):
         key, path, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key):
             _, path, job, snapshot, data = self.context(dataset)
@@ -399,9 +417,10 @@ class AnnotationWorkbench:
                 ep = item["episode_index"]
                 row, _ = self._head(dataset, ep, path, job, snapshot, data)
                 doc = row["document"]
-                valid_target = subtask in {
-                    s["id"] for s in doc["templateSnapshot"]["subtasks"]
-                }
+                valid_target = (
+                    template_signature is None
+                    or template_key(doc) == template_signature
+                ) and subtask in {s["id"] for s in doc["templateSnapshot"]["subtasks"]}
                 number = (
                     count_attempts(doc, subtask, item["frames"])
                     if valid_target
@@ -625,6 +644,7 @@ class AnnotationWorkbench:
                     "frames": item["frames"],
                     "segments": spans,
                     "task_document": item["document"],
+                    "atoms": item["document"].get("manualAtoms", []),
                     "annotation_revision": item["revision"],
                     "annotation_status": item["status"],
                     "annotation_complete": item["complete"],

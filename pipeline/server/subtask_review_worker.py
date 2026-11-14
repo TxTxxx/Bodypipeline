@@ -149,16 +149,25 @@ def read_subtasks(root: Path) -> dict:
     task_path = root / "meta/bodypipeline-task-annotations.json"
     tasks = json.loads(task_path.read_text())["episodes"] if task_path.is_file() else {}
     bundle_path = root / "meta/bodypipeline-annotation-bundle.json"
-    bundle_episodes = {e["episode"]: e for e in json.loads(bundle_path.read_text()).get("episodes", [])} if bundle_path.is_file() else {}
+    bundle_episodes = (
+        {
+            e["episode"]: e
+            for e in json.loads(bundle_path.read_text()).get("episodes", [])
+        }
+        if bundle_path.is_file()
+        else {}
+    )
     for item in episodes.values():
         if item["episode_index"] in bundle_episodes:
-            item["annotation_complete"] = bundle_episodes[item["episode_index"]].get("complete", False)
+            item["annotation_complete"] = bundle_episodes[item["episode_index"]].get(
+                "complete", False
+            )
         item.pop("persistent_seen")
         subtasks = sorted(item.pop("language_subtasks"), key=lambda a: a["timestamp"])
         if not item.pop("indexed"):
             for i, atom in enumerate(subtasks):
-                start = round(float(atom["timestamp"]) * fps)
-                end = round(
+                start = math.ceil(float(atom["timestamp"]) * fps - 1e-6)
+                end = math.ceil(
                     float(
                         atom.get("end_timestamp")
                         or (
@@ -168,6 +177,7 @@ def read_subtasks(root: Path) -> dict:
                         )
                     )
                     * fps
+                    - 1e-6
                 )
                 if 0 <= start < end <= item["frames"] and atom.get("content"):
                     item["segments"].append(
@@ -204,6 +214,15 @@ def read_subtasks(root: Path) -> dict:
             item["segments"] = sorted(
                 segments, key=lambda s: (s["start_frame"], s["end_frame"])
             )
+            if "manualAtoms" in document:
+                if (
+                    str(item["episode_index"]) in manual
+                    and document["manualAtoms"] != item["atoms"]
+                ):
+                    raise ValueError(
+                        "任务标注与语言/VQA sidecar 不一致，原字段保留，请核对"
+                    )
+                item["atoms"] = document["manualAtoms"]
             item["task_document"] = document
         if len(item["atoms"]) > 10000:
             raise ValueError("单个 Episode 超过 10000 条手动标注")

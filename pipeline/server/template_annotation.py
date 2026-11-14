@@ -65,7 +65,7 @@ def read_spec(work: Path) -> dict | None:
     template = TaskTemplate.model_validate(spec["template"]).model_dump(
         exclude_none=True
     )
-    if spec.get("version") != 1 or digest(template) != spec.get("signature"):
+    if spec.get("version") not in (1, 2) or digest(template) != spec.get("signature"):
         raise ValueError("AI 标注的模板快照校验失败")
     return {**spec, "template": template}
 
@@ -181,6 +181,13 @@ def make_document(
     spec: dict, context: dict, units: list[tuple[dict, dict]]
 ) -> tuple[dict, list[str]]:
     """Validate local replies, assign overlap ownership, then restore parent frames."""
+    if any(
+        ((raw.get("labels") or {}).get("bodypipeline_task") or {}).get("version") == 2
+        for _, raw in units
+    ):
+        from .template_annotation_v2 import make_v2_document
+
+        return make_v2_document(spec, context, units)
     template = spec["template"]
     count = context["n_state_frames"]
     layout = [_validate_unit(spec, context, ctx, raw) for ctx, raw in units]
@@ -284,25 +291,85 @@ def assemble_results(work: Path, base: dict[str, dict]) -> dict[str, dict]:
         try:
             context = _read(path)
             names = (context.get("pieces") or {}).get("parts") or [name]
-            units = [
-                (_read(work / "argus/pieces" / n / "context.json"), _raw(work, n))
-                if n != name
-                else (context, _raw(work, n))
-                for n in names
-            ]
-            document, warnings = make_document(spec, context, units)
+            errors = []
+            if spec.get("version") == 2:
+                from .argus_template_contract import validate_task_reply
+                from .template_annotation_v2 import make_v2_document
+
+                units = []
+                for n in names:
+                    try:
+                        ctx = (
+                            _read(work / "argus/pieces" / n / "context.json")
+                            if n != name
+                            else context
+                        )
+                        raw = _raw(work, n)
+                        if raw.get("parse_ok") is False or raw.get("dry_run"):
+                            raise ValueError("request has no valid reply")
+                        validate_task_reply(
+                            (raw.get("labels") or {}).get("bodypipeline_task"),
+                            spec,
+                            ctx,
+                        )
+                        units.append((ctx, raw))
+                    except (ValueError, KeyError, TypeError, OSError) as exc:
+                        errors.append({"request": n, "error": str(exc)})
+                document, warnings = make_v2_document(spec, context, units)
+                if errors:
+                    document["provenance"]["unresolvedRequests"] = errors
+                    warnings.append(
+                        "部分请求失败或未返回，成功片段保留；空白未被伪造成特殊状态。"
+                    )
+                value["template_partial"] = bool(errors)
+            else:
+                units = [
+                    (_read(work / "argus/pieces" / n / "context.json"), _raw(work, n))
+                    if n != name
+                    else (context, _raw(work, n))
+                    for n in names
+                ]
+                document, warnings = make_document(spec, context, units)
             value.update(task_document=document, template_warnings=warnings)
             value.pop("_label_failed", None)
             value["parse_ok"] = True
-            value["event_labels"] = [
-                {
-                    "t_s": a["start"] / context["fps"],
-                    "end_s": a["end"] / context["fps"],
-                    "verb_class": a["subtaskName"],
-                    "values": a["values"],
+            if document["version"] == 2:
+                names = {
+                    s["id"]: s["name"] for s in document["templateSnapshot"]["subtasks"]
                 }
-                for a in document["attempts"]
-            ]
+                executions = {a["id"]: a for a in document["attempts"]}
+                value["event_labels"] = [
+                    {
+                        "t_s": s["start"] / context["fps"],
+                        "end_s": s["end"] / context["fps"],
+                        "verb_class": names[s["subtaskId"]]
+                        if s["label"] == "SUBTASK"
+                        else s["label"],
+                        "content_status": s["label"],
+                        "attempt_id": s.get("attemptId"),
+                        "outcome": executions.get(s.get("attemptId"), {}).get(
+                            "outcome"
+                        ),
+                        "values": executions.get(s.get("attemptId"), {}).get(
+                            "values", {}
+                        ),
+                        "note": s.get("note"),
+                        "description": s.get("description"),
+                    }
+                    for s in document["segments"]
+                ]
+                value["duration_s"] = context["n_state_frames"] / context["fps"]
+            else:
+                value["event_labels"] = [
+                    {
+                        "t_s": a["start"] / context["fps"],
+                        "end_s": a["end"] / context["fps"],
+                        "verb_class": a["subtaskName"],
+                        "values": a["values"],
+                    }
+                    for a in document["attempts"]
+                ]
+
         except (ValueError, KeyError, TypeError, OSError, ValidationError) as exc:
             # No free-text fallback: a failed template contract stays visibly
             # failed and cannot quietly grow the shared Subtask vocabulary.
@@ -346,7 +413,18 @@ def invalid_received_units(work: Path) -> list[str]:
                     if name != path.parent.name
                     else parent
                 )
-                _validate_unit(spec, parent, ctx, raw)
+                if (
+                    ((raw.get("labels") or {}).get("bodypipeline_task") or {}).get(
+                        "version"
+                    )
+                ) == 2:
+                    from .argus_template_contract import validate_task_reply
+
+                    if raw.get("parse_ok") is False or raw.get("dry_run"):
+                        raise ValueError("request has no valid reply")
+                    validate_task_reply(raw["labels"]["bodypipeline_task"], spec, ctx)
+                else:
+                    _validate_unit(spec, parent, ctx, raw)
             except (ValueError, KeyError, TypeError, OSError):
                 invalid.append(name)
     return sorted(set(invalid))

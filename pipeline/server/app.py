@@ -120,10 +120,16 @@ class AnnotationRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
     template_id: str | None = Field(default=None, min_length=1, max_length=160)
     template_revision: StrictInt | None = Field(default=None, ge=0)
+    run_scope: Literal["full", "trial", "selection"] = "full"
+    episodes: list[StrictInt] | None = Field(default=None, max_length=100000)
+    boundary_target_s: float = Field(default=0.2, gt=0, le=5)
+    boundary_window_s: float = Field(default=1.0, gt=0, le=30)
 
 
 class AnnotationResumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    continue_full: bool = False
+    cap_usd: float | None = Field(default=None, gt=0, le=1_000_000)
     base_url: str | None = Field(default=None, max_length=2048)
     api_key: str | None = Field(default=None, max_length=4096)
 
@@ -791,6 +797,10 @@ def create_app(settings, background=True):
             api_key=body.api_key,
             template_id=body.template_id,
             template_revision=body.template_revision,
+            run_scope=body.run_scope,
+            episodes=body.episodes,
+            boundary_target_s=body.boundary_target_s,
+            boundary_window_s=body.boundary_window_s,
         )
 
     @app.get("/api/annotations/{aid}")
@@ -814,7 +824,13 @@ def create_app(settings, background=True):
             aid,
             base_url=body.base_url if body else None,
             api_key=body.api_key if body else None,
+            continue_full=body.continue_full if body else False,
+            cap_usd=body.cap_usd if body else None,
         )
+
+    @app.post("/api/annotations/{aid}/workbench")
+    def annotation_workbench_candidates(aid: str):
+        return annotations.workbench_candidates(aid)
 
     @app.get("/api/annotations/{aid}/episodes")
     def annotation_episodes(aid: str):

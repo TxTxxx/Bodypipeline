@@ -62,6 +62,7 @@
           <button class="nav-item" type="button" data-server-tab="results" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg><span>预览与质检</span><span class="nav-count" id="nav-result-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="merge" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h8M8 16h5"/></svg><span>数据集管理</span><span class="nav-count" id="nav-merge-count">0</span></button>
           <button class="nav-item" type="button" data-server-tab="annotations" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h7"/><path d="m15 16 2 2 4-4"/></svg><span>自动标注</span><span class="nav-count" id="nav-annotation-count">0</span></button>
+          <a class="nav-item" href="/workbench">标注工作区与交付清单</a>
         </nav>
         <div class="sidebar-bottom"><strong><span class="dot"></span> 文件目录存储</strong><p>原始数据保留<br />转换与质检记录可追溯</p><span class="version">BodyPipeline / 0.1</span></div>
       </aside>
@@ -454,10 +455,10 @@
             <div data-server-panel="annotations" hidden>
               <section class="panel">
                 <div class="panel-heading"><h2>创建自动标注任务</h2><span class="step">ARGUS REVIEW</span></div>
-                <p class="panel-note small muted">调用 Argus review 对已登记的可读 LeRobot 数据集逐 Episode 生成任务描述、事件时间线、关键动作、状态变化与完成情况。数据集只读，标注结果保存在独立的 annotations 目录，不修改 Doctor 质检结果。</p>
+                <p class="panel-note small muted">自由分析保留 Argus 原生分析；模板标注使用专用提示词和一套模板业务时间线。两种模式共用准备、采样、调用、费用及续跑，来源数据只读。</p>
                 <div id="annotation-unavailable" class="warning" hidden></div>
                 <form id="annotation-form" class="conversion-form">
-                  <label for="annotation-template">任务模板</label>
+                  <label for="annotation-template">标注模式与任务模板</label>
                   <div class="action-row">
                     <select id="annotation-template" disabled><option value="">自由分析（不使用模板）</option></select>
                     <button id="annotation-template-refresh" class="secondary" type="button">刷新共享模板</button>
@@ -535,6 +536,14 @@
                       <input id="annotation-max-tokens" type="number" min="256" max="200000" step="1" required disabled />
                     </div>
                   </div>
+                  <div class="conversion-grid">
+                    <div><label for="annotation-scope">运行范围</label><select id="annotation-scope"><option value="full">直接全量</option><option value="trial">任选一至五条试跑</option><option value="selection">仅重算明确选择的 Episode</option></select><p class="small muted">试跑不会自动启动全量；同配置可明确继续并复用成功结果。改参数时在这里决定重算范围。</p><p id="annotation-execution-support" class="small muted"></p></div>
+                    <div><label for="annotation-selected-episodes">Episode 编号（逗号分隔）</label><input id="annotation-selected-episodes" placeholder="例如：1, 4, 9" disabled><p class="small muted">填写来源实际数字编号；不以所有 subtask 总次数代替。</p></div>
+                  </div>
+                  <div class="conversion-grid" id="annotation-boundary-options">
+                    <div><label for="annotation-boundary-target">模板边界误差目标（秒）</label><input id="annotation-boundary-target" type="number" min="0.01" max="5" step="0.01" value="0.2"><p class="small muted">质量目标待真实模型验证；加密取证无法确定时标待复核。</p></div>
+                    <div><label for="annotation-boundary-window">交界附近取证窗口（±秒）</label><input id="annotation-boundary-window" type="number" min="0.2" max="30" step="0.1" value="1.0"><p class="small muted">粗定位后在窗口内加密采样，额外调用、重试和未结算预留均计入预算。</p></div>
+                  </div>
                   <label class="check-label" for="annotation-field-dictionary"><input id="annotation-field-dictionary" type="checkbox" disabled />允许模型解释来源字段的含义</label>
                   <label for="annotation-note">任务说明（可选）</label>
                   <textarea id="annotation-note" maxlength="4000" rows="3" disabled placeholder="例如：这是双臂衣物折叠示教，关注抓取、对折和放置阶段。"></textarea>
@@ -602,6 +611,9 @@
           <input id="annotation-resume-base-url" type="url" autocomplete="off" placeholder="https://gateway.example.com/v1" />
           <label for="annotation-resume-api-key">模型 API Key（服务器已有默认密钥时可留空）</label>
           <input id="annotation-resume-api-key" type="password" autocomplete="off" />
+<label class="check-label"><input type="checkbox" id="annotation-continue-full">明确继续全量，沿用相同配置与已成功结果</label>
+<label>新的累计费用上限（可留空）<input type="number" min="0.01" step="0.01" id="annotation-resume-cap"></label>
+
           <div class="conversion-submit"><button type="button" class="secondary" id="annotation-resume-cancel">取消</button><button class="primary" id="annotation-resume-submit" type="submit">重新加入队列</button></div>
         </div>
       </form>

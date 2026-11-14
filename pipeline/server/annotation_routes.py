@@ -16,9 +16,9 @@ from .annotation_workbench import (
     AnnotationWorkbench,
     ApplyCandidate,
     BatchConfirm,
+    ImportBundle,
     SaveAnnotation,
     Selection,
-    ImportBundle,
 )
 from .merges import source_snapshot
 from .viewer_data import serve_dataset_file
@@ -33,6 +33,16 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         from fastapi.responses import HTMLResponse
 
         text = (ASSETS / "workbench.html").read_text()
+        if settings.role == "viewer":
+            from html import escape
+
+            origin = escape(settings.server_url.rstrip("/"), quote=True)
+            text = text.replace(
+                'href="/" class="brand"',
+                f'href="{origin}/" target="_top" class="brand"',
+            ).replace(
+                'href="/#annotations"', f'href="{origin}/#annotations" target="_top"'
+            )
         return HTMLResponse(
             text.replace(
                 'data-gateway="false"',
@@ -75,7 +85,10 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}/media")
     def media(dataset: str, episode: int):
-        return media_call(dataset, episode, "describe")
+        _, path, _ = workbench.legacy.resolve(dataset)
+        signature = source_snapshot(path)["signature"]
+        result = media_call(dataset, episode, "describe")
+        return {**result, "source_signature": signature}
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}/frame/{frame}")
     def frame(dataset: str, episode: int, frame: int, camera: str, signature: str):
@@ -172,10 +185,11 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         subtask: str | None = None,
         count: int | None = None,
         recorded: bool = False,
+        template_signature: str | None = None,
     ):
         if count is not None and count < 0:
             raise DomainError("次数不能为负数", 422)
-        return workbench.listing(dataset, subtask, count, recorded)
+        return workbench.listing(dataset, subtask, count, recorded, template_signature)
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}")
     def episode(dataset: str, episode: int):
@@ -210,7 +224,11 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
     @app.post("/api/annotation-workbench/{dataset}/import")
     def import_bundle(dataset: str, body: ImportBundle):
         bundle = body.bundle
-        if bundle.get("format") != "bodypipeline-annotations" or bundle.get("version") != 2 or bundle.get("mode") != "template":
+        if (
+            bundle.get("format") != "bodypipeline-annotations"
+            or bundle.get("version") != 2
+            or bundle.get("mode") != "template"
+        ):
             raise DomainError("不是可读取的模板标注包；自由分析使用其原生导出", 422)
         source = bundle.get("source") or {}
         if source.get("dataset") != dataset:
@@ -221,14 +239,35 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
             if type(ep) is not int:
                 raise DomainError("标注包 Episode 身份无效", 422)
             head = workbench.episode(dataset, ep)
-            if head["source_signature"] != source.get("signature") or head["frames"] != entry.get("frames"):
-                raise DomainError("标注包来源版本或数据帧数不同，保留原包与当前草稿", 409)
+            if head["source_signature"] != source.get("signature") or head[
+                "frames"
+            ] != entry.get("frames"):
+                raise DomainError(
+                    "标注包来源版本或数据帧数不同，保留原包与当前草稿", 409
+                )
             from .annotation_contract import validate_annotation
+
             document = validate_annotation(entry["document"], head["frames"])
             prepared.append((ep, entry, document))
         if not prepared:
             raise DomainError("标注包为空", 422)
-        candidates = [workbench.add_candidate(dataset, ep, document, run="标注包导入", source_signature=source["signature"], base_revision=entry["revision"], provenance={"importedBundle": {"source": source, "selection": bundle.get("selection")}}) for ep, entry, document in prepared]
+        candidates = [
+            workbench.add_candidate(
+                dataset,
+                ep,
+                document,
+                run="标注包导入",
+                source_signature=source["signature"],
+                base_revision=entry["revision"],
+                provenance={
+                    "importedBundle": {
+                        "source": source,
+                        "selection": bundle.get("selection"),
+                    }
+                },
+            )
+            for ep, entry, document in prepared
+        ]
         return {"candidates": [c["id"] for c in candidates]}
 
     @app.post("/api/annotation-workbench/{dataset}/bundle")

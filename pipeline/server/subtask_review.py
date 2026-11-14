@@ -93,7 +93,7 @@ class SubtaskReview:
         return key, path, job
 
     def _source(self, path, snapshot):
-        key = digest({"path": str(path), "snapshot": snapshot, "reader": 3})
+        key = digest({"path": str(path), "snapshot": snapshot, "reader": 5})
         try:
             return self.store.get("subtask_source", key)["data"]
         except DomainError as exc:

@@ -128,6 +128,9 @@ class AnnotationRunner:
         return {
             "available": ok,
             "template_available": argus_annotation.template_available(self.settings),
+            "execution_contract_v2": argus_annotation.execution_available(
+                self.settings
+            ),
             "template_library": TemplateLibrary(self.store).read(),
             "reason": why,
             "models": models,
@@ -164,11 +167,19 @@ class AnnotationRunner:
         }
 
     # ------------------------------------------------------------------ budget
+    @staticmethod
+    def _charged(row):
+        # Argus's reserve is cumulative (settled plus outstanding), not a
+        # second bill to add to the settled amount.
+        return max(
+            float(row.get("cost_usd") or 0), float(row.get("reserved_cost_usd") or 0)
+        )
+
     def _task_spend(self, jid: str) -> float:
         total = 0.0
         for row in self.store.all("annotation"):
             if row.get("job_id") == jid:
-                total += float(row.get("cost_usd") or 0.0)
+                total += self._charged(row)
         return total
 
     def _daily_spend(self) -> float:
@@ -178,7 +189,7 @@ class AnnotationRunner:
         total = 0.0
         for kind in ("analysis", "annotation"):
             for row in self.store.all(kind):
-                cost = float(row.get("cost_usd") or 0.0)
+                cost = self._charged(row)
                 if cost <= 0:
                     continue
                 stamp = float(row.get("finished_at") or row.get("created_at") or 0)
@@ -281,6 +292,10 @@ class AnnotationRunner:
         api_key: str | None = None,
         template_id: str | None = None,
         template_revision: int | None = None,
+        run_scope: str = "full",
+        episodes: list[int] | None = None,
+        boundary_target_s: float = 0.2,
+        boundary_window_s: float = 1.0,
     ):
         with self.lock:
             job = self.store.get("job", job_id)
@@ -289,6 +304,13 @@ class AnnotationRunner:
             if not ok:
                 raise DomainError(f"Argus 自动标注不可用：{why}", 503)
 
+            if run_scope != "full" and not argus_annotation.execution_available(
+                self.settings
+            ):
+                raise DomainError(
+                    "Argus 不支持限定 Episode 范围；为避免误跑全量，请先运行 scripts/install_argus.sh 更新工具链",
+                    503,
+                )
             template = None
             library_revision = None
             if template_id:
@@ -367,6 +389,37 @@ class AnnotationRunner:
                             "该数据集已有使用其他模板的 AI 任务，请等待完成或取消后再提交",
                             409,
                         )
+                    requested = {
+                        "model": model,
+                        "note": note,
+                        "reasoning": reasoning,
+                        "sample_fps": float(sample_fps),
+                        "inspection": inspection,
+                        "field_dictionary": field_dictionary,
+                        "max_tokens": max_tokens,
+                        "run_scope": run_scope,
+                        "selected_episodes": sorted(set(episodes))
+                        if episodes
+                        else None,
+                        "boundary_target_s": boundary_target_s,
+                        "boundary_window_s": boundary_window_s,
+                    }
+                    if any(
+                        row.get(
+                            k,
+                            {
+                                "run_scope": "full",
+                                "boundary_target_s": 0.2,
+                                "boundary_window_s": 1.0,
+                            }.get(k),
+                        )
+                        != v
+                        for k, v in requested.items()
+                    ):
+                        raise DomainError(
+                            "已有不同参数或运行范围的任务，请先等待或取消；不会静默复用",
+                            409,
+                        )
                     return row
 
             credentials = argus_annotation.resolve_credentials(
@@ -380,7 +433,29 @@ class AnnotationRunner:
                     "自动标注仅支持 LeRobot v2.1 / v3.0 数据集；请先完成版本转换",
                     409,
                 )
-            count = int(info.get("total_episodes") or 1)
+            total_count = int(info.get("total_episodes") or 1)
+            if run_scope not in {"full", "trial", "selection"}:
+                raise DomainError("运行范围无效", 422)
+            if episodes is not None:
+                if not episodes or any(
+                    type(ep) is not int or not 0 <= ep < total_count for ep in episodes
+                ):
+                    raise DomainError("选择的 Episode 为空或不存在，不会回退全量", 422)
+                episodes = sorted(set(episodes))
+            if run_scope == "trial" and (
+                episodes is None or not 1 <= len(episodes) <= 5
+            ):
+                raise DomainError("试跑请明确选择 1–5 个 Episode", 422)
+            if run_scope == "selection" and episodes is None:
+                raise DomainError("重算范围需明确选择 Episode", 422)
+            if run_scope == "full" and episodes is not None:
+                raise DomainError("全量模式不接受隐含部分选择，请使用明确选择模式", 422)
+            if (
+                not 0 < boundary_target_s <= 5
+                or not boundary_target_s <= boundary_window_s <= 30
+            ):
+                raise DomainError("边界目标/加密窗口无效", 422)
+            count = len(episodes) if episodes is not None else total_count
             budget = self.budget(job_id, count)
             cap = None
             if not self.settings.argus_annotation_unlimited:
@@ -411,6 +486,16 @@ class AnnotationRunner:
                 "data_layout": job.get("data_layout"),
                 "codebase_version": info.get("codebase_version"),
                 "input_episode_count": count,
+                "source_episode_count": total_count,
+                "run_scope": run_scope,
+                "selected_episodes": episodes,
+                "boundary_target_s": boundary_target_s,
+                "boundary_window_s": boundary_window_s,
+                "base_revisions": {
+                    str(r["episode"]): r["revision"]
+                    for r in self.store.all("annotation_episode")
+                    if r["dataset"] == job_id
+                },
                 "episode_count": 0,
                 "episodes_done": 0,
                 "episodes_failed": 0,
@@ -521,17 +606,34 @@ class AnnotationRunner:
             return self.save(row, stage="正在取消", cancel_requested=True)
 
     def resume(
-        self, aid: str, *, base_url: str | None = None, api_key: str | None = None
+        self,
+        aid: str,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        continue_full: bool = False,
+        cap_usd: float | None = None,
     ):
         with self.lock:
             row = self.store.get("annotation", aid)
             if row["state"] in ACTIVE:
                 return row
-            if row["state"] not in {PARTIAL, FAILED, INTERRUPTED, CANCELLED}:
+            if row["state"] not in {PARTIAL, FAILED, INTERRUPTED, CANCELLED} and not (
+                row["state"] == COMPLETED
+                and continue_full
+                and row.get("run_scope") in {"trial", "selection"}
+            ):
                 raise DomainError("只有失败、部分完成、中断或取消的任务可以续跑", 409)
             ok, why = self.available()
             if not ok:
                 raise DomainError(f"Argus 自动标注不可用：{why}", 503)
+            if (
+                row.get("selected_episodes") is not None or continue_full
+            ) and not argus_annotation.execution_available(self.settings):
+                raise DomainError(
+                    "Argus 范围执行支持缺失，请先运行 scripts/install_argus.sh 更新工具链",
+                    503,
+                )
             if row.get("task_template") and not argus_annotation.template_available(
                 self.settings
             ):
@@ -562,6 +664,16 @@ class AnnotationRunner:
                 api_key,
             )
             fields = {
+                **(
+                    {
+                        "run_scope": "full",
+                        "selected_episodes": None,
+                        "input_episode_count": row.get("source_episode_count")
+                        or row["input_episode_count"],
+                    }
+                    if continue_full
+                    else {}
+                ),
                 "state": QUEUED,
                 "stage": "等待续跑",
                 "error": None,
@@ -570,18 +682,34 @@ class AnnotationRunner:
                 "base_url": credentials["task_base_url"],
             }
             budget = self.budget(
-                row["job_id"], int(row.get("input_episode_count") or 1)
+                row["job_id"],
+                int(
+                    (
+                        row.get("source_episode_count")
+                        if continue_full
+                        else row.get("input_episode_count")
+                    )
+                    or 1
+                ),
             )
             if budget["available_usd"] is not None and budget["available_usd"] <= 0:
                 raise BudgetExceeded("今日或本数据集的自动标注预算已用尽，不能续跑")
             fields["budget"] = budget
-            previous = float(row.get("cost_usd") or 0.0)
+            previous = self._charged(row)
             fields["cap_usd"] = (
                 None
                 if self.settings.argus_annotation_unlimited
                 else round(
                     min(
-                        float(row.get("cap_usd") or budget["available_usd"]),
+                        float(
+                            cap_usd
+                            or (
+                                previous + budget["available_usd"]
+                                if continue_full
+                                else row.get("cap_usd")
+                            )
+                            or budget["available_usd"]
+                        ),
                         previous + float(budget["available_usd"]),
                     ),
                     4,
@@ -715,16 +843,15 @@ class AnnotationRunner:
                 # The archived attempt may already have paid for labels. Its
                 # sidecars stop being read, so carry the settled amount forward
                 # instead of losing it from the task and daily ledgers.
-                carried = round(
-                    float(row.get("carried_cost_usd") or 0.0)
-                    + float(row.get("cost_usd") or 0.0),
-                    6,
-                )
+                carried = round(float(row.get("cost_usd") or 0), 6)
+                carried_reserve = round(self._charged(row), 6)
                 row = self.save(
                     row,
                     fresh_start=False,
                     carried_cost_usd=carried,
+                    carried_reserved_cost_usd=carried_reserve,
                     cost_usd=carried,
+                    reserved_cost_usd=carried_reserve,
                     episode_count=0,
                     episodes_done=0,
                     episodes_failed=0,
@@ -783,11 +910,23 @@ class AnnotationRunner:
                 if digest(row["task_template"]) != row.get("template_signature"):
                     raise DomainError("AI 任务的模板快照已变化，不能继续标注", 409)
                 spec = {
-                    "version": 1,
+                    "version": 2,
+                    "boundary_target_s": row.get("boundary_target_s", 0.2),
+                    "boundary_window_s": row.get("boundary_window_s", 1.0),
                     "template": row["task_template"],
                     "signature": row["template_signature"],
                 }
                 spec_path = work / SPEC_NAME
+                if (
+                    spec_path.exists()
+                    and json.loads(spec_path.read_text()).get("version") == 1
+                ):
+                    saved_spec = json.loads(spec_path.read_text())
+                    if (
+                        saved_spec.get("template") == spec["template"]
+                        and saved_spec.get("signature") == spec["signature"]
+                    ):
+                        spec = saved_spec
                 if spec_path.exists() and json.loads(spec_path.read_text()) != spec:
                     raise DomainError("AI 任务模板文件与快照不一致，不能继续标注", 409)
                 atomic_json(spec_path, spec)
@@ -795,7 +934,33 @@ class AnnotationRunner:
                     atomic_json(
                         work / "task-template-invalid.json", retry_manifest(work)
                     )
-            argv = argus_annotation.command(self.settings, row, data, work)
+            if not self.settings.argus_annotation_unlimited:
+                current_budget = self.budget(
+                    row["job_id"], row.get("input_episode_count") or 1
+                )
+                held = self._charged(row)
+                ceiling = held + current_budget["available_usd"]
+                if ceiling <= held:
+                    raise BudgetExceeded(
+                        "当前预算及未结算预留已用尽；有效结果保留，可明确调整预算后继续"
+                    )
+                self.save(
+                    row,
+                    cap_usd=min(float(row.get("cap_usd") or ceiling), ceiling),
+                    budget=current_budget,
+                )
+            dispatch = dict(row)
+            if dispatch.get("cap_usd") is not None:
+                dispatch["cap_usd"] = max(
+                    0.0,
+                    float(dispatch["cap_usd"])
+                    - float(
+                        row.get("carried_reserved_cost_usd")
+                        or row.get("carried_cost_usd")
+                        or 0
+                    ),
+                )
+            argv = argus_annotation.command(self.settings, dispatch, data, work)
             env = argus_annotation.environment(
                 self.settings,
                 row,
@@ -872,7 +1037,13 @@ class AnnotationRunner:
             carried = float(row.get("carried_cost_usd") or 0.0)
             run_cost = _number(result.get("cost_usd")) or 0.0
             if state == RUNNING:
-                if labelled and exit_code == 0 and run_status == "done" and not failed:
+                if (
+                    labelled
+                    and exit_code == 0
+                    and run_status == "done"
+                    and not failed
+                    and not any(e.get("template_partial") for e in episodes)
+                ):
                     state = COMPLETED
                     stage = "标注完成"
                 elif labelled:
@@ -897,7 +1068,11 @@ class AnnotationRunner:
                 exit_note=exit_note,
                 finished_at=now(),
                 cost_usd=round(run_cost + carried, 6),
-                reserved_cost_usd=_number(result.get("reserved_cost_usd")) or 0.0,
+                reserved_cost_usd=round(
+                    (_number(result.get("reserved_cost_usd")) or 0.0)
+                    + float(row.get("carried_reserved_cost_usd") or carried),
+                    6,
+                ),
                 cost_complete=bool(result.get("cost_complete")),
                 episode_count=len(episodes),
                 episodes_done=labelled,
@@ -957,6 +1132,65 @@ class AnnotationRunner:
             raise DomainError("标注 Episode 不存在", 404)
         return result
 
+    def workbench_candidates(self, aid: str):
+        from .annotation_workbench import AnnotationWorkbench
+        from .viewer_data import PreviewRegistry
+
+        row = self.store.get("annotation", aid)
+        if not row.get("task_template"):
+            raise DomainError("自由分析保留原生结果并直接导出，不强制映射模板", 422)
+        source_job = self.store.get("job", row["job_id"])
+        path = dataset_for_job(self.settings, source_job)
+        if (
+            str(path) != row["dataset_path"]
+            or source_snapshot(path)["signature"] != row["source"]["signature"]
+        ):
+            raise DomainError("AI 来源版本已变化，保留结果，不能套用到新来源", 409)
+        PreviewRegistry(self.store, self.settings.viewer_ttl).register(
+            row["job_id"], path
+        )
+        wb = AnnotationWorkbench(self.settings, self.store)
+        result = []
+        for name, value in argus_annotation.episode_results(self.work(row)).items():
+            if value.get(
+                "task_document"
+            ) is None or not argus_annotation.labels_available(value):
+                continue
+            ctx = json.loads(
+                (self.work(row) / "argus/episodes" / name / "context.json").read_text()
+            )
+            ep = ctx["episode_index"]
+            candidate = wb.add_candidate(
+                row["job_id"],
+                ep,
+                value["task_document"],
+                run=aid,
+                source_signature=row["source"]["signature"],
+                base_revision=row.get("base_revisions", {}).get(str(ep), 0),
+                provenance={
+                    "annotation": aid,
+                    "request": name,
+                    "parameters": {
+                        k: row.get(k)
+                        for k in (
+                            "model",
+                            "sample_fps",
+                            "boundary_target_s",
+                            "boundary_window_s",
+                            "reasoning",
+                            "inspection",
+                            "max_tokens",
+                        )
+                    },
+                },
+            )
+            result.append(candidate["id"])
+        return {
+            "dataset": row["job_id"],
+            "candidates": result,
+            "url": f"/workbench?dataset={row['job_id']}",
+        }
+
     def clips(self, aid: str, episode_id: str) -> list[dict]:
         row = self.store.get("annotation", aid)
         return argus_annotation.clips(self.work(row), episode_id)
@@ -985,6 +1219,7 @@ class AnnotationRunner:
             if value is not None:
                 details.append(value)
         return {
+            "mode": "template" if row.get("task_template") else "free",
             "annotation": {
                 key: row.get(key)
                 for key in (

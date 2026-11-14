@@ -828,3 +828,6 @@
   gap: 0.6rem;
   padding: 0.8rem 0;
 }
+
+/* The embedded workspace owns its synchronized exact-frame preview. */
+.ta-annotation-page:has(.bp-workbench-frame) .ta-preview-dock { display: none; }

@@ -62,9 +62,10 @@ class AnnotationDocument(AnnotationModel):
     attempts: list[Execution] = Field(default_factory=list, max_length=10000)
     segments: list[Span] = Field(default_factory=list, max_length=10000)
     frames: list[FrameNote] = Field(default_factory=list, max_length=10000)
+    manualAtoms: list[dict] = Field(default_factory=list, max_length=10000)
     countEvidence: dict[str, CountEvidence] = Field(default_factory=dict)
     provenance: dict = Field(default_factory=dict)
-    history: list[dict] = Field(default_factory=list, max_length=1000)
+    history: list[dict] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid(self):
@@ -195,7 +196,10 @@ def validate_annotation(raw: dict, frames: int) -> dict:
     result = d.model_dump(exclude_none=True)
     import json
 
-    if len(json.dumps(result, ensure_ascii=False).encode()) > 8 * 1024 * 1024:
+    if (
+        len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode())
+        > 8 * 1024 * 1024
+    ):
         raise DomainError("单 Episode 标注超过 8 MiB", 422)
     return result
 
@@ -228,6 +232,7 @@ def span_key(doc: dict, s: dict) -> str:
             "segment": {k: v for k, v in s.items() if k != "review"},
             "attempt": a,
             "values": doc["values"],
+            "manualAtoms": doc.get("manualAtoms", []),
             "frames": [f for f in doc["frames"] if s["start"] <= f["frame"] < s["end"]],
         }
     )
@@ -242,12 +247,44 @@ def reconcile_review(
 ) -> dict:
     result = AnnotationDocument.model_validate(incoming).model_dump(exclude_none=True)
     prior = {s["id"]: s for s in (previous or {}).get("segments", [])}
+    # A range may cover only part of an existing span. Split geometry without
+    # inventing executions; this makes a partial human check expressible.
+    split, inherited = [], set()
+    for original in result["segments"]:
+        edges = sorted(
+            {original["start"], original["end"]}
+            | {
+                edge
+                for interval in confirm
+                for edge in interval
+                if original["start"] < edge < original["end"]
+            }
+        )
+        old = prior.get(original["id"], {})
+        trusted = old.get("review", {}).get("contentKey") == span_key(result, original)
+        if len(edges) > 2:
+            result["history"].append(
+                {"kind": "confirmation-range-split", "segment": deepcopy(original)}
+            )
+        for index, (lo, hi) in enumerate(zip(edges, edges[1:])):
+            piece = {**deepcopy(original), "start": lo, "end": hi}
+            if index:
+                piece["id"] = (
+                    "confirm-"
+                    + digest([original["id"], lo, hi, span_key(result, original)])[:40]
+                )
+            if trusted:
+                inherited.add(piece["id"])
+            split.append(piece)
+    result["segments"] = split
     for s in result["segments"]:
         s.pop("review", None)
         key = span_key(result, s)
         old = prior.get(s["id"], {})
         if old.get("review", {}).get("contentKey") == key:
             s["review"] = old["review"]
+        if s["id"] in inherited and not s.get("review"):
+            s["review"] = {"contentKey": key, "actor": actor, "at": now()}
         if any(lo <= s["start"] and s["end"] <= hi for lo, hi in confirm):
             s["review"] = {"contentKey": key, "actor": actor, "at": now()}
     return result

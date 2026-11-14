@@ -67,11 +67,14 @@ if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-task-template:v1" "$SRC/label/episode.py" \
    || ! grep -q "pipeline-argus-task-template:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-template-retry:v1" "$SRC/label/harness.py" \
+   || ! grep -q "pipeline-argus-workbench-contract:v2" "$SRC/review/__main__.py" \
+   || ! cmp -s "$ROOT/pipeline/server/argus_template_runtime.py" "$SRC/label/pipeline_runtime.py" \
    || ! cmp -s "$TEMPLATE_HELPER" "$SRC/label/pipeline_template.py"; then
   git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   python3 "$TEMPLATE_PATCH" "$SRC"
-  git -C "$SRC" add label/pipeline_template.py
+  python3 "$ROOT/patches/argus/0003-workbench-contract.py" "$SRC"
+  git -C "$SRC" add label/pipeline_template.py label/pipeline_runtime.py
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
     commit -am "$INTEGRATION_SUBJECT"
 fi

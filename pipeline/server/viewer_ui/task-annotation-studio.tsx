@@ -1651,13 +1651,15 @@ function ManagedStudio({
 
 export function TaskAnnotationStudio() {
   const { ident, episodeId } = useAnnotations();
-  return ident.repoId?.startsWith("bp/") && episodeId != null ? (
-    <ManagedStudio
-      key={`${ident.repoId}:${episodeId}`}
-      dataset={ident.repoId}
-      episode={episodeId}
-    />
-  ) : (
-    <BrowserStudio />
-  );
+  if (ident.repoId?.startsWith("bp/") && episodeId != null) {
+    return (
+      <iframe
+        className="bp-workbench-frame"
+        title="统一标注工作区"
+        src={`/workbench?dataset=${encodeURIComponent(ident.repoId.slice(3))}&episode=${episodeId}`}
+        style={{ width: "100%", height: "1600px", border: 0, borderRadius: 8 }}
+      />
+    );
+  }
+  return <BrowserStudio />;
 }

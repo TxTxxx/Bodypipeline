@@ -302,12 +302,17 @@ def test_task_runner_executes_frozen_template_with_offline_subprocess(
     template, settings_factory, tmp_path, monkeypatch
 ):
     src = make_argus(tmp_path)
+    (src / "review/__main__.py").write_text("# pipeline-argus-workbench-contract:v2\n")
+    (src / "label/pipeline_runtime.py").write_text(
+        "def refine_outputs(): pass\ndef select_scope(): pass\n"
+    )
     for name in ("episode.py", "harness.py", "pipeline_template.py"):
         (src / "label" / name).write_text(
-            "# pipeline-argus-task-template:v1\n# pipeline-argus-template-retry:v1\n"
+            "# pipeline-argus-task-template:v1\n# pipeline-argus-template-retry:v1\n# pipeline-argus-workbench-contract:v2\nCONTRACT_VERSION = 2\n"
         )
     (src / "review/__main__.py").write_text(
         Path("tests/fixtures/mock_argus_review.py").read_text()
+        + "\n# pipeline-argus-workbench-contract:v2\n"
     )
     monkeypatch.setenv("PIPELINE_ARGUS_API_KEY", "offline-dummy")
     imports = tmp_path / "imports"
@@ -338,9 +343,13 @@ def test_enqueue_freezes_shared_template_and_rejects_stale_selection(
     template, settings_factory, tmp_path, monkeypatch
 ):
     src = make_argus(tmp_path)
+    (src / "review/__main__.py").write_text("# pipeline-argus-workbench-contract:v2\n")
+    (src / "label/pipeline_runtime.py").write_text(
+        "def refine_outputs(): pass\ndef select_scope(): pass\n"
+    )
     for name in ("episode.py", "harness.py", "pipeline_template.py"):
         (src / "label" / name).write_text(
-            "# pipeline-argus-task-template:v1\n# pipeline-argus-template-retry:v1\n"
+            "# pipeline-argus-task-template:v1\n# pipeline-argus-template-retry:v1\n# pipeline-argus-workbench-contract:v2\nCONTRACT_VERSION = 2\n"
         )
     monkeypatch.setenv("PIPELINE_ARGUS_API_KEY", "mock-key")
     imports = tmp_path / "imports"

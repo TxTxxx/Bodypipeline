@@ -194,6 +194,12 @@ def _observe(observed: dict, episodes, labels, unannotated: int) -> None:
     uniques, totals = np.unique(episodes, return_counts=True)
     for index, total in zip(uniques.tolist(), totals.tolist()):
         per_episode[int(index)] = per_episode.get(int(index), 0) + int(total)
+    per_labels = observed.setdefault("episode_labels", {})
+    for index in uniques.tolist():
+        values, counts = np.unique(labels[episodes == index], return_counts=True)
+        target = per_labels.setdefault(int(index), {})
+        for value, count in zip(values.tolist(), counts.tolist()):
+            target[int(value)] = target.get(int(value), 0) + int(count)
     histogram = observed.setdefault("labels", {})
     values, counts = np.unique(labels, return_counts=True)
     for value, count in zip(values.tolist(), counts.tolist()):
@@ -239,6 +245,45 @@ def _subtask_stats(counts: dict, total: int) -> dict:
         "std": [float(variance**0.5)],
         "count": [int(total)],
     }
+
+
+def _episode_label_stats(destination: Path, observed: dict):
+    """Keep per-Episode metadata statistics aligned with the written labels."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    stats = {
+        index: _subtask_stats(counts, observed["episodes"][index])
+        for index, counts in observed.get("episode_labels", {}).items()
+    }
+    paths = sorted((destination / "meta/episodes").rglob("*.parquet"))
+    for path in paths:
+        table = pq.read_table(path)
+        rows = table.to_pylist()
+        for row in rows:
+            for key, value in stats.get(row["episode_index"], {}).items():
+                row[f"stats/subtask_index/{key}"] = value
+        temporary = path.with_name("." + path.name + ".label-stats")
+        pq.write_table(
+            pa.Table.from_pylist(rows).replace_schema_metadata(table.schema.metadata),
+            temporary,
+            compression=_compression(path),
+        )
+        os.replace(temporary, path)
+    path = destination / "meta/episodes_stats.jsonl"
+    if path.is_file():
+        rows = [
+            json.loads(line) for line in path.read_text().splitlines() if line.strip()
+        ]
+        for row in rows:
+            row.setdefault("stats", {})["subtask_index"] = stats.get(
+                row["episode_index"], {}
+            )
+        temporary = path.with_name("." + path.name + ".label-stats")
+        temporary.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+        )
+        os.replace(temporary, path)
 
 
 def patch(destination: Path, spec: dict) -> dict:
@@ -339,6 +384,8 @@ def patch(destination: Path, spec: dict) -> dict:
         existing = _read_json(stats_path)
         existing["subtask_index"] = stats
         _write_json(stats_path, existing)
+
+    _episode_label_stats(destination, observed)
 
     from letools.validation import validate_dataset
 

@@ -108,9 +108,10 @@
   function renderTemplateSummary() {
     const id = $("annotation-template").value;
     const template = templateLibrary.templates.find((t) => t.id === id);
+    $("annotation-boundary-options").hidden = !template;
     $("annotation-template-summary").textContent = template
-      ? `${template.subtasks.length} 个固定 Subtask · ${template.fields.length} 个自定义字段（整条任务 / 每次尝试 / 单帧）。本次任务使用当前模板，之后修改模板不会改变这次结果。${options?.template_available ? "" : "服务器需重新运行 scripts/install_argus.sh 安装模板支持。"}`
-      : id ? "原模板已删除，请刷新并重新选择。" : "自由分析由 AI 自行描述动作。要使用固定 Subtask 和自定义字段，请先在数据集标注页面创建并保存共享模板，再刷新选择。";
+      ? `模板标注：${template.subtasks.length} 个固定 Subtask · ${template.fields.length} 个自定义字段。独立尝试与片段，专用提示词与业务校验，AI 初稿待人工核对。之后修改共享模板不会改变这次快照。${options?.template_available ? "" : "服务器需重新运行 scripts/install_argus.sh 安装模板支持。"}`
+      : id ? "原模板已删除，请刷新并重新选择。" : "自由分析保留 Argus 原生提示词、解析、结果与可直接导出的原生分析，不需要模板。模板标注使用固定 Subtask 和自定义字段。";
     updateSubmit();
   }
   function scopedCandidates() {
@@ -280,6 +281,7 @@
 
   function bind() {
     $("annotation-form").addEventListener("submit", submit);
+    $("annotation-scope").addEventListener("change", () => { $("annotation-selected-episodes").disabled = $("annotation-scope").value === "full"; updateSubmit(); });
     $("annotation-template").addEventListener("change", () => {
       templateChoiceInitialized = true;
       renderTemplateSummary();
@@ -344,6 +346,11 @@
       const select = event.target.closest("[data-annotation-select]");
       if (select) {
         selectAnnotation(select.dataset.annotationSelect);
+        return;
+      }
+      const workbench = event.target.closest("[data-annotation-workbench]");
+      if (workbench) {
+        void ui.api(`/api/annotations/${workbench.dataset.annotationWorkbench}/workbench`, "POST", {}).then(result => { window.location.href = result.url; }).catch(error => ui.notice(error.message, true));
         return;
       }
       const cancel = event.target.closest("[data-annotation-cancel]");
@@ -434,6 +441,9 @@
     [
       "annotation-dataset",
       "annotation-template",
+      "annotation-scope",
+      "annotation-boundary-target",
+      "annotation-boundary-window",
       "annotation-model",
       "annotation-base-url",
       "annotation-api-key",
@@ -490,6 +500,9 @@
     } else {
       showUnavailable(options.reason || "服务器未找到可用的 Argus");
     }
+    $("annotation-execution-support").textContent = options.execution_contract_v2
+      ? "已支持限定范围，以及每次逻辑请求最多三次自动重试与累计预算预留。"
+      : "当前为旧 Argus：可用原生全量分析；试跑、选择范围及新的统一重试和预算契约需要先运行 scripts/install_argus.sh 更新工具链。";
     renderBudget();
     updateModelControls();
     if (
@@ -601,6 +614,7 @@
     const usable =
       Boolean(options?.available) &&
       Boolean($("annotation-dataset").value) &&
+      ($("annotation-scope").value === "full" || options?.execution_contract_v2) &&
       Boolean(model) &&
       (options?.unlimited || modelPriced(model)) &&
       (!$("annotation-template").value || (options?.template_available && templateLibrary.templates.some((t) => t.id === $("annotation-template").value))) &&
@@ -727,11 +741,12 @@
     const percent = total ? Math.min(100, Math.round((100 * done) / total)) : 0;
     const actions = [
       `<button class="secondary" type="button" data-annotation-reload>刷新</button>`,
+      row.task_template && row.episodes_done ? `<button class="primary" type="button" data-annotation-workbench="${esc(row.id)}">发送独立候选到标注工作区</button>` : "",
       ACTIVE.has(row.state)
         ? `<button class="danger" type="button" data-annotation-cancel="${esc(row.id)}" ${row.cancel_requested ? "disabled" : ""}>${row.cancel_requested ? "正在取消" : "取消任务"}</button>`
         : "",
-      RESUMABLE.has(row.state)
-        ? `<button class="secondary" type="button" data-annotation-resume="${esc(row.id)}">续跑未完成 Episode</button>`
+      (RESUMABLE.has(row.state) || (row.state === "COMPLETED" && ["trial","selection"].includes(row.run_scope)))
+        ? `<button class="secondary" type="button" data-annotation-resume="${esc(row.id)}">${row.state === "COMPLETED" ? "明确继续全量 / 复用成功结果" : "续跑未完成请求 / 调整预算"}</button>`
         : "",
       row.episodes_done || row.episode_count
         ? `<a class="secondary" href="/api/annotations/${esc(row.id)}/export" download>导出完整结果</a>`
@@ -1075,7 +1090,7 @@
         const target = [event.object, event.carry_phase].filter(Boolean).join(" · ");
         return `<button type="button" class="viewer-event" data-viewer-seek="${event.start}" data-viewer-start="${event.start}" data-viewer-end="${event.end}">
           <span class="viewer-event-time">${seconds(event.start)}</span>
-          <span class="viewer-event-body"><strong>${esc(event.verb_class || "未描述动作")}</strong>${target ? `<span class="sub">${esc(target)}</span>` : ""}${viewerData.task_document ? `<span class="sub">${esc(templateValues(event.values, "attempt"))}</span>` : ""}</span>
+          <span class="viewer-event-body"><strong>${esc(event.verb_class || "未描述动作")}</strong>${target ? `<span class="sub">${esc(target)}</span>` : ""}${viewerData.task_document ? `<span class="sub">${esc([event.outcome && ({success:"成功",failure:"失败",unknown:"无法判断"})[event.outcome], templateValues(event.values, "attempt"), event.description, event.note].filter(Boolean).join(" · "))}</span>` : ""}</span>
           <span class="viewer-event-tag">${esc([arm, event.contribution].filter(Boolean).join(" · "))}</span>
         </button>`;
       })
@@ -1101,8 +1116,8 @@
       : "";
 
     body.innerHTML = `
-      <p class="viewer-prompt"><strong>任务：</strong>${esc(prompt)}</p>
-      ${viewerData.task_document ? `<p class="small"><strong>模板初稿：${esc(viewerData.task_document.templateSnapshot.name)}</strong> · ${viewerData.task_document.attempts.length} 次尝试 · ${viewerData.task_document.nullSegments.length} 段 NULL · ${viewerData.task_document.frames.length} 条单帧标注<br>${esc(templateValues(viewerData.task_document.values, "episode"))}<br><span class="muted">生成 Subtask 数据集后，可在标注工作区逐项检查、修改和保存。</span></p>` : ""}
+      <p class="viewer-prompt"><strong>${viewerData.task_document ? "模板标注草稿" : "自由分析 · 任务摘要"}：</strong>${esc(prompt)}</p>
+      ${viewerData.task_document ? `<p class="small"><strong>模板初稿：${esc(viewerData.task_document.templateSnapshot.name)}</strong> · ${viewerData.task_document.attempts.length} 次尝试 · ${(viewerData.task_document.version === 2 ? viewerData.task_document.segments.filter(s => s.label === "NULL").length : (viewerData.task_document.nullSegments || []).length)} 段 NULL · ${viewerData.task_document.frames.length} 条单帧标注${viewerData.task_document.version === 2 ? ` · UNKNOWN ${viewerData.task_document.segments.filter(s => s.label === "UNKNOWN").length} 段 · 模板外 ${viewerData.task_document.segments.filter(s => s.label === "OUT_OF_TEMPLATE").length} 段` : ""}<br>${esc(templateValues(viewerData.task_document.values, "episode"))}<br><span class="muted">可直接发送独立候选到统一工作区检查、修改和保存，无需先复制数据集。</span></p>` : ""}
       ${(viewerData.template_warnings || []).map((warning) => `<p class="warning small">${esc(warning)}</p>`).join("")}
       <div class="viewer-stage">${video}</div>
       <div class="viewer-timeline" data-viewer-timeline role="slider" tabindex="0" aria-label="事件时间线">
@@ -1323,12 +1338,20 @@
       ui.notice("请先获取并选择标注模型。", true);
       return;
     }
+    const scope = $("annotation-scope").value;
+    const selectedEpisodes = scope === "full" ? null : [...new Set($("annotation-selected-episodes").value.split(/[,，\s]+/).filter(Boolean).map(Number))];
+    if (scope !== "full" && (!selectedEpisodes.length || selectedEpisodes.some(n => !Number.isInteger(n) || n < 0) || (scope === "trial" && selectedEpisodes.length > 5))) {
+      ui.notice("请明确选择有效来源 Episode 编号；试跑选择一至五条，不会自动全量。", true); return;
+    }
     const sample = $("annotation-sample-fps").value;
     const sampleFps = sample === "" ? null : Number(sample);
     const baseUrl = $("annotation-base-url").value.trim();
     const apiKey = $("annotation-api-key").value.trim();
     const body = {
       job_id: jobId,
+      run_scope: scope, episodes: selectedEpisodes,
+      boundary_target_s: Number($("annotation-boundary-target").value),
+      boundary_window_s: Number($("annotation-boundary-window").value),
       template_id: $("annotation-template").value || null,
       template_revision: $("annotation-template").value ? templateLibrary.revision : null,
       model: $("annotation-model").value,
@@ -1379,6 +1402,8 @@
     const row = rows.find((item) => item.id === id) || detailRow;
     if (!row) return;
     resumeTarget = id;
+    $("annotation-continue-full").checked = row.state === "COMPLETED" && row.run_scope === "trial";
+    $("annotation-resume-cap").value = "";
     const configured = Boolean(options?.api_key_configured);
     $("annotation-resume-base-url").value = row.base_url || "";
     $("annotation-resume-api-key").value = "";
@@ -1401,7 +1426,8 @@
     if (!id) return;
     const baseUrl = $("annotation-resume-base-url").value.trim();
     const apiKey = $("annotation-resume-api-key").value.trim();
-    const body = {};
+    const body = { continue_full: $("annotation-continue-full").checked };
+    if ($("annotation-resume-cap").value) body.cap_usd = Number($("annotation-resume-cap").value);
     if (baseUrl) body.base_url = baseUrl;
     if (apiKey) body.api_key = apiKey;
     const button = $("annotation-resume-submit");

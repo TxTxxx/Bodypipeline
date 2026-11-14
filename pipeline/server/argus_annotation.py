@@ -30,6 +30,7 @@ STAGE_TITLES = {
     "clips": "生成预览视频",
     "dry_run": "构造模型请求",
     "label": "大模型标注",
+    "boundary": "加密取证与边界细化",
     "board": "拼接标注结果",
 }
 
@@ -86,6 +87,25 @@ def source_path(settings) -> Path:
     return Path(settings.argus_src).expanduser()
 
 
+def execution_available(settings) -> bool:
+    """Scope selection and the shared retry/spend ledger require patch 0003.
+
+    Native full analysis remains available on older Argus installations. A
+    limited request must never be sent to a tool that ignores its scope.
+    """
+    root = source_path(settings)
+    try:
+        return (
+            all(
+                "pipeline-argus-workbench-contract:v2" in (root / name).read_text()
+                for name in ("label/harness.py", "review/__main__.py")
+            )
+            and "def select_scope(" in (root / "label/pipeline_runtime.py").read_text()
+        )
+    except OSError:
+        return False
+
+
 def template_available(settings) -> bool:
     root = source_path(settings)
     try:
@@ -101,6 +121,19 @@ def template_available(settings) -> bool:
             )
             and "pipeline-argus-template-retry:v1"
             in (root / "label/harness.py").read_text()
+            and all(
+                "pipeline-argus-workbench-contract:v2" in (root / name).read_text()
+                for name in (
+                    "label/episode.py",
+                    "label/harness.py",
+                    "review/__main__.py",
+                )
+            )
+            and "CONTRACT_VERSION = 2"
+            in (root / "label/pipeline_template.py").read_text()
+            and "def refine_outputs("
+            in (root / "label/pipeline_runtime.py").read_text()
+            and "def select_scope(" in (root / "label/pipeline_runtime.py").read_text()
         )
     except OSError:
         return False
@@ -375,6 +408,7 @@ def environment(
         os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
     )
     env["PATH"] = os.pathsep.join([str(source / "tools/bin"), env.get("PATH", "")])
+    env["PIPELINE_ARGUS_EPISODES"] = json.dumps(annotation.get("selected_episodes"))
     env.setdefault("MALLOC_ARENA_MAX", "2")
 
     cameras = provider_context.get("cameras") or {}
@@ -583,6 +617,7 @@ def _summary(name: str, data: dict, source: str) -> dict:
         "source": source,
         "template_name": data.get("template_name"),
         "template_warnings": data.get("template_warnings", []),
+        "template_partial": data.get("template_partial", False),
     }
 
 

@@ -270,3 +270,179 @@ def test_different_episode_saves_can_overlap_without_dataset_conflict(
         finally:
             released.set()
         assert first.result(3).status_code == 200
+
+
+def test_gateway_workspace_writes_are_proxied_never_local(review_app, monkeypatch):
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from pipeline.server.viewer import create_gateway
+
+    runner = review_app.state.runner
+    gateway = create_gateway(runner.settings)
+    real_client = httpx.AsyncClient
+    calls = []
+
+    async def response(request):
+        calls.append(request)
+        return httpx.Response(200, json={"from_server": True})
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(response)),
+    )
+    headers = {"Authorization": "Bearer " + runner.settings.token}
+    with TestClient(gateway) as client:
+        for suffix in ("episodes/0", "episodes/0/apply", "confirm"):
+            result = client.post(
+                BASE + "/" + suffix,
+                headers=headers,
+                json={"deliberately": "not-a-local-model"},
+            )
+            assert result.status_code == 200
+            assert result.json() == {"from_server": True}
+        assert len(calls) == 3
+        assert runner.store.all("annotation_episode") == []
+        assert (
+            client.post(
+                BASE + "/%2e%2e/forbidden", headers=headers, json={}
+            ).status_code
+            != 200
+        )
+
+
+def test_batch_confirmation_accepts_normal_evidence_and_refuses_unresolved_risks(
+    review_app,
+):
+    client = client_for(review_app)
+    head = client.get(BASE + "/episodes/0").json()
+    for a in head["document"]["attempts"]:
+        a["outcome"] = "success"
+    head["document"]["segments"].append(
+        {"id": "background", "label": "NULL", "start": 2, "end": 4}
+    )
+    head["document"]["segments"][0]["evidence"] = [
+        {"kind": "model", "note": "支持证据不是未解决风险"}
+    ]
+    saved = client.post(BASE + "/episodes/0", json=save_body(head)).json()
+    body = {
+        "source_signature": saved["source_signature"],
+        "episodes": [0],
+        "revisions": {"0": saved["revision"]},
+    }
+    assert client.post(BASE + "/confirm", json=body).status_code == 200
+    head = client.get(BASE + "/episodes/0").json()
+    head["document"]["segments"][0]["risks"] = ["边界证据不足，尚未单独核对"]
+    saved = client.post(BASE + "/episodes/0", json=save_body(head)).json()
+    body["revisions"]["0"] = saved["revision"]
+    assert client.post(BASE + "/confirm", json=body).status_code == 422
+
+
+def test_legacy_manual_atoms_are_lossless_and_share_undo_and_delivery(
+    review_app, monkeypatch
+):
+    from pipeline.server.subtask_review import SubtaskReview
+
+    source = SubtaskReview._source
+    atoms = [
+        {
+            "role": "user",
+            "style": "vqa",
+            "content": "原问题",
+            "timestamp": 0.2,
+            "camera": "front",
+            "tool_calls": [
+                {"name": "inspect", "arguments": {"nested": [1, None, {"x": "保留"}]}}
+            ],
+        }
+    ]
+
+    def with_atoms(*args):
+        data = source(*args)
+        data["episodes"][0]["atoms"] = deepcopy(atoms)
+        return data
+
+    monkeypatch.setattr(SubtaskReview, "_source", with_atoms)
+    client = client_for(review_app)
+    head = client.get(BASE + "/episodes/0").json()
+    assert head["document"]["manualAtoms"] == atoms
+    head["document"]["manualAtoms"][0]["content"] = "修改问题"
+    saved = client.post(BASE + "/episodes/0", json=save_body(head)).json()
+    bundle = client.post(
+        BASE + "/bundle",
+        json={
+            "source_signature": saved["source_signature"],
+            "episodes": [0],
+            "revisions": {"0": saved["revision"]},
+        },
+    ).json()
+    assert (
+        bundle["episodes"][0]["document"]["manualAtoms"][0]["tool_calls"]
+        == atoms[0]["tool_calls"]
+    )
+    head["document"]["manualAtoms"] = atoms
+    restored = client.post(
+        BASE + "/episodes/0",
+        json=save_body({**saved, "document": head["document"]}, operation="undo"),
+    ).json()
+    assert restored["document"]["manualAtoms"] == atoms
+
+
+def test_filter_counts_only_the_named_subtask_not_all_executions(review_app):
+    client = client_for(review_app)
+    head = client.get(BASE + "/episodes/0").json()
+    doc = head["document"]
+    old_id = doc["attempts"][0]["subtaskId"]
+    doc["templateSnapshot"]["subtasks"] = [
+        {"id": s, "name": s} for s in ("grab", "carry", "place", "absent")
+    ]
+    doc["attempts"] = [
+        {"id": f"try-{i}", "subtaskId": s, "values": {}, "outcome": "unknown"}
+        for i, s in enumerate(("grab", "grab", "carry", "place"))
+    ]
+    doc["segments"] = [
+        {
+            "id": f"segment-{i}",
+            "start": i,
+            "end": i + 1,
+            "label": "SUBTASK",
+            "subtaskId": s,
+            "attemptId": f"try-{i}",
+        }
+        for i, s in enumerate(("grab", "grab", "carry", "place"))
+    ] + [{"id": "background", "start": 4, "end": 6, "label": "NULL"}]
+    saved = client.post(
+        BASE + "/episodes/0",
+        json=save_body(
+            head, template_mapping={old_id: "grab"}, confirm=[[0, 6]], complete=True
+        ),
+    )
+    assert saved.status_code == 200, saved.text
+    result = client.get(BASE + "/episodes?subtask=grab&count=2").json()["episodes"]
+    assert [r["episode"] for r in result] == [0]
+    assert result[0]["counts"]["recorded_count"] == 2
+    assert client.get(BASE + "/episodes?subtask=grab&count=4").json()["episodes"] == []
+    assert client.get(BASE + "/episodes?subtask=absent&count=0").json()["episodes"][0][
+        "counts"
+    ]["complete"]
+
+
+def test_confirm_partial_span_preserves_execution_and_undo_review(review_app):
+    client = client_for(review_app)
+    url = BASE + "/episodes/0"
+    head = client.get(url).json()
+    original = deepcopy(head["document"])
+    attempt = original["segments"][0]["attemptId"]
+    checked = client.post(url, json=save_body(head, confirm=[[1, 2]])).json()
+    assert [
+        (s["start"], s["end"], bool(s.get("review")))
+        for s in checked["document"]["segments"]
+    ] == [(0, 1, False), (1, 2, True), (4, 6, False)]
+    assert checked["document"]["segments"][1]["attemptId"] == attempt
+    assert checked["document"]["attempts"] == original["attempts"]
+    undo = client.post(
+        url, json=save_body({**checked, "document": original}, operation="undo")
+    )
+    assert undo.status_code == 200, undo.text
+    assert len(undo.json()["document"]["segments"]) == 2
