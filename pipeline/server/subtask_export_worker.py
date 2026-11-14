@@ -371,9 +371,42 @@ def main() -> None:
         _fail(f"来源不是 LeRobot 数据集：{source}")
     if destination.exists():
         _fail(f"输出目录已存在：{destination}")
-    converted = _prepare(
-        source, destination, spec["source_format"], spec["target_format"]
-    )
+    if spec.get("subset"):
+        from annotation_subset_worker import extract
+
+        mapping = extract(
+            source,
+            destination,
+            [e["episode_index"] for e in spec["episodes"]],
+            spec["source_format"],
+            spec["target_format"],
+        )
+        for item in spec["episodes"]:
+            item["source_episode_index"] = item["episode_index"]
+            item["episode_index"] = mapping[str(item["episode_index"])]
+        bundle = spec.get("annotation_bundle")
+        if bundle is not None:
+            for item in bundle["episodes"]:
+                item["source_episode"] = item["episode"]
+                item["episode"] = mapping[str(item["episode"])]
+            bundle["sourceMapping"] = mapping
+            _write_json(
+                destination / "meta/bodypipeline-annotation-bundle.json", bundle
+            )
+        _write_json(
+            destination / "meta/bodypipeline-episode-mapping.json",
+            {
+                "version": 1,
+                "source_to_output": mapping,
+                "selection": spec.get("selection"),
+                "source_signature": spec.get("source_signature"),
+            },
+        )
+        converted = spec["source_format"] != spec["target_format"]
+    else:
+        converted = _prepare(
+            source, destination, spec["source_format"], spec["target_format"]
+        )
     result = patch(destination, spec)
     result["converted"] = converted
     print(json.dumps(result, ensure_ascii=False, allow_nan=False))

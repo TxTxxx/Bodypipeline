@@ -109,9 +109,9 @@ class AnnotationRequest(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=200)
     cap_usd: float | None = Field(default=None, gt=0, le=1_000_000)
     concurrency: int | None = Field(default=None, ge=1, le=64)
-    reasoning: (
-        Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None
-    ) = None
+    reasoning: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = (
+        None
+    )
     sample_fps: float | None = Field(default=None, gt=0, le=10)
     inspection: Literal["auto", "all", "off"] | None = None
     field_dictionary: StrictBool | None = None
@@ -226,7 +226,13 @@ def create_app(settings, background=True):
         while not stopping.is_set():
             # One failing worker must not stop the shared loop: a dead loop means
             # every later job, check and analysis silently stops being picked up.
-            for worker in (datasets.tick, runner.tick, checks.tick, analyses.tick, trims.tick):
+            for worker in (
+                datasets.tick,
+                runner.tick,
+                checks.tick,
+                analyses.tick,
+                trims.tick,
+            ):
                 if stopping.is_set():
                     break
                 try:
@@ -309,6 +315,9 @@ def create_app(settings, background=True):
             lock.release()
 
     app = FastAPI(title="Embodied Pipeline Server", lifespan=lifespan)
+    from .annotation_routes import mount_workbench
+
+    mount_workbench(app, settings, ingest.store, runner)
     app.state.ingest, app.state.runner, app.state.viewer = ingest, runner, viewer
     app.state.imports = imports
     app.state.deliveries = deliveries
@@ -727,15 +736,22 @@ def create_app(settings, background=True):
     @app.post("/api/subtask-review/{dataset_id}/exports", status_code=202)
     def review_export(dataset_id: str, body: RevisionExportRequest):
         job = runner.subtask_exports.enqueue_review(dataset_id, body)
-        return {k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")}
+        return {
+            k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")
+        }
 
     @app.get("/api/subtask-review/{dataset_id}/exports/{export_id}")
     def review_export_status(dataset_id: str, export_id: str):
         subtask_review.resolve(dataset_id)
         job = ingest.store.get("job", export_id)
-        if job.get("source_kind") != "lerobot_subtask_revision" or job.get("source_job_id") != dataset_id:
+        if (
+            job.get("source_kind") != "lerobot_subtask_revision"
+            or job.get("source_job_id") != dataset_id
+        ):
             raise DomainError("修订导出任务不存在", 404)
-        return {k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")}
+        return {
+            k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")
+        }
 
     @app.get("/api/annotations/options")
     def annotation_options():

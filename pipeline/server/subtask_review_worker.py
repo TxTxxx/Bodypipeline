@@ -148,7 +148,11 @@ def read_subtasks(root: Path) -> dict:
     manual = json.loads(sidecar.read_text())["episodes"] if sidecar.is_file() else {}
     task_path = root / "meta/bodypipeline-task-annotations.json"
     tasks = json.loads(task_path.read_text())["episodes"] if task_path.is_file() else {}
+    bundle_path = root / "meta/bodypipeline-annotation-bundle.json"
+    bundle_episodes = {e["episode"]: e for e in json.loads(bundle_path.read_text()).get("episodes", [])} if bundle_path.is_file() else {}
     for item in episodes.values():
+        if item["episode_index"] in bundle_episodes:
+            item["annotation_complete"] = bundle_episodes[item["episode_index"]].get("complete", False)
         item.pop("persistent_seen")
         subtasks = sorted(item.pop("language_subtasks"), key=lambda a: a["timestamp"])
         if not item.pop("indexed"):
@@ -182,13 +186,18 @@ def read_subtasks(root: Path) -> dict:
                 s["id"]: s["name"].strip()
                 for s in document["templateSnapshot"]["subtasks"]
             }
+            records = (
+                document["attempts"]
+                if document.get("version") == 1
+                else [s for s in document["segments"] if s["label"] == "SUBTASK"]
+            )
             segments = [
                 {
                     "start_frame": a["start"],
                     "end_frame": a["end"],
-                    "text": names.get(a["subtaskId"], a["subtaskName"].strip()),
+                    "text": names.get(a["subtaskId"], a.get("subtaskName", "").strip()),
                 }
-                for a in document["attempts"]
+                for a in records
             ]
             if coalesced(segments) != coalesced(item["segments"]):
                 raise ValueError("任务标注 sidecar 与逐帧 Subtask 标签不一致")

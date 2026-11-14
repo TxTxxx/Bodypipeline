@@ -169,3 +169,11 @@
 
 - 真实模型边界误差 ±0.2s、现场真机、真实规模性能。
 - 后续将记录全部实际验证和剩余限制。
+
+## 阶段记录：公共模型与 Server（实现中）
+
+- 新增 v2 独立 attempt/segment 契约、v1 无损迁移、逐片段审核、Episode 修订与可信历史撤销；旧 `attempt-comment` 仍属于 attempt。
+- 新增 Server 工作区 API；Viewer 的 JSON 操作转发到 Server，媒体只读。来源共享锁与 Episode 写锁分开。
+- `tests/test_annotation_contract.py`、`tests/test_annotation_workbench.py`：当前 12 项通过，覆盖 UNKNOWN 计数依据、特殊关联、并发、候选身份与重复局部应用、结果兼容和审核恢复。
+- `tests/test_annotation_subset.py`：v2.1/v3.0 两条真实工具链回归通过；队列冻结选择与修订，实际子集重编号、共享视频偏移、sidecar 稳定身份、源文件哈希不变，来源移走后可深度读取并解码末帧。
+- `tests/workbench_model.test.ts`：当前 7 项通过，覆盖包含首末帧、公共边界、切分/局部替换、合并冲突、完整撤销及本地输入恢复。工作区界面尚在接入，不把模型测试当作浏览器验收。

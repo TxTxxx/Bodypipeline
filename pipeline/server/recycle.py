@@ -42,12 +42,16 @@ def record_cleanup(row):
 
 
 @contextlib.contextmanager
-def dataset_lock(store: Store, key: str):
+def dataset_lock(store: Store, key: str, *, shared=False, wait=False):
     directory = store.path / "recycle-locks"
     directory.mkdir(exist_ok=True)
     with (directory / f"{key}.lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(
+                lock,
+                (fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+                | (0 if wait else fcntl.LOCK_NB),
+            )
         except BlockingIOError as exc:
             raise DomainError("该数据集正在处理，请稍后重试", 409) from exc
         try:
@@ -195,7 +199,11 @@ class RecycleBin:
 
                 job_id = repo.removeprefix("bp/")
                 try:
-                    job = self.store.get("job", job_id) if repo.startswith("bp/") else None
+                    job = (
+                        self.store.get("job", job_id)
+                        if repo.startswith("bp/")
+                        else None
+                    )
                 except DomainError as exc:
                     if exc.code != 404:
                         raise

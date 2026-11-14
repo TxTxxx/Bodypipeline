@@ -30,14 +30,34 @@ class AnnotationModel(BaseModel):
 class Subtask(AnnotationModel):
     id: Identifier = Field(min_length=1, max_length=160)
     name: str = Field(min_length=1, max_length=400)
+    definition: str | None = Field(default=None, max_length=20000)
+    includes: str | None = Field(default=None, max_length=20000)
+    excludes: str | None = Field(default=None, max_length=20000)
+    startCondition: str | None = Field(default=None, max_length=20000)
+    endCondition: str | None = Field(default=None, max_length=20000)
 
 
 class AnnotationField(AnnotationModel):
     id: Identifier = Field(min_length=1, max_length=160)
     label: str = Field(min_length=1, max_length=400)
-    scope: Literal["episode", "attempt", "frame"]
+    scope: Literal["episode", "attempt", "segment", "frame"]
     kind: Literal["rating", "text", "textarea", "number", "single", "multi", "bool"]
     options: list[str] | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=20000)
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = Field(default=None, gt=0)
+    scale: str | None = Field(default=None, max_length=20000)
+
+    @model_validator(mode="after")
+    def scale_valid(self):
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum >= self.maximum
+        ):
+            raise ValueError("评分最小值必须小于最大值")
+        return self
 
 
 class TaskTemplate(AnnotationModel):
@@ -134,7 +154,9 @@ class TaskDocument(AnnotationModel):
                     continue
                 valid = field.scope == scope
                 if field.kind == "rating":
-                    valid &= type(value) is int and 1 <= value <= 5
+                    valid &= type(value) in (int, float) and (
+                        field.minimum if field.minimum is not None else 1
+                    ) <= value <= (field.maximum if field.maximum is not None else 5)
                 elif field.kind == "number":
                     valid &= type(value) in (int, float)
                 elif field.kind == "bool":
@@ -166,6 +188,10 @@ def validate_document(document: TaskDocument, frames: int) -> dict:
 
 
 def document_segments(document: dict) -> list[dict]:
+    if document.get("version") == 2:
+        from .annotation_contract import formal_segments
+
+        return formal_segments(document)
     names = {
         s["id"]: s["name"].strip() for s in document["templateSnapshot"]["subtasks"]
     }

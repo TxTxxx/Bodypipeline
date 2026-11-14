@@ -473,14 +473,17 @@ def create_gateway(settings):
         # Only server-owned preview identities are accepted, never a local_path
         # or arbitrary proxy destination. The Server alone writes draft state.
         score_preview(dataset_id)
-        return await annotation_proxy(f"/api/subtask-review/{dataset_id}/{suffix}", body)
+        return await annotation_proxy(
+            f"/api/subtask-review/{dataset_id}/{suffix}", body
+        )
 
     async def annotation_proxy(route, body=None):
         url = settings.server_url.rstrip("/") + route
         try:
             async with httpx.AsyncClient(trust_env=False) as client:
                 response = await client.request(
-                    "GET" if body is None else "POST", url,
+                    "GET" if body is None else "POST",
+                    url,
                     json=body.model_dump() if body is not None else None,
                     headers={"Authorization": "Bearer " + settings.token},
                     timeout=settings.command_timeout,
@@ -491,7 +494,16 @@ def create_gateway(settings):
             payload = response.json()
         except ValueError as exc:
             raise DomainError("Server 服务返回无效响应", 502) from exc
-        return JSONResponse(payload, status_code=response.status_code, headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            payload,
+            status_code=response.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    # Workspace files are shared; writes continue through the Server proxy.
+    from .annotation_routes import mount_workbench
+
+    mount_workbench(app, settings, store)
 
     @app.get("/api/task-templates")
     async def task_templates():
@@ -515,7 +527,10 @@ def create_gateway(settings):
 
     @app.get("/api/subtask-review/{dataset_id}/exports/{export_id}")
     async def review_export_status(dataset_id: str, export_id: str):
-        if not export_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in export_id):
+        if not export_id or any(
+            c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for c in export_id
+        ):
             raise DomainError("修订导出任务编号无效", 404)
         return await review_proxy(dataset_id, f"exports/{export_id}")
 
@@ -538,16 +553,15 @@ def create_gateway(settings):
         # The source is always the registered preview's own job, so the viewer
         # can never trim a dataset the caller does not have a preview for.
         row = score_preview(dataset_id)
-        return await annotation_proxy(
-            f"/api/jobs/{row['job_id']}/manual-trims", body
-        )
+        return await annotation_proxy(f"/api/jobs/{row['job_id']}/manual-trims", body)
 
     async def manual_job(dataset_id: str, job_id: str):
         """Fetch a trim job only when it belongs to this preview's dataset."""
 
         row = score_preview(dataset_id)
         if not job_id or any(
-            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            char
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
             for char in job_id
         ):
             raise DomainError("裁剪任务编号无效", 404)
@@ -606,9 +620,7 @@ def create_gateway(settings):
             raise DomainError("Server 预览服务返回无效响应", 502) from exc
         if response.status_code >= 400:
             detail = (
-                opened.get("detail")
-                if isinstance(opened, dict)
-                else "无法打开裁剪结果"
+                opened.get("detail") if isinstance(opened, dict) else "无法打开裁剪结果"
             )
             raise DomainError(str(detail), response.status_code)
         return JSONResponse(

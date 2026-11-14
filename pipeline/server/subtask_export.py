@@ -112,9 +112,7 @@ def _segment_text(event: dict) -> str:
     object_words = [word for word in obj.lower().split() if len(word) > 4]
     mentioned = any(
         target in lowered
-        or any(
-            target.endswith(word) or word.endswith(target) for word in verb_words
-        )
+        or any(target.endswith(word) or word.endswith(target) for word in verb_words)
         for target in object_words
     )
     if mentioned:
@@ -171,7 +169,9 @@ def _timeline(events: list[dict], duration_s: float) -> list[tuple[float, float,
             )
             end = following
         row["end"] = min(max(end, row["start"]), duration_s)
-    points = sorted({0.0, duration_s, *(r["start"] for r in events), *(r["end"] for r in events)})
+    points = sorted(
+        {0.0, duration_s, *(r["start"] for r in events), *(r["end"] for r in events)}
+    )
     merged: list[tuple[float, float, str]] = []
     for start, end in zip(points, points[1:]):
         if end <= start:
@@ -187,7 +187,9 @@ def _timeline(events: list[dict], duration_s: float) -> list[tuple[float, float,
     return merged
 
 
-def _frame_bounds(start_s: float, end_s: float, fps: float, frames: int) -> tuple[int, int]:
+def _frame_bounds(
+    start_s: float, end_s: float, fps: float, frames: int
+) -> tuple[int, int]:
     """Half-open frame range of a labelled span.
 
     Frame ``i`` is labelled when ``i / fps`` lies inside ``[start_s, end_s)``.
@@ -496,7 +498,10 @@ class SubtaskExportRunner:
             }
             for row in self.store.all("job")
             if row.get("operation") == "subtask_export"
-            and (row.get("annotation_id") == aid or row.get("source_annotation_id") == aid)
+            and (
+                row.get("annotation_id") == aid
+                or row.get("source_annotation_id") == aid
+            )
         ]
         rows.sort(key=lambda row: float(row.get("created_at") or 0), reverse=True)
         return rows
@@ -505,11 +510,15 @@ class SubtaskExportRunner:
     def enqueue(self, aid: str, name: str | None = None):
         tool = executable_path(self.settings.letools_bin)
         if not tool or not Path(tool).with_name("python").is_file():
-            raise DomainError("生成 Subtask 数据集需要可执行的 LeTools Python 环境", 503)
+            raise DomainError(
+                "生成 Subtask 数据集需要可执行的 LeTools Python 环境", 503
+            )
         with self.runner.lock:
             row = self.store.get("annotation", aid)
             if row["state"] in ACTIVE:
-                raise DomainError("标注任务仍在运行，请等待完成后再生成 Subtask 数据集", 409)
+                raise DomainError(
+                    "标注任务仍在运行，请等待完成后再生成 Subtask 数据集", 409
+                )
             # Resolve the registered dataset first: the annotation's recorded
             # path must still be the one the job publishes, otherwise the plan
             # would describe a dataset the export job never reads.
@@ -571,7 +580,9 @@ class SubtaskExportRunner:
                     "robot_type": row.get("robot_type")
                     or source_job.get("robot_type")
                     or plan["dataset"]["robot_type"],
-                    "capture_mode": "mock" if source_job.get("capture_mode") == "mock" else "subtask_export",
+                    "capture_mode": "mock"
+                    if source_job.get("capture_mode") == "mock"
+                    else "subtask_export",
                     "processing_mode": "real",
                     "run_doctor": False,
                     "source_count": plan["dataset"]["total_episodes"],
@@ -606,40 +617,142 @@ class SubtaskExportRunner:
             lock_key, source, _ = review.resolve(dataset_id)
             with dataset_lock(self.store, lock_key):
                 self.runner.merges._check_recycle(source)
-                source_job, source, snapshot, plan = review.export_plan(dataset_id, body)
+                source_job, source, snapshot, plan = review.export_plan(
+                    dataset_id, body
+                )
                 source_name = source_job.get("dataset_name") or dataset_id
-                output_name = dataset_name(body.name or f"{str(source_name)[:1970]}-revised")
-                key = "subtask-review:" + digest({"source": str(source), "plan": plan["digest"], "name": output_name})
+                output_name = dataset_name(
+                    body.name or f"{str(source_name)[:1970]}-revised"
+                )
+                key = "subtask-review:" + digest(
+                    {"source": str(source), "plan": plan["digest"], "name": output_name}
+                )
                 for existing in self.store.all("job"):
-                    if existing.get("key") == key and existing["state"] not in DEDUP_STATES:
+                    if (
+                        existing.get("key") == key
+                        and existing["state"] not in DEDUP_STATES
+                    ):
                         return existing
                 job = {
-                    "id": str(uuid.uuid4()), "key": key, "operation": "subtask_export",
+                    "id": str(uuid.uuid4()),
+                    "key": key,
+                    "operation": "subtask_export",
                     "source_kind": "lerobot_subtask_revision",
-                    "source_job_id": dataset_id, "source_dataset_name": source_name,
-                    "source_annotation_id": source_job.get("source_annotation_id") or source_job.get("annotation_id"),
-                    "source_path": str(source), "source_format": plan["dataset"]["format"],
-                    "target_format": TARGET_FORMAT, "source_snapshot": snapshot,
+                    "source_job_id": dataset_id,
+                    "source_dataset_name": source_name,
+                    "source_annotation_id": source_job.get("source_annotation_id")
+                    or source_job.get("annotation_id"),
+                    "source_path": str(source),
+                    "source_format": plan["dataset"]["format"],
+                    "target_format": TARGET_FORMAT,
+                    "source_snapshot": snapshot,
                     "source_episode_count": plan["dataset"]["total_episodes"],
-                    "plan_digest": plan["digest"], "revision_plan": plan,
-                    "subtask_summary": plan_summary(plan), "dataset_name": output_name,
-                    "instruction": "", "state": "QUEUED", "stage": "等待生成 Subtask 修订数据集",
-                    "created_at": now(), "error": None,
-                    "robot_type": source_job.get("robot_type") or plan["dataset"]["robot_type"],
-                    "capture_mode": "mock" if source_job.get("capture_mode") == "mock" else "subtask_export",
-                    "processing_mode": "real", "run_doctor": False,
+                    "plan_digest": plan["digest"],
+                    "revision_plan": plan,
+                    "subtask_summary": plan_summary(plan),
+                    "dataset_name": output_name,
+                    "instruction": "",
+                    "state": "QUEUED",
+                    "stage": "等待生成 Subtask 修订数据集",
+                    "created_at": now(),
+                    "error": None,
+                    "robot_type": source_job.get("robot_type")
+                    or plan["dataset"]["robot_type"],
+                    "capture_mode": "mock"
+                    if source_job.get("capture_mode") == "mock"
+                    else "subtask_export",
+                    "processing_mode": "real",
+                    "run_doctor": False,
                     "source_count": plan["dataset"]["total_episodes"],
-                    "episode_count": plan["dataset"]["total_episodes"], "frame_count": None,
+                    "episode_count": plan["dataset"]["total_episodes"],
+                    "frame_count": None,
                 }
                 for field in ("runtime_id", "provider", "profile", "profile_hash"):
                     if source_job.get(field) is not None:
                         job[field] = source_job[field]
                 if self.settings.data_root is not None:
                     job["data_layout"] = ROBOT_LAYOUT
-                if storage_path(self.settings, job, "work", job["id"]).is_relative_to(source):
+                if storage_path(self.settings, job, "work", job["id"]).is_relative_to(
+                    source
+                ):
                     raise DomainError("修订输出不能位于来源数据集内", 400)
                 self.store.put("job", job["id"], job)
                 return job
+
+    def enqueue_selection(self, dataset_id, body):
+        """Freeze the same explicit selection used by lightweight delivery."""
+        from .annotation_workbench import AnnotationWorkbench, annotation_lock
+
+        tool = executable_path(self.settings.letools_bin)
+        if not tool or not Path(tool).with_name("python").is_file():
+            raise DomainError("生成独立子集需要 LeTools Python 环境", 503)
+        review = AnnotationWorkbench(self.settings, self.store)
+        with self.runner.lock:
+            lock_key, source, _ = review.legacy.resolve(dataset_id)
+            with annotation_lock(self.store, lock_key):
+                self.runner.merges._check_recycle(source)
+                source_job, source, snapshot, plan = review.export_plan(
+                    dataset_id, body
+                )
+                source_name = source_job.get("dataset_name") or dataset_id
+                output_name = dataset_name(
+                    body.name or f"{str(source_name)[:1970]}-subset"
+                )
+                key = "annotation-subset:" + digest(
+                    {"source": str(source), "plan": plan["digest"], "name": output_name}
+                )
+                for existing in self.store.all("job"):
+                    if (
+                        existing.get("key") == key
+                        and existing["state"] not in DEDUP_STATES
+                    ):
+                        return existing
+                job = {
+                    "id": str(uuid.uuid4()),
+                    "key": key,
+                    "operation": "subtask_export",
+                    "source_kind": "lerobot_annotation_subset",
+                    "source_job_id": dataset_id,
+                    "source_dataset_name": source_name,
+                    "source_path": str(source),
+                    "source_format": plan["dataset"]["format"],
+                    "target_format": TARGET_FORMAT,
+                    "source_snapshot": snapshot,
+                    "source_episode_count": plan["dataset"]["total_episodes"],
+                    "plan_digest": plan["digest"],
+                    "revision_plan": plan,
+                    "subtask_summary": plan_summary(plan),
+                    "dataset_name": output_name,
+                    "instruction": "",
+                    "state": "QUEUED",
+                    "stage": "等待导出完整 Episode 子集",
+                    "created_at": now(),
+                    "error": None,
+                    "robot_type": source_job.get("robot_type")
+                    or plan["dataset"]["robot_type"],
+                    "capture_mode": "mock"
+                    if source_job.get("capture_mode") == "mock"
+                    else "subtask_export",
+                    "processing_mode": "real",
+                    "run_doctor": False,
+                    "source_count": len(plan["episodes"]),
+                    "episode_count": len(plan["episodes"]),
+                    "frame_count": None,
+                }
+                for field in ("runtime_id", "provider", "profile", "profile_hash"):
+                    if source_job.get(field) is not None:
+                        job[field] = source_job[field]
+                if self.settings.data_root is not None:
+                    job["data_layout"] = ROBOT_LAYOUT
+                if storage_path(self.settings, job, "work", job["id"]).is_relative_to(
+                    source
+                ):
+                    raise DomainError("输出不能位于来源数据集内", 400)
+                self.store.put("job", job["id"], job)
+                return {
+                    k: job.get(k)
+                    for k in ("id", "state", "stage", "dataset_name", "error")
+                }
 
     def run(self, job):
         save = self.runner.save
@@ -647,16 +760,24 @@ class SubtaskExportRunner:
         try:
             source = Path(job["source_path"])
             with dataset_lock(self.store, self._key(source)):
-                if job.get("source_kind") == "lerobot_subtask_revision":
+                if job.get("source_kind") in {
+                    "lerobot_subtask_revision",
+                    "lerobot_annotation_subset",
+                }:
                     self.runner.merges._check_recycle(source)
                     plan = job["revision_plan"]
-                    if digest({k: v for k, v in plan.items() if k != "digest"}) != plan["digest"]:
+                    if (
+                        digest({k: v for k, v in plan.items() if k != "digest"})
+                        != plan["digest"]
+                    ):
                         raise DomainError("修订导出计划校验失败", 409)
                 else:
                     annotation = self.store.get("annotation", job["annotation_id"])
                     plan = build_plan(self.settings, annotation)
                 if plan["digest"] != job["plan_digest"]:
-                    raise DomainError("标注结果在提交后发生变化，请重新生成 Subtask 数据集", 409)
+                    raise DomainError(
+                        "标注结果在提交后发生变化，请重新生成 Subtask 数据集", 409
+                    )
                 if not plan["episodes"]:
                     raise DomainError("标注结果已没有可导出的 Episode", 409)
                 saved = job["source_snapshot"]
@@ -675,7 +796,9 @@ class SubtaskExportRunner:
                     shutil.disk_usage(work).free
                     < extra + extra // 4 + self.settings.min_free_bytes
                 ):
-                    raise DomainError("输出存储空间不足，无法创建独立 Subtask 数据集", 507)
+                    raise DomainError(
+                        "输出存储空间不足，无法创建独立 Subtask 数据集", 507
+                    )
                 pending = work / "pending-dataset"
                 # The queue writes this step's stdout to <name>.json, so the spec must not
                 # share that name.
@@ -687,6 +810,10 @@ class SubtaskExportRunner:
                         "source_format": job["source_format"],
                         "target_format": TARGET_FORMAT,
                         "destination": str(pending),
+                        "subset": bool(plan.get("subset")),
+                        "selection": plan.get("selection"),
+                        "annotation_bundle": plan.get("annotation_bundle"),
+                        "source_signature": saved.get("signature"),
                         "expected": {
                             "episodes": plan["dataset"]["total_episodes"],
                         },
@@ -699,7 +826,11 @@ class SubtaskExportRunner:
                                 "frames": item["frames"],
                                 "segments": item["segments"],
                                 **({"atoms": item["atoms"]} if "atoms" in item else {}),
-                                **({"task_document": item["task_document"]} if "task_document" in item else {}),
+                                **(
+                                    {"task_document": item["task_document"]}
+                                    if "task_document" in item
+                                    else {}
+                                ),
                             }
                             for item in plan["episodes"]
                         ],
@@ -742,7 +873,9 @@ class SubtaskExportRunner:
                     or "subtask_index" not in (info.get("features") or {})
                     or result.get("validated") is not True
                 ):
-                    raise DomainError("Subtask 数据集的版本、Episode 总数或特征声明与计划不一致")
+                    raise DomainError(
+                        "Subtask 数据集的版本、Episode 总数或特征声明与计划不一致"
+                    )
                 save(job, stage="深度结构验证")
                 code, checked, err = self.runner.command(
                     [tool, "validate", str(pending), "--deep"],
@@ -762,8 +895,10 @@ class SubtaskExportRunner:
                 lineage = {
                     "operation": "subtask_export",
                     "job_id": job["id"],
-                    "annotation_id": job.get("annotation_id") or job.get("source_annotation_id"),
+                    "annotation_id": job.get("annotation_id")
+                    or job.get("source_annotation_id"),
                     "review": plan.get("review"),
+                    "selection": plan.get("selection"),
                     "source_job_id": job["source_job_id"],
                     "source_path": str(source),
                     "source_format": job["source_format"],
