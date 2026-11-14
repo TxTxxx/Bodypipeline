@@ -318,6 +318,7 @@ def create_app(settings, background=True):
             if tasks:
                 await asyncio.gather(*tasks)
             viewer.stop()
+            app.state.annotation_media.close()
             lock.release()
 
     app = FastAPI(title="Embodied Pipeline Server", lifespan=lifespan)

@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-from pathlib import Path
-
 from fastapi import Request
 from fastapi.responses import FileResponse, Response
 
-from pipeline.shared.core import DomainError, digest, executable_path
+from pipeline.shared.core import DomainError, digest
 from pipeline.shared.web import ASSETS
 
+from .annotation_media import AnnotationMedia
 from .annotation_workbench import (
     AnnotationWorkbench,
     ApplyCandidate,
@@ -27,6 +24,7 @@ from .viewer_data import serve_dataset_file
 def mount_workbench(app, settings, store, runner=None, annotations=None):
     workbench = AnnotationWorkbench(settings, store)
     app.state.annotation_workbench = workbench
+    decoder = app.state.annotation_media = AnnotationMedia(settings)
 
     @app.get("/workbench")
     def page():
@@ -56,42 +54,40 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
             raise DomainError("文件不存在", 404)
         return FileResponse(ASSETS / name)
 
-    def media_call(dataset, episode, mode, *args):
+    async def media_call(request, dataset, episode, mode, *, cache=None, **args):
         key, path, _ = workbench.legacy.resolve(dataset)
         snapshot = source_snapshot(path)
-        tool = executable_path(settings.letools_bin)
-        python = Path(tool).with_name("python") if tool else None
-        if python is None or not python.is_file():
-            raise DomainError("帧定位需要 LeTools 媒体环境", 503)
-        result = subprocess.run(
-            [
-                str(python),
-                str(Path(__file__).with_name("annotation_media_worker.py")),
-                mode,
-                str(path),
-                str(episode),
-                *map(str, args),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=settings.command_timeout,
-            env=settings.tool_environment(),
+        result = await decoder.read(
+            request,
+            {
+                "root": str(path),
+                "signature": snapshot["signature"],
+                "episode": episode,
+                "mode": mode,
+                **args,
+            },
+            cache,
         )
-        if result.returncode:
-            raise DomainError("无法对齐视频帧：" + result.stderr[-1000:], 422)
         if source_snapshot(path) != snapshot:
             raise DomainError("读取画面期间来源已变化", 409)
-        return json.loads(result.stdout)
+        return result
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}/media")
-    def media(dataset: str, episode: int):
+    async def media(dataset: str, episode: int, request: Request):
         _, path, _ = workbench.legacy.resolve(dataset)
         signature = source_snapshot(path)["signature"]
-        result = media_call(dataset, episode, "describe")
+        result = await media_call(request, dataset, episode, "describe")
         return {**result, "source_signature": signature}
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}/frame/{frame}")
-    def frame(dataset: str, episode: int, frame: int, camera: str, signature: str):
+    async def frame(
+        dataset: str,
+        episode: int,
+        frame: int,
+        camera: str,
+        signature: str,
+        request: Request,
+    ):
         _, path, _ = workbench.legacy.resolve(dataset)
         current = source_snapshot(path)["signature"]
         if current != signature:
@@ -99,13 +95,9 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         cache = settings.root / "annotation-frame-cache"
         cache.mkdir(parents=True, exist_ok=True)
         file = cache / (digest([dataset, current, episode, frame, camera]) + ".png")
-        meta = file.with_suffix(".json")
-        if not (file.is_file() and meta.is_file()):
-            info = media_call(dataset, episode, "frame", frame, camera, file)
-            from pipeline.shared.core import atomic_json
-
-            atomic_json(meta, info)
-        info = json.loads(meta.read_text())
+        info = await media_call(
+            request, dataset, episode, "frame", cache=file, frame=frame, camera=camera
+        )
         return FileResponse(
             file,
             media_type="image/png",
@@ -117,8 +109,12 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         )
 
     @app.get("/api/annotation-workbench/{dataset}/media/{relative:path}")
-    def video(dataset: str, relative: str, request: Request):
-        workbench.legacy.resolve(dataset)
+    def video(
+        dataset: str, relative: str, request: Request, signature: str | None = None
+    ):
+        _, path, _ = workbench.legacy.resolve(dataset)
+        if signature is not None and source_snapshot(path)["signature"] != signature:
+            raise DomainError("来源已变化，停止使用旧视频定位", 409)
         return serve_dataset_file(
             request, workbench.legacy.registry, f"bp/{dataset}/resolve/main/{relative}"
         )

@@ -1,3 +1,321 @@
+// pipeline/server/viewer_ui/workbench-media.ts
+function nearestFrame(times, time) {
+  let lo = 0, hi = times.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi >>> 1;
+    if (times[mid] < time)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return lo && time - times[lo - 1] <= times[lo] - time ? lo - 1 : lo;
+}
+function presentedFrame(media, camera, pts) {
+  const c = media.cameras[camera], time = pts - c.start;
+  if (!Number.isFinite(pts) || pts < c.start - 0.000001 || pts >= c.end - 0.000001)
+    return null;
+  const n = nearestFrame(media.timestamps, time);
+  return Math.abs(media.timestamps[n] - time) <= 0.51 / media.fps ? n : null;
+}
+function seekTime(media, camera, frame) {
+  const c = media.cameras[camera], start = c.start + media.timestamps[frame];
+  const width = frame + 1 < media.frames ? media.timestamps[frame + 1] - media.timestamps[frame] : Math.min(1 / media.fps, c.end - start);
+  return Math.min(c.end - 0.000001, start + width * 0.25);
+}
+
+class LatestSeek {
+  target = 0;
+  issued = null;
+  request(frame) {
+    this.target = frame;
+  }
+  take() {
+    if (this.issued !== null)
+      return null;
+    return this.issued = this.target;
+  }
+  finish() {
+    this.issued = null;
+  }
+}
+
+class VideoTransport {
+  options;
+  cameras;
+  alignedFrame = null;
+  target = 0;
+  playing = false;
+  disposed = false;
+  browsing = false;
+  generation = 0;
+  playIntent = 0;
+  pumpFrame = 0;
+  fallbackTimer;
+  fallback;
+  objects = [];
+  listeners = [];
+  published = -1;
+  constructor(options) {
+    this.options = options;
+    this.cameras = options.hosts.map((host) => {
+      const video = host.querySelector("video");
+      const c = {
+        host,
+        video,
+        image: host.querySelector("img"),
+        queue: new LatestSeek,
+        shown: null,
+        native: typeof video.requestVideoFrameCallback === "function",
+        clean: []
+      };
+      const listen = (event, fn) => {
+        video.addEventListener(event, fn);
+        c.clean.push(() => video.removeEventListener(event, fn));
+      };
+      listen("loadedmetadata", () => this.schedulePump());
+      listen("seeked", () => {
+        c.queue.finish();
+        this.publish();
+        this.schedulePump();
+      });
+      listen("error", () => {
+        if (!this.disposed)
+          this.options.error("浏览器无法读取此视频；暂停精确画面仍可尝试服务端解码。");
+      });
+      if (!c.native)
+        listen("timeupdate", () => {
+          if (this.playing)
+            this.present(c, video.currentTime, false);
+        });
+      return c;
+    });
+    this.cameras.forEach((c) => this.watch(c));
+  }
+  watch(c) {
+    if (!c.native || this.disposed)
+      return;
+    c.callback = c.video.requestVideoFrameCallback((_now, metadata) => {
+      if (this.disposed)
+        return;
+      this.present(c, metadata.mediaTime, true);
+      this.watch(c);
+    });
+  }
+  present(c, pts, exact) {
+    if (!c.image.hidden)
+      return;
+    const i = this.cameras.indexOf(c), media = this.options.media;
+    c.pts = pts;
+    c.shown = exact ? presentedFrame(media, i, pts) : null;
+    c.host.dataset.mediaPts = String(pts);
+    c.host.dataset.clock = exact ? "presented" : "preview";
+    if (c.shown === null)
+      delete c.host.dataset.displayedFrame;
+    else
+      c.host.dataset.displayedFrame = String(c.shown);
+    c.host.querySelector(".frame-tag").textContent = c.shown === null ? "视频预览" : `DATA FRAME ${c.shown}`;
+    if (this.playing && i === 0) {
+      const time = pts - media.cameras[0].start;
+      this.target = Math.max(0, Math.min(media.frames - 1, nearestFrame(media.timestamps, time)));
+      if (time >= media.timestamps[media.frames - 1] - 0.000001) {
+        this.pause(media.frames - 1);
+        return;
+      }
+      this.cameras.slice(1).forEach((other, j) => {
+        if (other.video.seeking)
+          return;
+        const delta = other.video.currentTime - media.cameras[j + 1].start - (c.video.currentTime - media.cameras[0].start);
+        if (Math.abs(delta) > 0.12) {
+          other.video.currentTime = Math.min(media.cameras[j + 1].end - 0.000001, media.cameras[j + 1].start + c.video.currentTime - media.cameras[0].start);
+        } else
+          other.video.playbackRate = Math.abs(delta) > 1 / media.fps ? delta > 0 ? 0.96 : 1.04 : 1;
+      });
+    }
+    this.publish();
+  }
+  publish() {
+    if (this.disposed)
+      return;
+    const aligned = !this.playing && !this.browsing && this.cameras.length > 0 && this.cameras.every((c) => c.shown === this.target && (!c.video.seeking || c.host.dataset.clock === "decoded"));
+    this.alignedFrame = aligned ? this.target : null;
+    const shown = this.cameras.map((c) => c.shown === null ? "—" : c.shown).join(" / ");
+    this.options.update(this.target, aligned ? `已对齐数据帧 ${this.target} · ${this.cameras.length} 个相机` : this.playing ? `连续播放 · 实际画面 ${shown}` : `预览目标 ${this.target} · 已显示 ${shown}`, aligned, this.playing);
+    for (const listener of this.listeners)
+      if (listener.frame !== this.target || aligned)
+        listener.resolve(aligned && listener.frame === this.target);
+    this.listeners = this.listeners.filter((l) => l.frame === this.target && !aligned);
+    if (aligned) {
+      clearTimeout(this.fallbackTimer);
+      this.fallback?.abort();
+      if (this.published !== this.target) {
+        this.published = this.target;
+        this.options.settled();
+      }
+    }
+  }
+  schedulePump() {
+    if (this.disposed || this.playing || this.pumpFrame)
+      return;
+    this.pumpFrame = requestAnimationFrame(() => {
+      this.pumpFrame = 0;
+      if (this.disposed || this.playing)
+        return;
+      this.cameras.forEach((c, i) => {
+        c.queue.request(this.target);
+        if (c.video.readyState < 1 || c.video.seeking || c.queue.issued !== null || c.shown === this.target)
+          return;
+        const next = c.queue.take();
+        if (next !== null)
+          c.video.currentTime = seekTime(this.options.media, i, next);
+      });
+      this.publish();
+    });
+  }
+  seek(frame, preview = false) {
+    if (this.disposed)
+      return;
+    const next = Math.max(0, Math.min(this.options.media.frames - 1, Math.round(frame)));
+    const changed = this.target !== next || this.playing;
+    if (changed) {
+      this.playIntent++;
+      this.generation++;
+      this.fallback?.abort();
+      this.published = -1;
+      this.objects.forEach(URL.revokeObjectURL);
+      this.objects = [];
+      this.cameras.forEach((c) => {
+        if (!c.image.hidden) {
+          c.shown = null;
+          delete c.host.dataset.displayedFrame;
+          delete c.host.dataset.mediaPts;
+          c.host.dataset.clock = "preview";
+          c.host.querySelector(".frame-tag").textContent = "视频预览";
+        }
+        c.image.hidden = true;
+      });
+    }
+    this.target = next;
+    this.browsing = preview;
+    this.playing = false;
+    this.cameras.forEach((c) => {
+      c.video.pause();
+      c.video.playbackRate = 1;
+      c.queue.request(next);
+    });
+    this.publish();
+    this.schedulePump();
+    clearTimeout(this.fallbackTimer);
+    if (!preview && this.alignedFrame === null) {
+      this.fallbackTimer = setTimeout(() => void this.precise(), this.cameras.every((c) => c.native) ? 700 : 80);
+    }
+  }
+  async precise() {
+    if (this.disposed || this.playing || this.browsing || this.alignedFrame !== null)
+      return;
+    this.fallback?.abort();
+    const abort = this.fallback = new AbortController, generation = this.generation, target = this.target;
+    try {
+      const frames = await this.options.exact(target, abort.signal);
+      if (abort.signal.aborted || this.disposed || generation !== this.generation)
+        return;
+      if (frames.length !== this.cameras.length || frames.some((f, i) => f.frame !== target || presentedFrame(this.options.media, i, f.pts) !== target))
+        throw Error("精确画面时间戳与数据帧不一致");
+      const objects = frames.map((f) => URL.createObjectURL(f.blob));
+      const images = await Promise.all(objects.map(async (url) => {
+        const image = new Image;
+        image.src = url;
+        await image.decode();
+        return image;
+      }));
+      if (abort.signal.aborted || this.disposed || generation !== this.generation) {
+        objects.forEach(URL.revokeObjectURL);
+        return;
+      }
+      this.objects.forEach(URL.revokeObjectURL);
+      this.objects = objects;
+      this.cameras.forEach((c, i) => {
+        c.image.src = images[i].src;
+        c.image.hidden = false;
+        c.shown = target;
+        c.host.dataset.displayedFrame = String(target);
+        c.host.dataset.mediaPts = String(frames[i].pts);
+        c.host.dataset.clock = "decoded";
+        c.host.querySelector(".frame-tag").textContent = `DATA FRAME ${target}`;
+      });
+      this.publish();
+    } catch (e) {
+      if (!abort.signal.aborted && !this.disposed && generation === this.generation)
+        this.options.error(`精确画面暂不可用：${e.message}。目标帧未被标为已对齐。`);
+    }
+  }
+  ready() {
+    if (this.alignedFrame === this.target)
+      return Promise.resolve(true);
+    const target = this.target;
+    return new Promise((resolve) => {
+      const listener = { frame: target, resolve: (ok) => {
+        clearTimeout(timer);
+        resolve(ok);
+      } };
+      const timer = setTimeout(() => {
+        this.listeners = this.listeners.filter((l) => l !== listener);
+        resolve(false);
+      }, 8000);
+      this.listeners.push(listener);
+    });
+  }
+  async play() {
+    if (this.playing || this.disposed)
+      return;
+    this.seek(this.target);
+    const intent = ++this.playIntent;
+    if (!await this.ready() || intent !== this.playIntent || this.disposed)
+      return;
+    this.fallback?.abort();
+    this.generation++;
+    this.playing = true;
+    this.browsing = false;
+    this.cameras.forEach((c) => {
+      c.image.hidden = true;
+    });
+    try {
+      await Promise.all(this.cameras.map((c) => c.video.play()));
+      if (!this.disposed && intent === this.playIntent)
+        this.publish();
+    } catch (e) {
+      if (this.disposed || intent !== this.playIntent)
+        return;
+      this.pause();
+      this.options.error(e.message);
+    }
+  }
+  pause(at) {
+    ++this.playIntent;
+    if (!this.playing && at === undefined)
+      return;
+    const shown = this.cameras[0]?.shown;
+    this.seek(at ?? shown ?? this.target);
+  }
+  dispose() {
+    this.disposed = true;
+    this.playIntent++;
+    this.fallback?.abort();
+    clearTimeout(this.fallbackTimer);
+    cancelAnimationFrame(this.pumpFrame);
+    this.listeners.forEach((l) => l.resolve(false));
+    this.listeners = [];
+    this.objects.forEach(URL.revokeObjectURL);
+    this.cameras.forEach((c) => {
+      c.clean.forEach((fn) => fn());
+      if (c.callback !== undefined)
+        c.video.cancelVideoFrameCallback(c.callback);
+      c.video.pause();
+      c.video.removeAttribute("src");
+      c.video.load();
+    });
+  }
+}
+
 // pipeline/server/viewer_ui/workbench-model.ts
 var copy = (x) => structuredClone(x);
 function uid() {
@@ -382,7 +700,7 @@ var frame = 0;
 var zoomStart = 0;
 var zoomEnd = 1;
 var playing = false;
-var seekGeneration = 0;
+var transport;
 var sessions = new Map;
 var loadGeneration = 0;
 var datasetGeneration = 0;
@@ -676,6 +994,7 @@ async function refresh(reset = true) {
   renderEpisodes();
 }
 async function openDataset(id) {
+  disposeVideo();
   const generation = ++datasetGeneration;
   ++loadGeneration;
   ++listGeneration;
@@ -733,7 +1052,7 @@ async function openEpisode(ep) {
   const load = ++loadGeneration, sourceDataset = dataset;
   if (active)
     backup(active);
-  pause();
+  disposeVideo();
   episode = ep;
   const existing = sessions.get(ep);
   if (existing)
@@ -854,38 +1173,47 @@ function populateFilter() {
   select.innerHTML = '<option value="">全部 Episode</option>' + active.doc.templateSnapshot.subtasks.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
   select.value = old;
 }
+function disposeVideo() {
+  transport?.dispose();
+  transport = undefined;
+  playing = false;
+  $("play").textContent = "播放";
+}
 function renderPreview() {
+  disposeVideo();
   const s = current();
   if (!s.media?.cameras.length) {
     $("preview").innerHTML = '<div class="empty">此来源没有可用视频。标注数据帧仍保留，不能把帧号当作画面验证。</div>';
     return;
   }
-  $("preview").innerHTML = s.media.cameras.map((c, i) => `<div class="camera" data-camera="${esc(c.key)}"><span class="camera-label">${esc(c.key)}</span><video preload="auto" playsinline muted data-video="${i}" src="${apiBase}${encodeURIComponent(dataset)}/media/${c.path.split("/").map(encodeURIComponent).join("/")}"></video><img alt="${esc(c.key)} 当前数据帧画面" data-frame-image="${i}"><span class="frame-tag">定位中</span></div>`).join("");
-  const primary = $("preview").querySelector("video");
-  if (primary)
-    primary.ontimeupdate = () => {
-      if (!playing || !s.media || active !== s)
+  $("preview").innerHTML = s.media.cameras.map((c, i) => `<div class="camera" data-camera="${esc(c.key)}"><span class="camera-label">${esc(c.key)}</span><video preload="auto" playsinline muted data-video="${i}" src="${apiBase}${encodeURIComponent(s.head.dataset)}/media/${c.path.split("/").map(encodeURIComponent).join("/")}?signature=${s.head.source_signature}"></video><img hidden alt="${esc(c.key)} 当前数据帧画面" data-frame-image="${i}"><span class="frame-tag">视频预览</span></div>`).join("");
+  const controller = new VideoTransport({
+    media: s.media,
+    hosts: Array.from($("preview").querySelectorAll(".camera")),
+    exact: (chosen, signal) => exactFrames(s, chosen, signal),
+    update: (chosen, state, aligned, running) => {
+      if (active !== s || transport !== controller)
         return;
-      const time = Math.max(0, primary.currentTime - s.media.cameras[0].start);
-      const times = s.media.timestamps;
-      let low = 0, high = times.length - 1;
-      while (low < high) {
-        const mid = Math.ceil((low + high) / 2);
-        if (times[mid] <= time + 0.0000001)
-          low = mid;
-        else
-          high = mid - 1;
-      }
-      frame = low;
-      $("preview").querySelectorAll("video").forEach((v, i) => {
-        if (i && Math.abs(v.currentTime - s.media.cameras[i].start - time) > 0.5 / s.media.fps)
-          v.currentTime = s.media.cameras[i].start + time;
-      });
-      updateFrameNumber("连续播放 · 暂停后定位数据帧");
-      renderTimeline();
-      if (time >= s.media.duration - 1 / s.media.fps / 2)
-        pause();
-    };
+      frame = chosen;
+      playing = running;
+      $("play").textContent = running ? "暂停" : "播放";
+      updateFrameNumber(state);
+      renderPlayhead();
+      frameEditing(aligned);
+    },
+    settled: () => {
+      if (active !== s || transport !== controller)
+        return;
+      renderFrameFields();
+      frameEditing(true);
+      backup(s);
+    },
+    error: (message) => {
+      if (active === s && transport === controller)
+        $("frame-state").textContent = message;
+    }
+  });
+  transport = controller;
 }
 function updateFrameNumber(state) {
   value("frame").value = String(frame);
@@ -895,106 +1223,68 @@ function updateFrameNumber(state) {
   if (state)
     $("frame-state").textContent = state;
 }
-async function seek(target) {
-  const s = current(), token = ++seekGeneration;
-  frame = Math.max(0, Math.min(s.head.frames - 1, Math.round(target)));
-  updateFrameNumber("正在解码实际画面…");
-  renderTimeline();
-  renderFrameFields();
-  if (!s.media?.cameras.length)
-    return;
-  const chosen = frame;
-  const cameras = Array.from($("preview").querySelectorAll(".camera"));
-  cameras.forEach((c) => c.classList.add("loading"));
-  const results = await Promise.allSettled(s.media.cameras.map(async (c, i) => {
-    const url = `${apiBase}${dataset}/episodes/${episode}/frame/${chosen}?camera=${encodeURIComponent(c.key)}&signature=${s.head.source_signature}`;
-    let blob;
+function frameEditing(aligned) {
+  for (const id of ["mark-start", "mark-end", "split", "add-vqa"]) {
+    const button = document.getElementById(id);
+    if (button)
+      button.disabled = !aligned;
+  }
+  $("frame-fields").querySelectorAll("input,select,textarea").forEach((el) => el.disabled = !aligned);
+}
+function annotationFrame() {
+  if (current().media?.cameras.length && transport?.alignedFrame !== frame)
+    throw Error("请先暂停并等待实际画面对齐，再记录当前帧。");
+  return frame;
+}
+async function exactFrames(s, chosen, signal) {
+  const media = s.media;
+  return Promise.all(media.cameras.map(async (c) => {
+    const url = `${apiBase}${encodeURIComponent(s.head.dataset)}/episodes/${s.head.episode}/frame/${chosen}?camera=${encodeURIComponent(c.key)}&signature=${s.head.source_signature}`;
+    let response;
     try {
-      const response = await fetch(url);
+      response = await fetch(url, { signal });
       if (!response.ok)
-        throw Error("画面定位失败");
-      blob = await response.blob();
+        throw Error(`画面读取失败 (${response.status})`);
       if ("caches" in window) {
         const cache = await caches.open("bodypipeline-workbench-frames-v2");
-        cache.put(url, new Response(blob));
+        cache.put(url, response.clone()).catch(() => {});
       }
     } catch (e) {
-      if (!("caches" in window))
+      if (signal.aborted || !("caches" in window))
         throw e;
       const old = await (await caches.open("bodypipeline-workbench-frames-v2")).match(url);
       if (!old)
-        throw Error("此帧画面未缓存；可以继续编辑，不能把帧号当作已定位画面");
-      blob = await old.blob();
+        throw Error("此帧画面未缓存");
+      response = old;
     }
-    if (token !== seekGeneration || active !== s)
-      return;
-    const img = cameras[i]?.querySelector("img");
-    if (!img)
-      return;
-    const previous = img.src;
-    const object = URL.createObjectURL(blob);
-    await new Promise((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(Error("画面解码失败"));
-      img.src = object;
-    });
-    if (previous.startsWith("blob:"))
-      URL.revokeObjectURL(previous);
-    if (token !== seekGeneration)
-      return;
-    img.hidden = false;
-    cameras[i].dataset.displayedFrame = String(chosen);
-    cameras[i].querySelector(".frame-tag").textContent = `DATA FRAME ${chosen}`;
-    cameras[i].classList.remove("loading");
-    const video = cameras[i].querySelector("video");
-    video.pause();
-    video.currentTime = c.start + s.media.timestamps[chosen];
+    return {
+      frame: Number(response.headers.get("X-Data-Frame") ?? chosen),
+      pts: Number(response.headers.get("X-Media-Pts") ?? c.start + media.timestamps[chosen]),
+      blob: await response.blob()
+    };
   }));
-  if (token !== seekGeneration)
-    return;
-  const failed = results.find((r) => r.status === "rejected");
-  $("frame-state").textContent = failed ? String(failed.reason.message) : `已对齐数据帧 ${chosen} · ${s.media.cameras.length} 个相机`;
-  backup(s);
+}
+function seek(target, preview = false) {
+  const s = current();
+  if (transport)
+    transport.seek(target, preview);
+  else {
+    frame = Math.max(0, Math.min(s.head.frames - 1, Math.round(target)));
+    updateFrameNumber("没有可用画面，当前仅为数据帧位置");
+    renderPlayhead();
+    renderFrameFields();
+  }
 }
 function pause() {
-  if (playing && active?.media) {
-    const primary = $("preview").querySelector("video");
-    if (primary) {
-      const time = primary.currentTime - active.media.cameras[0].start;
-      const ts = active.media.timestamps;
-      let best = 0;
-      for (let i = 1;i < ts.length; i++) {
-        if (Math.abs(ts[i] - time) < Math.abs(ts[best] - time))
-          best = i;
-      }
-      frame = best;
-    }
-  }
-  playing = false;
-  $("play").textContent = "播放";
-  $("preview").querySelectorAll("video").forEach((v) => v.pause());
-  if (active)
-    safe(() => seek(frame));
+  transport?.pause();
 }
 function play() {
   const s = current();
-  if (!s.media)
-    return;
   if (s.readFailure)
     throw Error(s.readFailure);
   if (s.remote && s.remote.source_signature !== s.head.source_signature)
     throw Error("来源变化后禁止播放新来源覆盖旧草稿画面");
-  playing = true;
-  ++seekGeneration;
-  $("play").textContent = "暂停并精确定位";
-  $("preview").querySelectorAll("img").forEach((img) => img.hidden = true);
-  $("preview").querySelectorAll("video").forEach((v, i) => {
-    v.currentTime = s.media.cameras[i].start + s.media.timestamps[frame];
-    v.play().catch((e) => {
-      playing = false;
-      note(e.message);
-    });
-  });
+  return transport?.play();
 }
 function visiblePercent(f) {
   return (f - zoomStart) / (zoomEnd - zoomStart) * 100;
@@ -1033,10 +1323,21 @@ function renderTimeline() {
       overlay.style.width = `${(Math.min(hi, r.end) - Math.max(lo, r.start)) / (hi - lo) * 100}%`;
     } catch {}
   }
-  const head = $("track").querySelector(".playhead");
-  if (head)
-    head.style.left = `${visiblePercent(frame)}%`;
+  renderPlayhead();
   $("zoom-status").textContent = `局部 ${lo}–${hi - 1} · ${hi - lo} / ${s.head.frames} 帧`;
+}
+function renderPlayhead() {
+  let head = $("track").querySelector(".playhead");
+  if (frame < zoomStart || frame >= zoomEnd) {
+    head?.remove();
+    return;
+  }
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "playhead";
+    $("track").append(head);
+  }
+  head.style.left = `${visiblePercent(frame)}%`;
 }
 var gesture = null;
 function pointFrame(e, host, edge = false) {
@@ -1072,7 +1373,7 @@ $("timeline").addEventListener("pointerdown", (e) => {
   e.preventDefault();
   if (mode === "scrub") {
     pause();
-    safe(() => seek(at));
+    safe(() => seek(at, true));
   }
 });
 $("timeline").addEventListener("pointermove", (e) => {
@@ -1080,7 +1381,7 @@ $("timeline").addEventListener("pointermove", (e) => {
     return;
   gesture.current = pointFrame(e, gesture.host, gesture.mode === "start" || gesture.mode === "end");
   if (gesture.mode === "scrub") {
-    safe(() => seek(gesture.current));
+    safe(() => seek(gesture.current, true));
   } else if (gesture.mode === "range") {
     active.input.first = String(Math.min(gesture.anchor, gesture.current));
     active.input.last = String(Math.max(gesture.anchor, gesture.current));
@@ -1116,6 +1417,8 @@ $("timeline").addEventListener("pointerup", (e) => {
 });
 $("timeline").addEventListener("pointercancel", () => {
   if (gesture && active) {
+    if (gesture.mode === "scrub")
+      seek(frame);
     active.doc = gesture.before;
     gesture = null;
     renderTimeline();
@@ -1294,7 +1597,7 @@ function renderEditor() {
     backup(s);
   });
   btn("split", () => {
-    change(split(s.doc, s.head.frames, seg.id, frame), "split");
+    change(split(s.doc, s.head.frames, seg.id, annotationFrame()), "split");
     renderEditor();
   });
   btn("merge-segment", () => mergeSegmentDialog(seg));
@@ -1332,6 +1635,7 @@ function renderFrameFields() {
   const s = active, n = s.doc.frames.find((f) => f.frame === frame);
   $("frame-fields").innerHTML = '<div class="field-grid">' + s.doc.templateSnapshot.fields.filter((f) => f.scope === "frame").map((f) => fieldControl(f, n?.values[f.id], String(frame))).join("") + "</div>";
   bindFields($("frame-fields"), "frame", () => n?.values || {}, (d, id, v) => {
+    annotationFrame();
     let row = d.frames.find((f) => f.frame === frame);
     if (!row) {
       row = { id: uid(), frame, values: {} };
@@ -1721,6 +2025,7 @@ for (const [id, key] of [
     backup(current());
   };
 btn("add-vqa", () => {
+  annotationFrame();
   const question = value("vqa-question").value.trim(), answer = value("vqa-answer").value.trim();
   if (!question && !answer)
     throw Error("请填写问题或观察");
@@ -1772,8 +2077,7 @@ value("frame").onchange = () => {
 };
 value("scrub").oninput = () => {
   const target = Number(value("scrub").value);
-  pause();
-  safe(() => seek(target));
+  safe(() => seek(target, true));
 };
 value("scrub").onchange = () => safe(() => seek(Number(value("scrub").value)));
 function setTool(next) {
@@ -1827,12 +2131,12 @@ function historyStep(redo = false) {
 btn("undo", () => historyStep());
 btn("redo", () => historyStep(true));
 btn("mark-start", () => {
-  value("range-first").value = String(frame);
+  value("range-first").value = String(annotationFrame());
   rememberInput();
   renderTimeline();
 });
 btn("mark-end", () => {
-  value("range-last").value = String(frame);
+  value("range-last").value = String(annotationFrame());
   rememberInput();
   renderTimeline();
 });

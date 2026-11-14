@@ -448,6 +448,7 @@ def create_gateway(settings):
             yield
         finally:
             await asyncio.to_thread(scores.close)
+            await asyncio.to_thread(_app.state.annotation_media.close)
 
     app = FastAPI(title="LeRobot Viewer Gateway", lifespan=lifespan)
     app.state.episode_scores = scores

@@ -1,3 +1,4 @@
+import { VideoTransport, type Media, type ExactFrame } from "./workbench-media";
 import {
   copy,
   uid,
@@ -67,16 +68,8 @@ let drafts: LocalDrafts,
   frame = 0,
   zoomStart = 0,
   zoomEnd = 1,
-  playing = false,
-  seekGeneration = 0;
-interface Media {
-  frames: number;
-  fps: number;
-  source_signature?: string;
-  timestamps: number[];
-  duration: number;
-  cameras: { key: string; path: string; start: number; end: number }[];
-}
+  playing = false;
+let transport: VideoTransport | undefined;
 interface Session {
   head: Head;
   doc: Document;
@@ -444,6 +437,7 @@ async function refresh(reset = true) {
   renderEpisodes();
 }
 async function openDataset(id: string) {
+  disposeVideo();
   const generation = ++datasetGeneration;
   ++loadGeneration;
   ++listGeneration;
@@ -505,7 +499,7 @@ async function openEpisode(ep: number) {
   const load = ++loadGeneration,
     sourceDataset = dataset;
   if (active) backup(active);
-  pause();
+  disposeVideo();
   episode = ep;
   const existing = sessions.get(ep);
   if (existing) active = existing;
@@ -638,47 +632,47 @@ function populateFilter() {
       .join("");
   select.value = old;
 }
+function disposeVideo() {
+  transport?.dispose();
+  transport = undefined;
+  playing = false;
+  $("play").textContent = "播放";
+}
 function renderPreview() {
+  disposeVideo();
   const s = current();
   if (!s.media?.cameras.length) {
     $("preview").innerHTML =
       '<div class="empty">此来源没有可用视频。标注数据帧仍保留，不能把帧号当作画面验证。</div>';
     return;
   }
-  $("preview").innerHTML = s.media.cameras
-    .map(
-      (c, i) =>
-        `<div class="camera" data-camera="${esc(c.key)}"><span class="camera-label">${esc(c.key)}</span><video preload="auto" playsinline muted data-video="${i}" src="${apiBase}${encodeURIComponent(dataset)}/media/${c.path.split("/").map(encodeURIComponent).join("/")}"></video><img alt="${esc(c.key)} 当前数据帧画面" data-frame-image="${i}"><span class="frame-tag">定位中</span></div>`,
-    )
-    .join("");
-  const primary = $("preview").querySelector<HTMLVideoElement>("video");
-  if (primary)
-    primary.ontimeupdate = () => {
-      if (!playing || !s.media || active !== s) return;
-      const time = Math.max(0, primary.currentTime - s.media.cameras[0].start);
-      const times = s.media.timestamps;
-      let low = 0,
-        high = times.length - 1;
-      while (low < high) {
-        const mid = Math.ceil((low + high) / 2);
-        if (times[mid] <= time + 1e-7) low = mid;
-        else high = mid - 1;
-      }
-      frame = low;
-      $("preview")
-        .querySelectorAll<HTMLVideoElement>("video")
-        .forEach((v, i) => {
-          if (
-            i &&
-            Math.abs(v.currentTime - s.media!.cameras[i].start - time) >
-              0.5 / s.media!.fps
-          )
-            v.currentTime = s.media!.cameras[i].start + time;
-        });
-      updateFrameNumber("连续播放 · 暂停后定位数据帧");
-      renderTimeline();
-      if (time >= s.media.duration - 1 / s.media.fps / 2) pause();
-    };
+  $("preview").innerHTML = s.media.cameras.map((c, i) =>
+    `<div class="camera" data-camera="${esc(c.key)}"><span class="camera-label">${esc(c.key)}</span><video preload="auto" playsinline muted data-video="${i}" src="${apiBase}${encodeURIComponent(s.head.dataset)}/media/${c.path.split("/").map(encodeURIComponent).join("/")}?signature=${s.head.source_signature}"></video><img hidden alt="${esc(c.key)} 当前数据帧画面" data-frame-image="${i}"><span class="frame-tag">视频预览</span></div>`
+  ).join("");
+  const controller = new VideoTransport({
+    media: s.media,
+    hosts: Array.from($("preview").querySelectorAll<HTMLElement>(".camera")),
+    exact: (chosen, signal) => exactFrames(s, chosen, signal),
+    update: (chosen, state, aligned, running) => {
+      if (active !== s || transport !== controller) return;
+      frame = chosen;
+      playing = running;
+      $("play").textContent = running ? "暂停" : "播放";
+      updateFrameNumber(state);
+      renderPlayhead();
+      frameEditing(aligned);
+    },
+    settled: () => {
+      if (active !== s || transport !== controller) return;
+      renderFrameFields();
+      frameEditing(true);
+      backup(s);
+    },
+    error: message => {
+      if (active === s && transport === controller) $("frame-state").textContent = message;
+    },
+  });
+  transport = controller;
 }
 function updateFrameNumber(state?: string) {
   value("frame").value = String(frame);
@@ -686,111 +680,61 @@ function updateFrameNumber(state?: string) {
   if (active) active.input.frame = String(frame);
   if (state) $("frame-state").textContent = state;
 }
-async function seek(target: number) {
-  const s = current(),
-    token = ++seekGeneration;
-  frame = Math.max(0, Math.min(s.head.frames - 1, Math.round(target)));
-  updateFrameNumber("正在解码实际画面…");
-  renderTimeline();
-  renderFrameFields();
-  if (!s.media?.cameras.length) return;
-  const chosen = frame;
-  const cameras = Array.from(
-    $("preview").querySelectorAll<HTMLElement>(".camera"),
-  );
-  cameras.forEach((c) => c.classList.add("loading"));
-  const results = await Promise.allSettled(
-    s.media.cameras.map(async (c, i) => {
-      const url = `${apiBase}${dataset}/episodes/${episode}/frame/${chosen}?camera=${encodeURIComponent(c.key)}&signature=${s.head.source_signature}`;
-      let blob: Blob;
-      try {
-        const response = await fetch(url);
-        if (!response.ok) throw Error("画面定位失败");
-        blob = await response.blob();
-        if ("caches" in window) {
-          const cache = await caches.open("bodypipeline-workbench-frames-v2");
-          void cache.put(url, new Response(blob));
-        }
-      } catch (e) {
-        if (!("caches" in window)) throw e;
-        const old = await (
-          await caches.open("bodypipeline-workbench-frames-v2")
-        ).match(url);
-        if (!old)
-          throw Error("此帧画面未缓存；可以继续编辑，不能把帧号当作已定位画面");
-        blob = await old.blob();
-      }
-      if (token !== seekGeneration || active !== s) return;
-      const img = cameras[i]?.querySelector<HTMLImageElement>("img");
-      if (!img) return;
-      const previous = img.src;
-      const object = URL.createObjectURL(blob);
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(Error("画面解码失败"));
-        img.src = object;
-      });
-      if (previous.startsWith("blob:")) URL.revokeObjectURL(previous);
-      if (token !== seekGeneration) return;
-      img.hidden = false;
-      cameras[i].dataset.displayedFrame = String(chosen);
-      cameras[i].querySelector(".frame-tag")!.textContent =
-        `DATA FRAME ${chosen}`;
-      cameras[i].classList.remove("loading");
-      const video = cameras[i].querySelector("video")!;
-      video.pause();
-      video.currentTime = c.start + s.media!.timestamps[chosen];
-    }),
-  );
-  if (token !== seekGeneration) return;
-  const failed = results.find((r) => r.status === "rejected") as
-    PromiseRejectedResult | undefined;
-  $("frame-state").textContent = failed
-    ? String(failed.reason.message)
-    : `已对齐数据帧 ${chosen} · ${s.media.cameras.length} 个相机`;
-  backup(s);
-}
-function pause() {
-  if (playing && active?.media) {
-    const primary = $("preview").querySelector<HTMLVideoElement>("video");
-    if (primary) {
-      const time = primary.currentTime - active.media.cameras[0].start;
-      const ts = active.media.timestamps;
-      let best = 0;
-      for (let i = 1; i < ts.length; i++) {
-        if (Math.abs(ts[i] - time) < Math.abs(ts[best] - time)) best = i;
-      }
-      frame = best;
-    }
+function frameEditing(aligned: boolean) {
+  for (const id of ["mark-start", "mark-end", "split", "add-vqa"]) {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) button.disabled = !aligned;
   }
-  playing = false;
-  $("play").textContent = "播放";
-  $("preview")
-    .querySelectorAll<HTMLVideoElement>("video")
-    .forEach((v) => v.pause());
-  if (active) safe(() => seek(frame));
+  $("frame-fields").querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input,select,textarea")
+    .forEach(el => el.disabled = !aligned);
 }
+function annotationFrame() {
+  if (current().media?.cameras.length && transport?.alignedFrame !== frame)
+    throw Error("请先暂停并等待实际画面对齐，再记录当前帧。");
+  return frame;
+}
+async function exactFrames(s: Session, chosen: number, signal: AbortSignal): Promise<ExactFrame[]> {
+  const media = s.media!;
+  return Promise.all(media.cameras.map(async c => {
+    const url = `${apiBase}${encodeURIComponent(s.head.dataset)}/episodes/${s.head.episode}/frame/${chosen}?camera=${encodeURIComponent(c.key)}&signature=${s.head.source_signature}`;
+    let response: Response;
+    try {
+      response = await fetch(url, { signal });
+      if (!response.ok) throw Error(`画面读取失败 (${response.status})`);
+      if ("caches" in window) {
+        const cache = await caches.open("bodypipeline-workbench-frames-v2");
+        void cache.put(url, response.clone()).catch(() => {});
+      }
+    } catch (e) {
+      if (signal.aborted || !("caches" in window)) throw e;
+      const old = await (await caches.open("bodypipeline-workbench-frames-v2")).match(url);
+      if (!old) throw Error("此帧画面未缓存");
+      response = old;
+    }
+    return {
+      frame: Number(response.headers.get("X-Data-Frame") ?? chosen),
+      pts: Number(response.headers.get("X-Media-Pts") ?? c.start + media.timestamps[chosen]),
+      blob: await response.blob(),
+    };
+  }));
+}
+function seek(target: number, preview = false) {
+  const s = current();
+  if (transport) transport.seek(target, preview);
+  else {
+    frame = Math.max(0, Math.min(s.head.frames - 1, Math.round(target)));
+    updateFrameNumber("没有可用画面，当前仅为数据帧位置");
+    renderPlayhead();
+    renderFrameFields();
+  }
+}
+function pause() { transport?.pause(); }
 function play() {
   const s = current();
-  if (!s.media) return;
   if (s.readFailure) throw Error(s.readFailure);
   if (s.remote && s.remote.source_signature !== s.head.source_signature)
     throw Error("来源变化后禁止播放新来源覆盖旧草稿画面");
-  playing = true;
-  ++seekGeneration;
-  $("play").textContent = "暂停并精确定位";
-  $("preview")
-    .querySelectorAll<HTMLImageElement>("img")
-    .forEach((img) => (img.hidden = true));
-  $("preview")
-    .querySelectorAll<HTMLVideoElement>("video")
-    .forEach((v, i) => {
-      v.currentTime = s.media!.cameras[i].start + s.media!.timestamps[frame];
-      void v.play().catch((e) => {
-        playing = false;
-        note(e.message);
-      });
-    });
+  return transport?.play();
 }
 function visiblePercent(f: number) {
   return ((f - zoomStart) / (zoomEnd - zoomStart)) * 100;
@@ -848,10 +792,19 @@ function renderTimeline() {
       overlay.style.width = `${((Math.min(hi, r.end) - Math.max(lo, r.start)) / (hi - lo)) * 100}%`;
     } catch {}
   }
-  const head = $("track").querySelector<HTMLElement>(".playhead");
-  if (head) head.style.left = `${visiblePercent(frame)}%`;
+  renderPlayhead();
   $("zoom-status").textContent =
     `局部 ${lo}–${hi - 1} · ${hi - lo} / ${s.head.frames} 帧`;
+}
+function renderPlayhead() {
+  let head = $("track").querySelector<HTMLElement>(".playhead");
+  if (frame < zoomStart || frame >= zoomEnd) { head?.remove(); return; }
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "playhead";
+    $("track").append(head);
+  }
+  head.style.left = `${visiblePercent(frame)}%`;
 }
 let gesture: null | {
   mode: string;
@@ -914,7 +867,7 @@ $("timeline").addEventListener("pointerdown", (e) => {
   e.preventDefault();
   if (mode === "scrub") {
     pause();
-    safe(() => seek(at));
+    safe(() => seek(at, true));
   }
 });
 $("timeline").addEventListener("pointermove", (e) => {
@@ -925,7 +878,7 @@ $("timeline").addEventListener("pointermove", (e) => {
     gesture.mode === "start" || gesture.mode === "end",
   );
   if (gesture.mode === "scrub") {
-    safe(() => seek(gesture!.current));
+    safe(() => seek(gesture!.current, true));
   } else if (gesture.mode === "range") {
     active.input.first = String(Math.min(gesture.anchor, gesture.current));
     active.input.last = String(Math.max(gesture.anchor, gesture.current));
@@ -975,6 +928,7 @@ $("timeline").addEventListener("pointerup", (e) => {
 });
 $("timeline").addEventListener("pointercancel", () => {
   if (gesture && active) {
+    if (gesture.mode === "scrub") seek(frame);
     active.doc = gesture.before;
     gesture = null;
     renderTimeline();
@@ -1265,7 +1219,7 @@ function renderEditor() {
     backup(s);
   });
   btn("split", () => {
-    change(split(s.doc, s.head.frames, seg.id, frame), "split");
+    change(split(s.doc, s.head.frames, seg.id, annotationFrame()), "split");
     renderEditor();
   });
   btn("merge-segment", () => mergeSegmentDialog(seg));
@@ -1336,6 +1290,7 @@ function renderFrameFields() {
     "frame",
     () => n?.values || {},
     (d, id, v) => {
+      annotationFrame();
       let row = d.frames.find((f) => f.frame === frame);
       if (!row) {
         row = { id: uid(), frame, values: {} };
@@ -1874,6 +1829,7 @@ for (const [id, key] of [
     backup(current());
   };
 btn("add-vqa", () => {
+  annotationFrame();
   const question = value("vqa-question").value.trim(),
     answer = value("vqa-answer").value.trim();
   if (!question && !answer) throw Error("请填写问题或观察");
@@ -1925,8 +1881,7 @@ value("frame").onchange = () => {
 };
 value("scrub").oninput = () => {
   const target = Number(value("scrub").value);
-  pause();
-  safe(() => seek(target));
+  safe(() => seek(target, true));
 };
 value("scrub").onchange = () => safe(() => seek(Number(value("scrub").value)));
 function setTool(next: typeof tool) {
@@ -1995,12 +1950,12 @@ function historyStep(redo = false) {
 btn("undo", () => historyStep());
 btn("redo", () => historyStep(true));
 btn("mark-start", () => {
-  value("range-first").value = String(frame);
+  value("range-first").value = String(annotationFrame());
   rememberInput();
   renderTimeline();
 });
 btn("mark-end", () => {
-  value("range-last").value = String(frame);
+  value("range-last").value = String(annotationFrame());
   rememberInput();
   renderTimeline();
 });

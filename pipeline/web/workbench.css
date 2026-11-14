@@ -319,6 +319,9 @@ textarea:focus {
   inset: 0;
   background: #101b2c;
 }
+.camera img[hidden] {
+  display: none;
+}
 .camera .camera-label {
   position: absolute;
   left: 9px;
@@ -340,15 +343,6 @@ textarea:focus {
   border-radius: 4px;
   font-family: monospace;
   z-index: 2;
-}
-.camera.loading:after {
-  content: "定位实际画面…";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: #0f182b99;
-  color: #c5d1ec;
 }
 .transport {
   display: flex;
