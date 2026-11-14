@@ -542,7 +542,7 @@
                   </div>
                   <div class="conversion-grid" id="annotation-boundary-options">
                     <div><label for="annotation-boundary-target">模板边界误差目标（秒）</label><input id="annotation-boundary-target" type="number" min="0.01" max="5" step="0.01" value="0.2"><p class="small muted">质量目标待真实模型验证；加密取证无法确定时标待复核。</p></div>
-                    <div><label for="annotation-boundary-window">交界附近取证窗口（±秒）</label><input id="annotation-boundary-window" type="number" min="0.2" max="30" step="0.1" value="1.0"><p class="small muted">粗定位后在窗口内加密采样，额外调用、重试和未结算预留均计入预算。</p></div>
+                    <div><label for="annotation-boundary-window">交界附近取证窗口（±秒）</label><input id="annotation-boundary-window" type="number" min="0.2" max="30" step="0.1" value="1.0"><p class="small muted" id="annotation-boundary-cost">粗定位后在窗口内加密采样，额外调用、重试和未结算预留均计入预算。</p></div>
                   </div>
                   <label class="check-label" for="annotation-field-dictionary"><input id="annotation-field-dictionary" type="checkbox" disabled />允许模型解释来源字段的含义</label>
                   <label for="annotation-note">任务说明（可选）</label>
@@ -606,7 +606,7 @@
         <div class="dataset-delete-body">
           <p class="small muted">续跑需要模型访问凭据。密钥只保存在 Server 内存中，任务结束或取消后清除；不写入任务记录、日志或导出结果。</p>
           <p class="small muted" id="annotation-resume-hint"></p>
-          <p class="small muted">模板任务会保留有效初稿，对不符合模板的模型回复重新请求；重试费用计入本次预算。</p>
+          <p class="small muted" id="annotation-resume-cost">模板任务会保留有效初稿，对不符合模板的模型回复重新请求；重试费用计入本次预算。</p>
           <label for="annotation-resume-base-url">模型 baseURL（留空使用服务器默认）</label>
           <input id="annotation-resume-base-url" type="url" autocomplete="off" placeholder="https://gateway.example.com/v1" />
           <label for="annotation-resume-api-key">模型 API Key（服务器已有默认密钥时可留空）</label>

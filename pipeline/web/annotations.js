@@ -501,7 +501,9 @@
       showUnavailable(options.reason || "服务器未找到可用的 Argus");
     }
     $("annotation-execution-support").textContent = options.execution_contract_v2
-      ? "已支持限定范围，以及每次逻辑请求最多三次自动重试与累计预算预留。"
+      ? options.unlimited
+        ? "已支持限定范围，以及每次逻辑请求最多三次自动重试；费用与用量继续记录，当前不限额。"
+        : "已支持限定范围，以及每次逻辑请求最多三次自动重试与累计预算预留。"
       : "当前为旧 Argus：可用原生全量分析；试跑、选择范围及新的统一重试和预算契约需要先运行 scripts/install_argus.sh 更新工具链。";
     renderBudget();
     updateModelControls();
@@ -578,6 +580,9 @@
       box.textContent = "正在读取预算…";
       return;
     }
+    $("annotation-boundary-cost").textContent = options.unlimited
+      ? "粗定位后在窗口内加密采样，额外调用与重试的费用、用量及未结算状态继续记录；当前不限额。"
+      : "粗定位后在窗口内加密采样，额外调用、重试和未结算预留均计入预算。";
     if (options.unlimited) {
       const cap = $("annotation-cap");
       cap.required = false;
@@ -746,7 +751,7 @@
         ? `<button class="danger" type="button" data-annotation-cancel="${esc(row.id)}" ${row.cancel_requested ? "disabled" : ""}>${row.cancel_requested ? "正在取消" : "取消任务"}</button>`
         : "",
       (RESUMABLE.has(row.state) || (row.state === "COMPLETED" && ["trial","selection"].includes(row.run_scope)))
-        ? `<button class="secondary" type="button" data-annotation-resume="${esc(row.id)}">${row.state === "COMPLETED" ? "明确继续全量 / 复用成功结果" : "续跑未完成请求 / 调整预算"}</button>`
+        ? `<button class="secondary" type="button" data-annotation-resume="${esc(row.id)}">${row.state === "COMPLETED" ? "明确继续全量 / 复用成功结果" : options?.unlimited ? "续跑未完成请求" : "续跑未完成请求 / 调整预算"}</button>`
         : "",
       row.episodes_done || row.episode_count
         ? `<a class="secondary" href="/api/annotations/${esc(row.id)}/export" download>导出完整结果</a>`
@@ -1404,6 +1409,11 @@
     resumeTarget = id;
     $("annotation-continue-full").checked = row.state === "COMPLETED" && row.run_scope === "trial";
     $("annotation-resume-cap").value = "";
+    $("annotation-resume-cap").disabled = Boolean(options?.unlimited);
+    $("annotation-resume-cap").closest("label").hidden = Boolean(options?.unlimited);
+    $("annotation-resume-cost").textContent = options?.unlimited
+      ? "模板任务会保留有效初稿，对不符合模板的模型回复重新请求；费用与用量继续记录，当前不限额。"
+      : "模板任务会保留有效初稿，对不符合模板的模型回复重新请求；重试费用计入本次预算。";
     const configured = Boolean(options?.api_key_configured);
     $("annotation-resume-base-url").value = row.base_url || "";
     $("annotation-resume-api-key").value = "";
