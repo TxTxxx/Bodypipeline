@@ -14,6 +14,7 @@ import {
   LocalDrafts,
   EpisodeSelection,
   inclusive,
+  attemptOrdinals,
   gaps,
   editableTarget,
   templateDiff,
@@ -134,6 +135,10 @@ async function request(path: string, body?: unknown) {
 function current() {
   if (!active) throw Error("先选择 Episode");
   return active;
+}
+function attemptText(a: Attempt, doc = current().doc) {
+  const number = attemptOrdinals(doc).get(a.id);
+  return `${a.subtaskName || "模板外活动"} · ${number ? `第${number}次` : "历史尝试"}`;
 }
 function selected(s = current()) {
   return s.doc.segments.find((x) => x.id === s.input.selected);
@@ -809,7 +814,7 @@ function renderTimeline() {
               ?.name
           : labels[x.label];
       const a = s.doc.attempts.find((a) => a.id === x.attemptId);
-      return `<div class="segment ${x.label} ${s.input.selected === x.id ? "selected" : ""}" data-segment="${esc(x.id)}" style="left:${Math.max(0, visiblePercent(x.start))}%;width:${((Math.min(hi, x.end) - Math.max(lo, x.start)) / (hi - lo)) * 100}%" tabindex="0" role="button" aria-label="${esc(name)} ${x.start} 至 ${x.end - 1}"><i class="edge start" data-side="start"></i><strong>${esc(name)}</strong><small>${x.start}–${x.end - 1} · ${x.review ? "已核" : "待核"}${a ? ` · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}` : ""}</small><i class="edge end" data-side="end"></i></div>`;
+      return `<div class="segment ${x.label} ${s.input.selected === x.id ? "selected" : ""}" data-segment="${esc(x.id)}" style="left:${Math.max(0, visiblePercent(x.start))}%;width:${((Math.min(hi, x.end) - Math.max(lo, x.start)) / (hi - lo)) * 100}%" tabindex="0" role="button" aria-label="${esc(name)}${a ? ` 第${attemptOrdinals(s.doc).get(a.id)}次` : ""} ${x.start} 至 ${x.end - 1}"><i class="edge start" data-side="start"></i><strong>${esc(name)}</strong><small>${x.start}–${x.end - 1} · ${x.review ? "已核" : "待核"}${a ? ` · 第${attemptOrdinals(s.doc).get(a.id)}次 · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}` : ""}</small><i class="edge end" data-side="end"></i></div>`;
     })
     .join("");
   try {
@@ -1015,7 +1020,7 @@ function renderAssociation() {
       : opts
           .map(
             (a) =>
-              `<option value="${esc(a.id)}">关联已有：${esc(a.subtaskName || "模板外活动")} · ${esc(a.id.slice(0, 8))} · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}</option>`,
+              `<option value="${esc(a.id)}">关联已有：${esc(attemptText(a))} · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}</option>`,
           )
           .join(""));
   value("association").value = s.input.association;
@@ -1165,7 +1170,7 @@ function renderEditor() {
     .map((f) => fieldControl(f, seg.values?.[f.id], seg.id))
     .join("")}</div>${
     a
-      ? `<div class="attempt-info"><strong>整次尝试 ${esc(a.id.slice(0, 10))}</strong><br>共 ${related.length} 个片段：${related.map((x) => `${x.start}–${x.end - 1}`).join("、")}<br>下方结果与评分作用于这些全部片段；局部备注保持各自归属。</div><label>整次执行结果<select id="selected-outcome"><option value="">暂缺（草稿）</option>${Object.entries(
+      ? `<div class="attempt-info"><strong>本 Episode · ${esc(attemptText(a))}</strong><br>共 ${related.length} 个片段：${related.map((x) => `${x.start}–${x.end - 1}`).join("、")}<br>下方结果与评分作用于这些全部片段；局部备注保持各自归属。</div><label>整次执行结果<select id="selected-outcome"><option value="">暂缺（草稿）</option>${Object.entries(
           outcomes,
         )
           .map(
@@ -1409,7 +1414,7 @@ function mergeAttemptDialog(a: Attempt) {
       (x) => !x.archived && x.id !== a.id && x.subtaskId === a.subtaskId,
     );
   modal(
-    `<h2>明确合并尝试</h2><p>只有人工确认实际是同一次执行时使用。原值完整留在历史，不自动选择成功或最高分。</p><label>另一次尝试<select id="merge-other">${others.map((x) => `<option value="${esc(x.id)}">${esc(x.id)} · ${x.outcome ? outcomes[x.outcome] : "结果暂缺"}</option>`).join("")}</select></label><div id="merge-values"></div><button id="apply-merge-attempt" class="primary">确认同一次执行并采用下方逐字段选择</button>`,
+    `<h2>明确合并尝试</h2><p>只有人工确认实际是同一次执行时使用。原值完整留在历史，不自动选择成功或最高分。</p><label>另一次尝试<select id="merge-other">${others.map((x) => `<option value="${esc(x.id)}">${esc(attemptText(x))} · ${x.outcome ? outcomes[x.outcome] : "结果暂缺"}</option>`).join("")}</select></label><div id="merge-values"></div><button id="apply-merge-attempt" class="primary">确认同一次执行并采用下方逐字段选择</button>`,
   );
   const render = () => {
     const b = s.doc.attempts.find((x) => x.id === value("merge-other").value);
@@ -1671,7 +1676,9 @@ function upgradeDialog(template: Template) {
       .map((f) => f.id);
     for (const id of changed) {
       delete next.values[id];
-      next.attempts.forEach((a) => delete a.values[id]);
+      next.attempts.forEach((a) => {
+        if (!a.archived) delete a.values[id];
+      });
       next.segments.forEach((x) => {
         if (x.values) delete x.values[id];
       });

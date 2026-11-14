@@ -356,6 +356,7 @@ def test_piece_continuations_require_real_clipped_edges(specification):
 
 def test_resume_classifies_bad_continuation_only(specification, tmp_path):
     from copy import deepcopy
+
     from pipeline.server.template_annotation import (
         invalid_received_units,
         retry_manifest,

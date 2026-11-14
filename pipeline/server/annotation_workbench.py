@@ -375,7 +375,11 @@ class AnnotationWorkbench:
                     None,
                 )
             # Client cannot forge count evidence by submitting a content hash.
-            doc["countEvidence"] = deepcopy(old.get("countEvidence", {}))
+            doc["countEvidence"] = (
+                deepcopy(old.get("countEvidence", {}))
+                if template_key(old) == template_key(doc)
+                else {}
+            )
             if restored is not None:
                 doc["countEvidence"] = deepcopy(
                     restored["document"].get("countEvidence", {})

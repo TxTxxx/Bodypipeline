@@ -1,6 +1,8 @@
 import { test, expect } from "bun:test";
 import {
   inclusive,
+  operation,
+  attemptOrdinals,
   resize,
   split,
   replace,
@@ -183,4 +185,49 @@ test("same ID with changed meaning requires explicit template resolution", () =>
   const next = upgrade(d, 10, t, { a: "a", b: "b" });
   expect(next.templateSnapshot.subtasks[0].definition).toBe("changed meaning");
   expect(d.templateSnapshot.subtasks[0].definition).toBeUndefined();
+});
+
+test("display numbers follow each subtask's first occurrence, preserving stable identities", () => {
+  const d = doc();
+  d.attempts[1].subtaskId = "a";
+  d.segments[1].subtaskId = "a";
+  const separated = split(d, 10, "a", 2);
+  expect(attemptOrdinals(separated).get("try-a")).toBe(1);
+  expect(attemptOrdinals(separated).get("try-b")).toBe(2);
+  expect(
+    separated.segments
+      .slice(0, 2)
+      .map((s) => attemptOrdinals(separated).get(s.attemptId!)),
+  ).toEqual([1, 1]);
+  separated.attempts.reverse();
+  expect(attemptOrdinals(separated).get("try-a")).toBe(1);
+  expect(separated.attempts.map((a) => a.id).sort()).toEqual([
+    "try-a",
+    "try-b",
+  ]);
+  separated.attempts[0].subtaskId = "b";
+  expect(attemptOrdinals(separated).get("try-b")).toBe(1);
+});
+
+test("deleted last span archives its real template; upgrade can remove its label without losing IDs", () => {
+  const original = doc();
+  const removed = operation(original, 10, "delete-all", (d) => {
+    d.segments = [];
+  });
+  const next = upgrade(
+    removed,
+    10,
+    { id: "empty", name: "No old labels", subtasks: [], fields: [] },
+    {},
+  );
+  expect(next.attempts.map((a) => a.id)).toEqual(
+    original.attempts.map((a) => a.id),
+  );
+  expect(
+    (next.attempts[0].provenance?.archivedTemplateSnapshot as any).id,
+  ).toBe("t");
+  expect(next.attempts[0].values).toEqual(original.attempts[0].values);
+  const h = new UndoHistory();
+  h.edit(original, next);
+  expect(h.undo(next).segments).toEqual(original.segments);
 });

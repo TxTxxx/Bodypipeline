@@ -446,3 +446,61 @@ def test_confirm_partial_span_preserves_execution_and_undo_review(review_app):
     )
     assert undo.status_code == 200, undo.text
     assert len(undo.json()["document"]["segments"]) == 2
+
+
+def test_deleted_attempt_keeps_historical_template_through_upgrade_undo_and_export(
+    review_app,
+):
+    from pipeline.server.annotation_contract import validate_annotation
+
+    client = client_for(review_app)
+    url = BASE + "/episodes/0"
+    head = client.get(url).json()
+    original = client.post(url, json=save_body(head, confirm=[[0, 6]])).json()
+    old = deepcopy(original["document"])
+    deleted = deepcopy(old)
+    deleted["segments"] = []
+    for a in deleted["attempts"]:
+        a["archived"] = True
+        a["provenance"]["archivedTemplateSnapshot"] = deepcopy(old["templateSnapshot"])
+    archived = client.post(
+        url, json=save_body({**original, "document": deleted})
+    ).json()
+    upgraded = deepcopy(archived["document"])
+    upgraded["templateSnapshot"] = {
+        "id": "empty",
+        "name": "Removed label",
+        "subtasks": [],
+        "fields": [],
+    }
+    upgraded["templateId"] = "empty"
+    upgraded["countEvidence"] = {}
+    response = client.post(
+        url, json=save_body({**archived, "document": upgraded}, template_mapping={})
+    )
+    assert response.status_code == 200, response.text
+    current = response.json()
+    assert current["document"]["attempts"] == deleted["attempts"]
+    selection = {
+        "source_signature": current["source_signature"],
+        "episodes": [0],
+        "revisions": {"0": current["revision"]},
+    }
+    bundle = client.post(BASE + "/bundle", json=selection).json()
+    assert (
+        validate_annotation(bundle["episodes"][0]["document"], 6)["attempts"]
+        == deleted["attempts"]
+    )
+    undo = client.post(
+        url,
+        json=save_body({**current, "document": archived["document"]}, operation="undo"),
+    )
+    assert undo.status_code == 200, undo.text
+    undo = client.post(
+        url, json=save_body({**undo.json(), "document": old}, operation="undo")
+    )
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["document"]["attempts"] == old["attempts"]
+    assert (
+        undo.json()["document"]["segments"][0]["review"] == old["segments"][0]["review"]
+    )

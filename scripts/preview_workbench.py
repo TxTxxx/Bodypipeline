@@ -74,6 +74,22 @@ def app_for(viewer=False, model_fixture=False):
 
         return create_gateway(settings)
     app = create_app(settings, background=True)
+
+    @app.middleware("http")
+    async def controlled_latency(request, call_next):
+        # Opt-in browser race fixture, outside the read-only dataset.
+        import asyncio
+        import json
+
+        policy = root / "ui-delay-fixture.json"
+        if policy.is_file():
+            value = json.loads(policy.read_text())
+            if request.url.path == value.get("path") and request.method == value.get(
+                "method"
+            ):
+                await asyncio.sleep(min(3, max(0, float(value.get("seconds", 0)))))
+        return await call_next(request)
+
     for method in ("recover", "autostart", "poll", "stop"):
         setattr(app.state.viewer, method, lambda: None)
     store = app.state.runner.store

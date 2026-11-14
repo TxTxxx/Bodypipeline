@@ -22,6 +22,8 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 
 def browser(*args):
+    if args[:2] == ("mouse", "move"):
+        args = (*args[:2], *[round(float(v)) for v in args[2:]])
     result = subprocess.run(
         [BROWSER, *map(str, args)], capture_output=True, text=True, timeout=50
     )
@@ -55,7 +57,10 @@ def saved(predicate, ep=0, timeout=30):
         if predicate(row):
             return row
         time.sleep(0.2)
-    raise AssertionError(f"Save did not reach expected state: {head(ep)}")
+    row = head(ep)
+    raise AssertionError(
+        f"Save did not reach expected state: revision={row['revision']} complete={row['complete']} segments={[(s['start'], s['end']) for s in row['document']['segments']]}"
+    )
 
 
 def click(selector):
@@ -530,7 +535,14 @@ def viewer():
 
     browser("set", "viewport", 1280, 800)
     browser("open", "http://127.0.0.1:18103/bp/numbered-fixture/episode_000000")
-    click('button:text-is("Annotations")')
+    wait(
+        'Array.from(document.querySelectorAll("button")).some(b=>b.textContent.toLowerCase()==="annotations")'
+    )
+    snapshot = browser("snapshot", "-i")
+    line = next(
+        line for line in snapshot.splitlines() if 'button "ANNOTATIONS"' in line
+    )
+    browser("click", "@" + re.search(r"ref=(e[0-9]+)", line).group(1))
     wait(
         'document.querySelector("iframe")?.contentDocument?.querySelector("#episode-title")?.textContent.includes("000")'
     )
@@ -544,7 +556,9 @@ def viewer():
         == "none"
     )
     shot("viewer-bound-context.png")
-    click('nav[aria-label="数据集导航"] button:text-is("Episode 1")')
+    snapshot = browser("snapshot", "-i")
+    line = next(line for line in snapshot.splitlines() if 'button "Episode 1"' in line)
+    browser("click", "@" + re.search(r"ref=(e[0-9]+)", line).group(1))
     wait(
         'document.querySelector("iframe")?.contentDocument?.querySelector("#episode-title")?.textContent.includes("001")'
     )
@@ -563,7 +577,7 @@ def viewer():
     subset = json.loads((OUT / "r31-subset-job.json").read_text())["id"]
     browser("select", "#dataset", subset)
     wait(
-        f'document.querySelector("#dataset").value === "{subset}" && document.querySelector("#episode-title").textContent.includes("000")'
+        f'document.querySelector("#dataset").value === "{subset}" && document.querySelector("#episode-title").textContent.includes("001")'
     )
     click("#last")
     wait(
@@ -579,8 +593,469 @@ def viewer():
     )
 
 
+def manual():
+    browser("open", ORIGIN + f"/workbench?dataset={DATASET}&episode=5")
+    wait('document.querySelector("#episode-title").textContent.includes("005")')
+    if head(5)["document"]["templateId"] != "cup-fixture":
+        click("#templates")
+        click("#upgrade-library")
+        click("#apply-upgrade")
+        saved(lambda h: h["document"]["templateId"] == "cup-fixture", ep=5)
+    existing = len(head(5)["document"]["segments"])
+    pattern = [
+        (0, 7, "grasp", "failure"),
+        (8, 15, "place", "unknown"),
+        (16, 23, "grasp", "success"),
+        (24, 47, "carry", "success"),
+    ]
+    for index, (first, last, label, outcome) in enumerate(pattern):
+        if index < existing:
+            continue
+        fill("#range-first", first)
+        fill("#range-last", last)
+        browser("select", "#new-label", label)
+        browser("select", "#association", "new")
+        browser("select", "#new-outcome", outcome)
+        fill("#new-note", "人工从零标注 · 合成画面验收")
+        click("#create-confirm")
+        saved(
+            lambda h: (
+                len(h["document"]["segments"]) == index + 1
+                and not h["status"]["pending"]
+            ),
+            ep=5,
+        )
+    click("#complete")
+    result = saved(lambda h: h["complete"], ep=5)
+    assert [s["subtaskId"] for s in result["document"]["segments"]] == [
+        "grasp",
+        "place",
+        "grasp",
+        "carry",
+    ]
+    assert len(result["document"]["attempts"]) == 4
+    browser("select", "#filter-step", "grasp")
+    fill("#filter-count", 2)
+    click("#filter")
+    wait(
+        'Array.from(document.querySelectorAll("#episode-list [data-open]")).some(e=>e.dataset.open==="5")'
+    )
+    shot("manual-arbitrary-order-complete.png")
+    click("#clear-filter")
+    click('[data-open="6"]')
+    wait('document.querySelector("#episode-title").textContent.includes("006")')
+    fill("#range-first", 0)
+    fill("#range-last", 47)
+    browser("select", "#new-label", "NULL")
+    if not head(6)["document"]["segments"]:
+        click("#create")
+    saved(lambda h: len(h["document"]["segments"]) == 1, ep=6)
+    click('[data-open="3"]')
+    wait('document.querySelector("#episode-title").textContent.includes("003")')
+    if head(3)["document"]["templateId"] != "cup-fixture":
+        click("#templates")
+        click("#upgrade-library")
+        click("#apply-upgrade")
+        saved(lambda h: h["document"]["templateId"] == "cup-fixture", ep=3)
+    fill("#range-first", 0)
+    fill("#range-last", 47)
+    click("#candidates")
+    wait('document.querySelector("#candidate-choice") !== null')
+    candidate = next(
+        c
+        for c in api(f"{DATASET}/episodes/3/candidates")["candidates"]
+        if c["provenance"].get("annotation")
+    )
+    browser("select", "#candidate-choice", candidate["id"])
+    browser("check", "#candidate-ack")
+    click("#apply-candidate")
+    wait('!document.querySelector("#dialog").open')
+    ai = saved(lambda h: len(h["document"]["segments"]) == 2, ep=3)
+    assert ai["document"]["segments"][0]["evidence"]
+    assert not ai["document"]["segments"][0].get("risks")
+    shot("actual-model-candidate-in-workspace.png")
+    # Use the visible delivery controls to clear old selections and confirm two normal Episodes.
+    click("#delivery")
+    for ep in (1, 4, 9):
+        if evaluate(
+            f"document.querySelector('[data-remove-selection=\"{ep}\"]') !== null"
+        ):
+            click(f'[data-remove-selection="{ep}"]')
+    click("#dialog-close")
+    browser("check", '[data-add="3"]')
+    browser("check", '[data-add="6"]')
+    click("#delivery")
+    click("#refresh-selection")
+    click("#batch-confirm")
+    shot("batch-confirm-normal-preview.png")
+    click("#apply-batch")
+    saved(lambda h: h["complete"], ep=3)
+    saved(lambda h: h["complete"], ep=6)
+    wait('!document.querySelector("#dialog").open')
+    click("#delivery")
+    prior = {ep: head(ep)["revision"] for ep in (1, 4, 9)}
+    browser("upload", "#import-bundle", OUT / "r31-annotations.json")
+    wait('document.querySelector("#notice").textContent.includes("独立候选")')
+    assert {ep: head(ep)["revision"] for ep in (1, 4, 9)} == prior
+    assert any(
+        c["run"] == "标注包导入"
+        for c in api(f"{DATASET}/episodes/1/candidates")["candidates"]
+    )
+    shot("annotation-bundle-reimport-candidates.png")
+    click("#dialog-close")
+    record(
+        "from-zero-and-batch",
+        arbitrary_order=["grasp", "place", "grasp", "carry"],
+        independent_attempts=4,
+        target_grasp_count=2,
+        create_and_confirm=True,
+        unknown_outcome_keeps_label=True,
+        batch_normal_with_evidence=[3, 6],
+        actual_model_candidate_applied=True,
+        bundle_reimport_keeps_current_heads=True,
+    )
+
+
+def gestures():
+    browser("set", "viewport", 1280, 900)
+    browser("open", ORIGIN + f"/workbench?dataset={DATASET}&episode=5")
+    wait('document.querySelectorAll("#track [role=button]").length===4')
+    original = head(5)["document"]
+    a = original["segments"][0]
+
+    def choose(sid):
+        click(f'[data-segment="{sid}"] strong')
+
+    assert "抓取 第2次" in browser("snapshot", "-i")
+    browser("scrollintoview", "#track")
+    rect = evaluate(
+        '(()=>{const r=document.querySelector("#track").getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}})()'
+    )
+    x = rect["left"] + rect["width"] * 8 / 48 - 2
+    y = rect["top"] + rect["height"] / 2
+    browser("mouse", "move", x, y)
+    browser("mouse", "down")
+    browser("mouse", "move", rect["left"] + rect["width"] * 10 / 48, y)
+    browser("mouse", "up")
+    adjusted = saved(lambda h: h["document"]["segments"][0]["end"] == 10, ep=5)
+    assert adjusted["document"]["segments"][1]["start"] == 10
+    shot("actual-pointer-shared-boundary.png")
+    click("#undo")
+    saved(lambda h: h["document"]["segments"][0]["end"] == 8 and h["complete"], ep=5)
+    click("#range-tool")
+    browser("scrollintoview", "#track")
+    rect = evaluate(
+        '(()=>{const r=document.querySelector("#track").getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}})()'
+    )
+    y = rect["top"] + rect["height"] / 2
+    browser("mouse", "move", rect["left"] + rect["width"] * 2 / 48, y)
+    browser("mouse", "down")
+    browser("mouse", "move", rect["left"] + rect["width"] * 5 / 48, y)
+    browser("mouse", "up")
+    assert evaluate('document.querySelector("#range-first").value') == "2"
+    assert evaluate('document.querySelector("#range-last").value') == "5"
+    click("#browse")
+    choose(a["id"])
+    click("#merge-attempt")
+    other = original["segments"][2]["attemptId"]
+    browser("select", "#merge-other", other)
+    browser("select", "#merge-outcome", "unknown")
+    click("#apply-merge-attempt")
+    merged = saved(
+        lambda h: next(x for x in h["document"]["attempts"] if x["id"] == other).get(
+            "archived"
+        ),
+        ep=5,
+    )
+    assert (
+        merged["document"]["segments"][0]["attemptId"]
+        == merged["document"]["segments"][2]["attemptId"]
+    )
+    click("#undo")
+    saved(
+        lambda h: (
+            h["complete"]
+            and not next(x for x in h["document"]["attempts"] if x["id"] == other).get(
+                "archived"
+            )
+        ),
+        ep=5,
+    )
+    fill("#frame", 3)
+    click("#browse")
+    choose(a["id"])
+    click("#split")
+    split_doc = saved(lambda h: len(h["document"]["segments"]) == 5, ep=5)["document"]
+    fill("#selected-note", "左侧局部信息")
+    saved(lambda h: h["document"]["segments"][0]["note"] == "左侧局部信息", ep=5)
+    choose(split_doc["segments"][1]["id"])
+    fill("#selected-note", "右侧局部信息")
+    saved(lambda h: h["document"]["segments"][1]["note"] == "右侧局部信息", ep=5)
+    choose(a["id"])
+    click("#merge-segment")
+    fill("#merged-note", "人工决定保留的局部信息")
+    click("#apply-merge-segment")
+    saved(
+        lambda h: (
+            len(h["document"]["segments"]) == 4
+            and h["document"]["segments"][0]["note"] == "人工决定保留的局部信息"
+        ),
+        ep=5,
+    )
+    for _ in range(12):
+        prior = head(5)
+        if prior["complete"] and len(prior["document"]["segments"]) == 4:
+            break
+        click("#undo")
+        saved(lambda h: h["revision"] > prior["revision"], ep=5)
+    restored = saved(
+        lambda h: len(h["document"]["segments"]) == 4 and h["complete"], ep=5
+    )
+    assert restored["document"]["attempts"] == original["attempts"]
+    shot("attempt-numbers-and-restored-review.png")
+    record(
+        "gestures-and-merges",
+        pointer_shared_boundary=True,
+        pointer_range=True,
+        attempt_conflicts_explicit=True,
+        segment_conflicts_explicit=True,
+        full_undo_restores_review=True,
+        human_ordinals_scope="Episode + subtask",
+    )
+
+
+def archived():
+    browser("open", ORIGIN + f"/workbench?dataset={DATASET}&episode=9")
+    wait('document.querySelector("#episode-title").textContent.includes("009")')
+    original = head(9)
+    attempt = original["document"]["attempts"][0]
+    span = original["document"]["segments"][0]
+    click(f'[data-segment="{span["id"]}"] strong')
+    click("#delete-segment")
+    saved(
+        lambda h: next(
+            a for a in h["document"]["attempts"] if a["id"] == attempt["id"]
+        )["archived"],
+        ep=9,
+    )
+    click("#templates")
+    library = server_api("/api/task-templates")
+    if not any(t["name"] == "删除抓取后的历史升级验收" for t in library["templates"]):
+        click("#new-template")
+        fill("#template-name", "删除抓取后的历史升级验收")
+        click("#save-template")
+        wait('document.querySelector("#notice").textContent.includes("共享模板已保存")')
+        library = server_api("/api/task-templates")
+    template = next(
+        t for t in library["templates"] if t["name"] == "删除抓取后的历史升级验收"
+    )
+    wait(
+        f'Array.from(document.querySelector("#library-choice").options).some(o=>o.value==="{template["id"]}")'
+    )
+    browser("select", "#library-choice", template["id"])
+    click("#upgrade-library")
+    click("#apply-upgrade")
+    upgraded = saved(lambda h: h["document"]["templateId"] == template["id"], ep=9)
+    archived_attempt = next(
+        a for a in upgraded["document"]["attempts"] if a["id"] == attempt["id"]
+    )
+    assert archived_attempt["values"] == attempt["values"]
+    assert (
+        archived_attempt["provenance"]["archivedTemplateSnapshot"]
+        == original["document"]["templateSnapshot"]
+    )
+    click("#delivery")
+    for ep in evaluate(
+        'Array.from(document.querySelectorAll("[data-remove-selection]")).map(e=>e.dataset.removeSelection)'
+    ):
+        click(f'[data-remove-selection="{ep}"]')
+    click("#dialog-close")
+    browser("check", '[data-add="9"]')
+    click("#delivery")
+    click("#refresh-selection")
+    browser("download", "#export-bundle", OUT / "archived-template-upgrade.json")
+    bundle = json.loads((OUT / "archived-template-upgrade.json").read_text())
+    assert (
+        bundle["episodes"][0]["document"]["attempts"]
+        == upgraded["document"]["attempts"]
+    )
+    shot("archived-attempt-upgrade-delivery.png")
+    click("#dialog-close")
+    click("#undo")
+    saved(
+        lambda h: h["document"]["templateId"] == original["document"]["templateId"],
+        ep=9,
+    )
+    click("#undo")
+    restored = saved(
+        lambda h: any(s["id"] == span["id"] for s in h["document"]["segments"]), ep=9
+    )
+    assert restored["document"]["attempts"] == original["document"]["attempts"]
+    record(
+        "archived-template-upgrade",
+        stable_attempt_id=attempt["id"],
+        values_preserved=True,
+        actual_old_snapshot_preserved=True,
+        saved_exported_reread=True,
+        undo_restored=True,
+    )
+
+
+def races():
+    import os
+
+    control = ROOT / ".runtime/body2-preview/ui-delay-fixture.json"
+    subset = json.loads((OUT / "r31-subset-job.json").read_text())["id"]
+    browser("open", ORIGIN + f"/workbench?dataset={DATASET}&episode=0")
+    wait('document.querySelectorAll("#track [role=button]").length >= 4')
+    click('#track [role="button"]:first-child strong')
+    try:
+        control.write_text(
+            json.dumps(
+                {
+                    "method": "POST",
+                    "path": f"/api/annotation-workbench/{DATASET}/episodes/0",
+                    "seconds": 2,
+                }
+            )
+        )
+        fill("#selected-note", "旧工作区延迟响应仅写回原数据集")
+        wait('document.querySelector("#save-status").textContent.includes("正在同步")')
+        browser("select", "#dataset", subset)
+        wait(
+            f'document.querySelector("#dataset").value==="{subset}" && document.querySelectorAll("#episode-list [data-open]").length===3'
+        )
+        saved(
+            lambda h: (
+                h["document"]["segments"][0]["note"] == "旧工作区延迟响应仅写回原数据集"
+            )
+        )
+        key = f"bodypipeline:workbench:v2:{subset}:0"
+        backup = evaluate(f"JSON.parse(localStorage.getItem({json.dumps(key)}))")
+        assert backup["head"]["dataset"] == subset
+        assert (
+            backup["document"]["segments"][0]["note"]
+            != "旧工作区延迟响应仅写回原数据集"
+        )
+        control.write_text(
+            json.dumps(
+                {
+                    "method": "GET",
+                    "path": f"/api/annotation-workbench/{DATASET}/episodes",
+                    "seconds": 2,
+                }
+            )
+        )
+        browser("select", "#dataset", DATASET)
+        browser("select", "#dataset", subset)
+        wait(
+            f'document.querySelector("#dataset").value==="{subset}" && document.querySelectorAll("#episode-list [data-open]").length===3'
+        )
+        browser("wait", 2300)
+        assert (
+            evaluate('document.querySelectorAll("#episode-list [data-open]").length')
+            == 3
+        )
+        shot("dataset-race-isolated.png")
+    finally:
+        control.unlink(missing_ok=True)
+    # A clean cached revision zero also belongs to a concrete source signature.
+    browser("open", ORIGIN + f"/workbench?dataset={DATASET}&episode=10")
+    wait('document.querySelector("#episode-title").textContent.includes("010")')
+    old = head(10)
+    assert old["revision"] == 0
+    info = ROOT / ".runtime/body2-preview/dataset/meta/info.json"
+    original, stat = info.read_bytes(), info.stat()
+    try:
+        content = json.loads(original)
+        content["synthetic_version_probe"] = "different-source-at-revision-zero"
+        info.write_text(json.dumps(content))
+        browser("reload")
+        wait('document.querySelector("#save-status").textContent.includes("版本冲突")')
+        assert evaluate(
+            'document.querySelector("#conflict").textContent.includes("双方")'
+        )
+        assert (
+            head(10)["revision"] == 0
+            and head(10)["source_signature"] != old["source_signature"]
+        )
+        shot("clean-revision-zero-source-conflict.png")
+    finally:
+        info.write_bytes(original)
+        os.utime(info, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    browser("reload")
+    wait('document.querySelector("#episode-title").textContent.includes("010")')
+    record(
+        "async-isolation",
+        delayed_save_dataset_bound=True,
+        stale_list_response_ignored=True,
+        clean_revision_zero_checks_source=True,
+        delays="controlled fixture, actual browser HTTP",
+    )
+
+
+def selection():
+    browser("set", "viewport", 1280, 900)
+    browser("open", ORIGIN + f"/workbench?dataset={DATASET}&episode=5")
+    wait('document.querySelector("#episode-title").textContent.includes("005")')
+    click("#zoom-in")
+    assert "24 / 48" in evaluate('document.querySelector("#zoom-status").textContent')
+    click("#pan-right")
+    click("#zoom-all")
+    assert "48 / 48" in evaluate('document.querySelector("#zoom-status").textContent')
+    click("#delivery")
+    for ep in evaluate(
+        'Array.from(document.querySelectorAll("[data-remove-selection]")).map(e=>e.dataset.removeSelection)'
+    ):
+        click(f'[data-remove-selection="{ep}"]')
+    click("#dialog-close")
+    click("#select-page")
+    assert evaluate('document.querySelector("#selection-count").textContent') == "10"
+    click("#next-page")
+    assert (
+        evaluate('document.querySelectorAll("#episode-list [data-open]").length') == 2
+    )
+    click("#select-page")
+    assert evaluate('document.querySelector("#selection-count").textContent') == "12"
+    click("#select-results")
+    assert evaluate('document.querySelector("#selection-count").textContent') == "12"
+    click("#delivery")
+    shot("selection-current-page-all-results.png")
+    for ep in range(12):
+        click(f'[data-remove-selection="{ep}"]')
+    before = len(server_api("/api/jobs"))
+    click("#export-bundle")
+    wait('document.querySelector("#notice").textContent.includes("导出清单为空")')
+    click("#export-subset")
+    assert len(server_api("/api/jobs")) == before
+    shot("empty-selection-no-full-export.png")
+    click("#dialog-close")
+    record(
+        "selection-and-zoom",
+        current_page=10,
+        all_results=12,
+        pagination_preserves_selection=True,
+        duplicate_selection_deduplicated=True,
+        empty_selection_never_exports_all=True,
+        local_zoom_and_pan=True,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["editing", "offline", "r31", "viewer"])
+    parser.add_argument(
+        "phase",
+        choices=[
+            "editing",
+            "offline",
+            "r31",
+            "viewer",
+            "manual",
+            "gestures",
+            "archived",
+            "races",
+            "selection",
+        ],
+    )
     args = parser.parse_args()
     globals()[args.phase]()

@@ -129,6 +129,12 @@ export function validate(doc: Document, count: number): void {
 export function clean(doc: Document): Document {
   const active = new Set(doc.segments.map((s) => s.attemptId));
   doc.attempts.forEach((a) => {
+    if (!active.has(a.id) && !a.archived) {
+      a.provenance = {
+        ...a.provenance,
+        archivedTemplateSnapshot: copy(doc.templateSnapshot),
+      };
+    }
     a.archived = !active.has(a.id);
     if ("attempt-outcome" in a.values)
       a.values["attempt-outcome"] = a.outcome
@@ -460,7 +466,12 @@ export function upgrade(
   return operation(doc, count, "template-upgrade", (d) => {
     const steps = new Map(template.subtasks.map((s) => [s.id, s]));
     for (const a of d.attempts) {
-      if (!a.subtaskId || a.archived) continue;
+      if (a.archived) {
+        a.provenance ??= {};
+        a.provenance.archivedTemplateSnapshot ??= copy(doc.templateSnapshot);
+        continue;
+      }
+      if (!a.subtaskId) continue;
       const mapped = steps.get(mapping[a.subtaskId]);
       if (!mapped)
         throw Error("请明确处理所有已使用标签的映射，未解决时可继续旧快照");
@@ -479,7 +490,9 @@ export function upgrade(
       values: copy(d.values),
       attempts: copy(doc.attempts),
       frames: copy(d.frames),
+      countEvidence: copy(d.countEvidence),
     });
+    d.countEvidence = {};
     d.templateId = template.id;
     d.templateSnapshot = copy(template);
   });
@@ -547,4 +560,29 @@ export class EpisodeSelection {
       filter,
     };
   }
+}
+
+/** Human display order is scoped to this Episode and subtask, never an ID. */
+export function attemptOrdinals(doc: Document): Map<string, number> {
+  const first = new Map<string, number>();
+  for (const s of doc.segments)
+    if (s.attemptId)
+      first.set(
+        s.attemptId,
+        Math.min(first.get(s.attemptId) ?? Infinity, s.start),
+      );
+  const counts = new Map<string, number>(),
+    result = new Map<string, number>();
+  const active = doc.attempts
+    .filter((a) => !a.archived && first.has(a.id))
+    .sort(
+      (a, b) => first.get(a.id)! - first.get(b.id)! || a.id.localeCompare(b.id),
+    );
+  for (const a of active) {
+    const key = a.subtaskId || "OUT_OF_TEMPLATE";
+    const ordinal = (counts.get(key) || 0) + 1;
+    counts.set(key, ordinal);
+    result.set(a.id, ordinal);
+  }
+  return result;
 }

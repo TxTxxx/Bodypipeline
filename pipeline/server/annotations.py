@@ -627,6 +627,13 @@ class AnnotationRunner:
             ok, why = self.available()
             if not ok:
                 raise DomainError(f"Argus 自动标注不可用：{why}", 503)
+            if row.get("task_template") and argus_annotation.legacy_template_cache(
+                self.work(row)
+            ):
+                raise DomainError(
+                    "旧模板任务使用 v1 提示词和已付费缓存，普通续跑不会自动升级重算。已有有效结果仍可查看、导出或采用；升级请在创建候选时明确选择新模板和重算 Episode 范围。",
+                    409,
+                )
             if (
                 row.get("selected_episodes") is not None or continue_full
             ) and not argus_annotation.execution_available(self.settings):

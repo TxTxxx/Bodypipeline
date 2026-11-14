@@ -76,9 +76,26 @@ class AnnotationDocument(AnnotationModel):
             raise ValueError("尝试、片段或帧观察的稳定 ID 重复")
         steps = {s.id for s in self.templateSnapshot.subtasks}
         executions = {a.id: a for a in self.attempts}
+        archived_fields = {}
         for a in self.attempts:
-            if a.subtaskId is not None and a.subtaskId not in steps:
-                raise ValueError("尝试引用了模板以外的 Subtask ID")
+            snapshot = (
+                a.provenance.get("archivedTemplateSnapshot") if a.archived else None
+            )
+            historical = TaskTemplate.model_validate(snapshot) if snapshot else None
+            if historical is not None:
+                archived_fields[id(a.values)] = {f.id: f for f in historical.fields}
+            if (
+                a.subtaskId is not None
+                and a.subtaskId not in steps
+                and not (
+                    a.archived
+                    and historical is not None
+                    and a.subtaskId in {s.id for s in historical.subtasks}
+                )
+            ):
+                raise ValueError(
+                    "尝试引用了模板以外的 Subtask ID；归档记录须保留其原模板快照"
+                )
         stop = 0
         for s in sorted(self.segments, key=lambda s: (s.start, s.end)):
             if s.start < stop or s.end <= s.start:
@@ -102,7 +119,7 @@ class AnnotationDocument(AnnotationModel):
             *(("frame", f.values) for f in self.frames),
         ]:
             for key, value in values.items():
-                f = fields.get(key)
+                f = archived_fields.get(id(values), fields).get(key)
                 if (
                     f is None or value is None
                 ):  # removed historical values remain lossless

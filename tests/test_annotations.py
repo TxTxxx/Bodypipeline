@@ -1215,3 +1215,71 @@ def test_free_resume_retries_only_received_invalid_native_replies(service, tmp_p
     argv = argus_annotation.command(runner.settings, row, data, work)
     assert argv.count("--retry-received") == 1
     assert argv[argv.index("--retry-received") + 1] == "episode_000001"
+
+
+def test_old_completed_summary_does_not_hide_new_continuation_receipts(tmp_path):
+    work = tmp_path / "work"
+    run = work / "argus/run"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text(
+        json.dumps(
+            {
+                "status": "done",
+                "cost_usd": 5,
+                "reserved_cost_usd": 5,
+                "cost_complete": True,
+                "cap_usd": 20,
+            }
+        )
+    )
+    assert argus_annotation.cost(work)["cost_usd"] == 5  # summary-only legacy run
+    out = run / "out"
+    out.mkdir()
+    (out / "episode_000000.json").write_text(json.dumps({"usage": {"est_cost_usd": 5}}))
+    (out / "noreply_episode_000001.json").write_text(
+        json.dumps({"final_dispatch_outcome": "claimed", "final_reserved_usd": 3})
+    )
+    cost = argus_annotation.cost(work)
+    assert cost["reserved_cost_usd"] == 8
+    assert cost["cost_usd"] is None and not cost["cost_complete"]
+    (out / "noreply_episode_000001.json").write_text(
+        json.dumps({"final_dispatch_outcome": "received", "usage": {"est_cost_usd": 4}})
+    )
+    cost = argus_annotation.cost(work)
+    assert cost["cost_usd"] == cost["reserved_cost_usd"] == 9
+    assert cost["cost_complete"]
+
+
+def test_verified_newer_cumulative_receipt_releases_old_reserve_but_missing_does_not(
+    tmp_path,
+):
+    import os
+
+    work = tmp_path / "work"
+    run = work / "argus/run"
+    out = run / "out"
+    out.mkdir(parents=True)
+    receipt = out / "episode_000000.json"
+    receipt.write_text(json.dumps({"usage": {"est_cost_usd": 5}}))
+    summary = run / "run.json"
+    summary.write_text(
+        json.dumps({"cost_usd": 5, "reserved_cost_usd": 8, "cost_complete": False})
+    )
+    os.utime(
+        receipt, ns=(1, 1)
+    )  # only an older paid receipt; unknown hold not disproved
+    assert argus_annotation.cost(work)["reserved_cost_usd"] == 8
+    receipt.unlink()
+    assert argus_annotation.cost(work)["reserved_cost_usd"] == 8
+    receipt.write_text(
+        json.dumps(
+            {
+                "final_dispatch_outcome": "not dispatched",
+                "final_attempt_index": 2,
+                "final_cost_history": [{"usage": {"est_cost_usd": 5}}],
+            }
+        )
+    )
+    cost = argus_annotation.cost(work)
+    assert cost["cost_usd"] == cost["reserved_cost_usd"] == 5
+    assert cost["cost_complete"]

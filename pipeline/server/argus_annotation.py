@@ -517,6 +517,20 @@ def command(settings, annotation: dict, data: Path, work: Path) -> list[str]:
     return [python, *args]
 
 
+def legacy_template_cache(work: Path) -> bool:
+    """Changing the paid request contract requires an explicit new scope."""
+    spec = _read_json(Path(work) / "task-template.json")
+    if spec.get("version") == 1:
+        return True
+    for path in _raw_files(Path(work) / "argus").values():
+        settings = (_read_json(path).get("input_identity") or {}).get("settings") or {}
+        if settings.get("bodypipeline_task_template") and not settings.get(
+            "bodypipeline_business_contract"
+        ):
+            return True
+    return False
+
+
 def stage_from_log(text: str, current: str = "") -> str:
     """The latest stage Argus announced, or the current title when none."""
 
@@ -845,13 +859,53 @@ def cost(work: Path) -> dict:
         "cost_complete": info.get("cost_complete"),
         "cap_usd": info.get("cap_usd"),
     }
-    if value["cost_usd"] is None:
-        # Read cumulative durable receipts, rather than only the last response.
-        # Fine evidence, retries, dictionary work and unknown invoices all spend
-        # the same allowance even when the process died before run.json settled.
-        from .argus_billing import receipt_spend
+    # A completed trial's summary can remain on disk while a continuation has
+    # already dispatched more work. Always consult durable cumulative receipts.
+    from .argus_billing import receipt_spend
 
-        ledger = receipt_spend(Path(work) / "argus")
+    root = Path(work) / "argus"
+    ledger = receipt_spend(root)
+    paths = [
+        p for p in (root / "dictionary.json", root / "dictionary.claim") if p.exists()
+    ]
+    for folder in ("run/out", "run_final/out"):
+        paths.extend((root / folder).glob("*episode_*.json"))
+        paths.extend((root / folder / ".evidence").glob("*.inspection.json"))
+    summary = next(
+        (
+            root / p
+            for p in ("run_final/run.json", "run/run.json")
+            if (root / p).exists()
+        ),
+        None,
+    )
+    fresh = summary is None or any(
+        p.stat().st_mtime_ns >= summary.stat().st_mtime_ns for p in paths
+    )
+    if paths:
+        previous_paid = float(value["cost_usd"] or 0)
+        previous = max(previous_paid, float(value["reserved_cost_usd"] or 0))
+        held = float(ledger["reserved_cost_usd"])
+        # Only newer, complete cumulative receipts can release an old hold.
+        # Missing or unresolved invoices keep the conservative previous reserve.
+        settled = (
+            ledger["cost_complete"]
+            and ledger["cost_usd"] is not None
+            and ledger["cost_usd"] >= previous_paid
+        )
+        if fresh and settled:
+            value.update(ledger)
+        else:
+            value["cost_usd"] = (
+                max(previous_paid, float(ledger["cost_usd"]))
+                if ledger["cost_usd"] is not None
+                else None
+            )
+            value["reserved_cost_usd"] = round(max(previous, held), 6)
+            value["cost_complete"] = bool(
+                ledger["cost_complete"] and (not info or value["cost_complete"])
+            )
+    elif not info:
         value.update(ledger)
     return value
 

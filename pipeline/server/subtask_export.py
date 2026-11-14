@@ -317,9 +317,12 @@ def build_plan(settings, row) -> dict:
                 raw_document = data.get("task_document")
                 if raw_document and raw_document.get("version") == 2:
                     from .annotation_contract import validate_annotation
+
                     document = validate_annotation(raw_document, frames)
                 else:
-                    document = validate_document(TaskDocument.model_validate(raw_document), frames)
+                    document = validate_document(
+                        TaskDocument.model_validate(raw_document), frames
+                    )
                 if document["templateSnapshot"] != template:
                     raise ValueError("模板快照不匹配")
             except ValueError as exc:
@@ -330,7 +333,11 @@ def build_plan(settings, row) -> dict:
             # Preserve adjacent retries instead of the legacy text-based merge.
             if document["version"] == 2:
                 from .annotation_contract import formal_segments
-                ranges = [[s["start_frame"], s["end_frame"], vocabulary[s["text"]]] for s in formal_segments(document)]
+
+                ranges = [
+                    [s["start_frame"], s["end_frame"], vocabulary[s["text"]]]
+                    for s in formal_segments(document)
+                ]
             else:
                 ranges = [
                     [a["start"], a["end"], vocabulary[a["subtaskName"].strip()]]

@@ -32,6 +32,12 @@ function validate(doc, count) {
 function clean(doc) {
   const active = new Set(doc.segments.map((s) => s.attemptId));
   doc.attempts.forEach((a) => {
+    if (!active.has(a.id) && !a.archived) {
+      a.provenance = {
+        ...a.provenance,
+        archivedTemplateSnapshot: copy(doc.templateSnapshot)
+      };
+    }
     a.archived = !active.has(a.id);
     if ("attempt-outcome" in a.values)
       a.values["attempt-outcome"] = a.outcome ? { success: "成功", failure: "失败", unknown: "无法判断" }[a.outcome] : null;
@@ -245,7 +251,12 @@ function upgrade(doc, count, template, mapping) {
   return operation(doc, count, "template-upgrade", (d) => {
     const steps = new Map(template.subtasks.map((s) => [s.id, s]));
     for (const a of d.attempts) {
-      if (!a.subtaskId || a.archived)
+      if (a.archived) {
+        a.provenance ??= {};
+        a.provenance.archivedTemplateSnapshot ??= copy(doc.templateSnapshot);
+        continue;
+      }
+      if (!a.subtaskId)
         continue;
       const mapped = steps.get(mapping[a.subtaskId]);
       if (!mapped)
@@ -265,8 +276,10 @@ function upgrade(doc, count, template, mapping) {
       snapshot: d.templateSnapshot,
       values: copy(d.values),
       attempts: copy(doc.attempts),
-      frames: copy(d.frames)
+      frames: copy(d.frames),
+      countEvidence: copy(d.countEvidence)
     });
+    d.countEvidence = {};
     d.templateId = template.id;
     d.templateSnapshot = copy(template);
   });
@@ -320,6 +333,21 @@ class EpisodeSelection {
       filter
     };
   }
+}
+function attemptOrdinals(doc) {
+  const first = new Map;
+  for (const s of doc.segments)
+    if (s.attemptId)
+      first.set(s.attemptId, Math.min(first.get(s.attemptId) ?? Infinity, s.start));
+  const counts = new Map, result = new Map;
+  const active = doc.attempts.filter((a) => !a.archived && first.has(a.id)).sort((a, b) => first.get(a.id) - first.get(b.id) || a.id.localeCompare(b.id));
+  for (const a of active) {
+    const key = a.subtaskId || "OUT_OF_TEMPLATE";
+    const ordinal = (counts.get(key) || 0) + 1;
+    counts.set(key, ordinal);
+    result.set(a.id, ordinal);
+  }
+  return result;
 }
 
 // pipeline/server/viewer_ui/workbench.ts
@@ -394,6 +422,10 @@ function current() {
   if (!active)
     throw Error("先选择 Episode");
   return active;
+}
+function attemptText(a, doc = current().doc) {
+  const number = attemptOrdinals(doc).get(a.id);
+  return `${a.subtaskName || "模板外活动"} · ${number ? `第${number}次` : "历史尝试"}`;
 }
 function selected(s = current()) {
   return s.doc.segments.find((x) => x.id === s.input.selected);
@@ -976,7 +1008,7 @@ function renderTimeline() {
   $("track").innerHTML = segments.map((x) => {
     const name = x.label === "SUBTASK" ? s.doc.templateSnapshot.subtasks.find((t) => t.id === x.subtaskId)?.name : labels[x.label];
     const a = s.doc.attempts.find((a) => a.id === x.attemptId);
-    return `<div class="segment ${x.label} ${s.input.selected === x.id ? "selected" : ""}" data-segment="${esc(x.id)}" style="left:${Math.max(0, visiblePercent(x.start))}%;width:${(Math.min(hi, x.end) - Math.max(lo, x.start)) / (hi - lo) * 100}%" tabindex="0" role="button" aria-label="${esc(name)} ${x.start} 至 ${x.end - 1}"><i class="edge start" data-side="start"></i><strong>${esc(name)}</strong><small>${x.start}–${x.end - 1} · ${x.review ? "已核" : "待核"}${a ? ` · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}` : ""}</small><i class="edge end" data-side="end"></i></div>`;
+    return `<div class="segment ${x.label} ${s.input.selected === x.id ? "selected" : ""}" data-segment="${esc(x.id)}" style="left:${Math.max(0, visiblePercent(x.start))}%;width:${(Math.min(hi, x.end) - Math.max(lo, x.start)) / (hi - lo) * 100}%" tabindex="0" role="button" aria-label="${esc(name)}${a ? ` 第${attemptOrdinals(s.doc).get(a.id)}次` : ""} ${x.start} 至 ${x.end - 1}"><i class="edge start" data-side="start"></i><strong>${esc(name)}</strong><small>${x.start}–${x.end - 1} · ${x.review ? "已核" : "待核"}${a ? ` · 第${attemptOrdinals(s.doc).get(a.id)}次 · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}` : ""}</small><i class="edge end" data-side="end"></i></div>`;
   }).join("");
   try {
     const r = ranges(s);
@@ -1106,7 +1138,7 @@ function renderNewForm() {
 function renderAssociation() {
   const s = current(), label = value("new-label").value, formal = s.doc.templateSnapshot.subtasks.find((t) => t.id === label);
   const opts = s.doc.attempts.filter((a) => !a.archived && (!formal || a.subtaskId === label));
-  value("association").innerHTML = (formal || label === "OUT_OF_TEMPLATE" ? '<option value="new">明确建立一次新执行</option>' : "") + (formal ? "" : '<option value="none">不关联尝试</option>') + (label === "NULL" ? "" : opts.map((a) => `<option value="${esc(a.id)}">关联已有：${esc(a.subtaskName || "模板外活动")} · ${esc(a.id.slice(0, 8))} · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}</option>`).join(""));
+  value("association").innerHTML = (formal || label === "OUT_OF_TEMPLATE" ? '<option value="new">明确建立一次新执行</option>' : "") + (formal ? "" : '<option value="none">不关联尝试</option>') + (label === "NULL" ? "" : opts.map((a) => `<option value="${esc(a.id)}">关联已有：${esc(attemptText(a))} · ${a.outcome ? outcomes[a.outcome] : "结果暂缺"}</option>`).join(""));
   value("association").value = s.input.association;
   if (!value("association").value)
     value("association").selectedIndex = 0;
@@ -1210,7 +1242,7 @@ function renderEditor() {
   host.className = "";
   const a = s.doc.attempts.find((a) => a.id === seg.attemptId), related = a ? s.doc.segments.filter((x) => x.attemptId === a.id) : [];
   const name = seg.label === "SUBTASK" ? s.doc.templateSnapshot.subtasks.find((x) => x.id === seg.subtaskId)?.name : labels[seg.label];
-  host.innerHTML = `<strong>${esc(name)} <span class="pill ${seg.review ? "green" : "amber"}">${seg.review ? "已核对" : "待核对"}</span></strong><div class="row" style="margin-top:12px"><label>首帧（包含）<input id="selected-first" value="${esc(s.input[`first:${seg.id}`] ?? seg.start)}" inputmode="numeric"></label><label>末帧（包含）<input id="selected-last" value="${esc(s.input[`last:${seg.id}`] ?? seg.end - 1)}" inputmode="numeric"></label></div><div class="row"><button id="copy-range">用此片段范围重标</button><button id="split">在当前帧切分</button><button id="merge-segment">与后段合并片段</button></div><label>此片段局部备注<textarea id="selected-note" rows="2">${esc(seg.note || "")}</textarea></label>${seg.label === "OUT_OF_TEMPLATE" ? `<label>模板外活动描述<textarea id="selected-description">${esc(seg.description || "")}</textarea></label>` : ""}<div class="field-grid" id="segment-fields">${s.doc.templateSnapshot.fields.filter((f) => f.scope === "segment").map((f) => fieldControl(f, seg.values?.[f.id], seg.id)).join("")}</div>${a ? `<div class="attempt-info"><strong>整次尝试 ${esc(a.id.slice(0, 10))}</strong><br>共 ${related.length} 个片段：${related.map((x) => `${x.start}–${x.end - 1}`).join("、")}<br>下方结果与评分作用于这些全部片段；局部备注保持各自归属。</div><label>整次执行结果<select id="selected-outcome"><option value="">暂缺（草稿）</option>${Object.entries(outcomes).map(([v, l]) => `<option value="${v}" ${a.outcome === v ? "selected" : ""}>${l}</option>`).join("")}</select></label><div class="field-grid" id="attempt-fields">${s.doc.templateSnapshot.fields.filter((f) => f.scope === "attempt" && f.id !== "attempt-outcome").map((f) => fieldControl(f, a.values[f.id], a.id)).join("")}</div><div class="row"><button id="whole-label">修改整次尝试标签</button><button id="merge-attempt">明确合并尝试</button></div>` : '<p class="hint">此片段没有尝试关联。可使用“用此片段范围重标”后明确选择关联。</p>'}<div class="row"><button id="confirm-selected">确认此片段</button><button id="boundary-evidence">比较边界前后画面</button><button id="delete-segment" class="danger">删除片段</button></div>${seg.risks?.length ? `<p class="special-help">待单独复核：${esc(seg.risks.join("；"))}</p>` : ""}${seg.evidence?.length ? `<details><summary>边界与来源证据</summary><pre>${esc(JSON.stringify(seg.evidence, null, 2))}</pre></details>` : ""}`;
+  host.innerHTML = `<strong>${esc(name)} <span class="pill ${seg.review ? "green" : "amber"}">${seg.review ? "已核对" : "待核对"}</span></strong><div class="row" style="margin-top:12px"><label>首帧（包含）<input id="selected-first" value="${esc(s.input[`first:${seg.id}`] ?? seg.start)}" inputmode="numeric"></label><label>末帧（包含）<input id="selected-last" value="${esc(s.input[`last:${seg.id}`] ?? seg.end - 1)}" inputmode="numeric"></label></div><div class="row"><button id="copy-range">用此片段范围重标</button><button id="split">在当前帧切分</button><button id="merge-segment">与后段合并片段</button></div><label>此片段局部备注<textarea id="selected-note" rows="2">${esc(seg.note || "")}</textarea></label>${seg.label === "OUT_OF_TEMPLATE" ? `<label>模板外活动描述<textarea id="selected-description">${esc(seg.description || "")}</textarea></label>` : ""}<div class="field-grid" id="segment-fields">${s.doc.templateSnapshot.fields.filter((f) => f.scope === "segment").map((f) => fieldControl(f, seg.values?.[f.id], seg.id)).join("")}</div>${a ? `<div class="attempt-info"><strong>本 Episode · ${esc(attemptText(a))}</strong><br>共 ${related.length} 个片段：${related.map((x) => `${x.start}–${x.end - 1}`).join("、")}<br>下方结果与评分作用于这些全部片段；局部备注保持各自归属。</div><label>整次执行结果<select id="selected-outcome"><option value="">暂缺（草稿）</option>${Object.entries(outcomes).map(([v, l]) => `<option value="${v}" ${a.outcome === v ? "selected" : ""}>${l}</option>`).join("")}</select></label><div class="field-grid" id="attempt-fields">${s.doc.templateSnapshot.fields.filter((f) => f.scope === "attempt" && f.id !== "attempt-outcome").map((f) => fieldControl(f, a.values[f.id], a.id)).join("")}</div><div class="row"><button id="whole-label">修改整次尝试标签</button><button id="merge-attempt">明确合并尝试</button></div>` : '<p class="hint">此片段没有尝试关联。可使用“用此片段范围重标”后明确选择关联。</p>'}<div class="row"><button id="confirm-selected">确认此片段</button><button id="boundary-evidence">比较边界前后画面</button><button id="delete-segment" class="danger">删除片段</button></div>${seg.risks?.length ? `<p class="special-help">待单独复核：${esc(seg.risks.join("；"))}</p>` : ""}${seg.evidence?.length ? `<details><summary>边界与来源证据</summary><pre>${esc(JSON.stringify(seg.evidence, null, 2))}</pre></details>` : ""}`;
   for (const [id, side] of [
     ["selected-first", "start"],
     ["selected-last", "end"]
@@ -1358,7 +1390,7 @@ function wholeLabelDialog(a) {
 }
 function mergeAttemptDialog(a) {
   const s = current(), others = s.doc.attempts.filter((x) => !x.archived && x.id !== a.id && x.subtaskId === a.subtaskId);
-  modal(`<h2>明确合并尝试</h2><p>只有人工确认实际是同一次执行时使用。原值完整留在历史，不自动选择成功或最高分。</p><label>另一次尝试<select id="merge-other">${others.map((x) => `<option value="${esc(x.id)}">${esc(x.id)} · ${x.outcome ? outcomes[x.outcome] : "结果暂缺"}</option>`).join("")}</select></label><div id="merge-values"></div><button id="apply-merge-attempt" class="primary">确认同一次执行并采用下方逐字段选择</button>`);
+  modal(`<h2>明确合并尝试</h2><p>只有人工确认实际是同一次执行时使用。原值完整留在历史，不自动选择成功或最高分。</p><label>另一次尝试<select id="merge-other">${others.map((x) => `<option value="${esc(x.id)}">${esc(attemptText(x))} · ${x.outcome ? outcomes[x.outcome] : "结果暂缺"}</option>`).join("")}</select></label><div id="merge-values"></div><button id="apply-merge-attempt" class="primary">确认同一次执行并采用下方逐字段选择</button>`);
   const render = () => {
     const b = s.doc.attempts.find((x) => x.id === value("merge-other").value);
     if (!b) {
@@ -1523,7 +1555,10 @@ function upgradeDialog(template) {
     const changed = s.doc.templateSnapshot.fields.filter((old) => JSON.stringify(old) !== JSON.stringify(template.fields.find((f) => f.id === old.id))).map((f) => f.id);
     for (const id of changed) {
       delete next.values[id];
-      next.attempts.forEach((a) => delete a.values[id]);
+      next.attempts.forEach((a) => {
+        if (!a.archived)
+          delete a.values[id];
+      });
       next.segments.forEach((x) => {
         if (x.values)
           delete x.values[id];
