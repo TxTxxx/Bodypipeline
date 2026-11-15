@@ -1,15 +1,17 @@
 """Backend identity, capability isolation and legacy task compatibility."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from test_annotations import make_argus, make_dataset, make_job
 
 from pipeline.server import annotation_backends as backends
 from pipeline.server import argus_annotation, codex_transport
 from pipeline.server.annotations import AnnotationRunner
-from pipeline.server.app import AnnotationRequest
+from pipeline.server.app import AnnotationRequest, create_app
 from pipeline.server.task_annotations import TemplateLibrary, TemplateRequest
 from pipeline.shared.core import DomainError, Store
 
@@ -156,3 +158,56 @@ def test_cli_not_available_does_not_disable_api(service, monkeypatch):
     assert not options["backends"]["codex"]["available"]
     with pytest.raises(DomainError, match="未登录"):
         runner.enqueue("job-1", backend="codex", template_id="english")
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "Codex CLI 未认证或登录已失效",
+        "Codex CLI 额度不足或达到账号使用限制",
+        "Codex CLI 结果不符合 JSON 输出契约",
+        "Codex CLI 非零退出，费用状态未知",
+    ],
+)
+def test_cli_failure_reaches_task_and_api_without_empty_candidate(service, reason):
+    runner, store = service
+    source = Path(runner.settings.argus_src)
+    runner.settings.argus_python = sys.executable
+    (source / "review/__main__.py").write_text(
+        """
+# pipeline-argus-workbench-contract:v2
+# pipeline-argus-unlimited:v1
+# "--no-cap"
+import json, pathlib, sys
+work = pathlib.Path(sys.argv[sys.argv.index('--out') + 1])
+ep = work / 'episodes/episode_000002'
+ep.mkdir(parents=True)
+(ep / 'context.json').write_text(json.dumps({'fps':30,'n_state_frames':30,'episode_index':2}))
+out = work / 'run/out'
+out.mkdir(parents=True)
+(out / 'noreply_episode_000002.json').write_text(json.dumps({
+ 'parse_ok':False,'no_reply':"""
+        + repr(reason)
+        + """,
+ 'final_dispatch_outcome':'unverified','codex_error':{'kind':'authentication','retryable':False}}))
+raise SystemExit(1)
+"""
+    )
+    row = runner.enqueue(
+        "job-1", backend="codex", template_id="english", run_scope="trial", episodes=[2]
+    )
+    result = runner.run(row)
+    assert result["state"] == "FAILED"
+    assert reason in result["error"]
+    assert "empty layout" not in result["error"]
+    assert result["episodes_done"] == 0 and result["cost_usd"] is None
+    assert not any(r.get("task_document") for r in runner.export(row["id"])["episodes"])
+    assert not store.all("annotation_candidate")
+    runner.settings.trusted_network = True
+    http = TestClient(create_app(runner.settings, background=False))
+    fetched = http.get(f"/api/annotations/{row['id']}")
+    assert fetched.status_code == 200 and reason in fetched.json()["error"]
+    episodes = http.get(f"/api/annotations/{row['id']}/episodes").json()["episodes"]
+    assert len(episodes) == 1 and reason in episodes[0]["label_failure"]["why"]
+    candidates = http.post(f"/api/annotations/{row['id']}/workbench")
+    assert candidates.status_code == 200 and candidates.json()["candidates"] == []

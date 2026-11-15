@@ -833,6 +833,13 @@ class AnnotationRunner:
                 fields["fresh_start"] = (
                     str(row.get("stage") or "") not in LABELLING_STAGES
                 )
+                if (
+                    backend == "codex"
+                    and (self.work(row) / "argus/preparation_receipt.json").is_file()
+                ):
+                    # Let Argus verify its durable preparation instead of
+                    # throwing it away for a pre-dispatch transport error.
+                    fields["fresh_start"] = False
             self.save(row, **fields)
             self.credentials[aid] = credentials
             return row

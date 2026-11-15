@@ -95,8 +95,14 @@ def apply(root):
     if codex.enabled():
         ep = me.load(ep_dir)
         widths = me.ROUTE_WIDTHS.get(me.rig(ep))
-        return (widths[-1] if widths else None), {{'routed': False, 'method': 'codex template wide evidence', 'cost_usd': None}}
+        return (widths[-1] if widths else None), {{'routed': False, 'method': 'codex template wide evidence (no model routing call)', 'cost_usd': 0.0}}
 """,
+        )
+        route.write_text(text)
+    else:
+        text = text.replace(
+            "'method': 'codex template wide evidence', 'cost_usd': None",
+            "'method': 'codex template wide evidence (no model routing call)', 'cost_usd': 0.0",
         )
         route.write_text(text)
     shutil.copyfile(source / "codex_transport.py", root / "label/pipeline_codex.py")

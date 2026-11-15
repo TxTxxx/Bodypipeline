@@ -306,7 +306,14 @@ def assemble_results(work: Path, base: dict[str, dict]) -> dict[str, dict]:
                         )
                         raw = _raw(work, n)
                         if raw.get("parse_ok") is False or raw.get("dry_run"):
-                            raise ValueError("request has no valid reply")
+                            failure = (
+                                raw.get("no_reply")
+                                or (raw.get("_label_failed") or {}).get("why")
+                                or (raw.get("labels") or {}).get("_parse_error")
+                            )
+                            raise ValueError(
+                                str(failure or "request has no valid reply")
+                            )
                         validate_task_reply(
                             (raw.get("labels") or {}).get("bodypipeline_task"),
                             spec,
@@ -315,6 +322,15 @@ def assemble_results(work: Path, base: dict[str, dict]) -> dict[str, dict]:
                         units.append((ctx, raw))
                     except (ValueError, KeyError, TypeError, OSError) as exc:
                         errors.append({"request": n, "error": str(exc)})
+                if not units:
+                    # Preserve model/transport failures. An empty successful
+                    # layout would hide the original cause and fake a candidate.
+                    raise ValueError(
+                        "没有有效模板回复："
+                        + "; ".join(f"{e['request']}: {e['error']}" for e in errors)[
+                            :900
+                        ]
+                    )
                 document, warnings = make_v2_document(spec, context, units)
                 if errors:
                     document["provenance"]["unresolvedRequests"] = errors
