@@ -74,6 +74,7 @@
 
   const esc = (value) => ui?.esc(value) ?? String(value ?? "");
   const money = (value) => {
+    if (value == null) return "未知";
     const n = Number(value);
     return Number.isFinite(n) ? "$" + n.toFixed(4) : "—";
   };
@@ -88,6 +89,9 @@
   function selectedCandidate() {
     return candidates.find((item) => item.job_id === $("annotation-dataset").value) || null;
   }
+  const isCodex = () => $("annotation-backend").value === "codex";
+  const backendAvailable = () => Boolean(isCodex() ? options?.backends?.codex?.available : options?.available);
+  const backendLabel = (row) => row.backend === "codex" ? "本机 Codex" : "API / Argus";
 
   function renderTemplates() {
     const select = $("annotation-template");
@@ -97,6 +101,8 @@
     select.innerHTML = '<option value="">自由分析（不使用模板）</option>' + templates.map(
       (t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`,
     ).join("");
+    select.options[0].disabled = isCodex();
+    if (isCodex()) select.options[0].textContent = "自由分析请使用 API / Argus";
     if (previous && !templates.some((t) => t.id === previous)) {
       select.insertAdjacentHTML("beforeend", `<option value="${esc(previous)}">原模板已删除，请重新选择</option>`);
     }
@@ -130,11 +136,13 @@
   }
 
   function modelSignature() {
+    if (isCodex()) return "codex";
     const { baseUrl, apiKey } = modelInputs();
     return baseUrl + "\n" + apiKey;
   }
 
   function canFetchModels() {
+    if (isCodex()) return false;
     if (!options?.available) return false;
     const { baseUrl, apiKey } = modelInputs();
     return Boolean(
@@ -194,6 +202,7 @@
     const model = $("annotation-model").value;
     const status = $("annotation-model-price");
     if (!status) return;
+    if (isCodex()) { status.hidden = true; return; }
     if (!model || modelPriced(model)) {
       status.textContent = "";
       status.hidden = true;
@@ -256,6 +265,7 @@
   function scheduleModelFetch() {
     clearTimeout(modelFetchTimer);
     modelFetchTimer = null;
+    if (isCodex()) return;
     updateModelControls();
     if (!options?.available) return;
     const { baseUrl, apiKey } = modelInputs();
@@ -281,6 +291,11 @@
 
   function bind() {
     $("annotation-form").addEventListener("submit", submit);
+    $("annotation-backend").addEventListener("change", () => {
+      clearTimeout(modelFetchTimer);
+      modelFetchedFor = "";
+      applyOptions();
+    });
     $("annotation-scope").addEventListener("change", () => { $("annotation-selected-episodes").disabled = $("annotation-scope").value === "full"; updateSubmit(); });
     $("annotation-template").addEventListener("change", () => {
       templateChoiceInitialized = true;
@@ -464,41 +479,58 @@
 
   function applyOptions() {
     if (!options) return;
+    const cli = isCodex() ? options.backends?.codex : null;
     renderTemplates();
-    const defaults = options.defaults || {};
-    $("annotation-model").innerHTML = (options.models || [])
+    const defaults = { ...options.defaults, ...(cli?.defaults || {}) };
+    const models = cli?.models || options.models || [];
+    $("annotation-model").innerHTML = models
       .map((model) => `<option value="${esc(model)}">${esc(model)}</option>`)
       .join("") || '<option value="">服务器未配置模型</option>';
-    $("annotation-model").value = options.default_model || (options.models || [])[0] || "";
+    $("annotation-model").value = cli?.default_model || options.default_model || models[0] || "";
     updateModelPricing();
     $("annotation-cap").value = Number(defaults.cap_usd || 0).toFixed(2);
     $("annotation-concurrency").value = String(defaults.concurrency || 8);
-    $("annotation-reasoning").value = defaults.reasoning || "";
-    $("annotation-inspection").value = defaults.inspection || "auto";
+    $("annotation-reasoning").value = cli?.default_reasoning || defaults.reasoning || "";
+    $("annotation-inspection").value = cli ? "off" : defaults.inspection || "auto";
     $("annotation-sample-fps").value = defaults.sample_fps ? String(defaults.sample_fps) : "";
     $("annotation-max-tokens").value = String(defaults.max_tokens || 12000);
-    $("annotation-field-dictionary").checked = Boolean(defaults.field_dictionary);
+    $("annotation-field-dictionary").checked = cli ? false : Boolean(defaults.field_dictionary);
     $("annotation-note").value = defaults.note || "";
     const defaultBaseUrl = String(options.default_base_url || "").trim();
     if (defaultBaseUrl) {
       $("annotation-base-url").value = defaultBaseUrl;
     }
-    const needsKey = !options.api_key_configured;
+    const needsKey = !cli && !options.api_key_configured;
     $("annotation-api-key").required = needsKey;
     $("annotation-api-key-required").hidden = !needsKey;
     $("annotation-base-url").placeholder = options.gateway_configured
       ? "留空使用服务器默认 baseURL"
       : "https://gateway.example.com/v1";
     capTouched = false;
-    const available = Boolean(options.available);
+    const available = backendAvailable();
     setFormEnabled(available);
+    $("annotation-gateway-fields").hidden = Boolean(cli);
+    $("annotation-base-url").disabled = Boolean(cli) || !available;
+    $("annotation-api-key").disabled = Boolean(cli) || !available;
+    $("annotation-model-refresh").hidden = Boolean(cli);
+    $("annotation-max-tokens").disabled = Boolean(cli) || !available;
+    $("annotation-max-tokens").required = !cli;
+    $("annotation-token-help").hidden = !cli;
+    $("annotation-inspection").disabled = Boolean(cli) || !available;
+    $("annotation-field-dictionary").disabled = Boolean(cli) || !available;
+    Array.from($("annotation-reasoning").options).forEach(o => { o.disabled = Boolean(cli) && !cli.capabilities?.reasoning?.includes(o.value); });
+    $("annotation-backend-status").textContent = cli
+      ? `${cli.version || "Codex CLI"} · ${cli.reason || ""} · provider ${cli.provider || "—"}${cli.provider_url ? ` (${cli.provider_url})` : ""}。${cli.notice || ""} 每次请求最多 ${cli.limits?.max_images || "—"} 张采样图像。`
+      : "API / Argus 使用服务器或本次任务的模型网关。自由分析与模板标注均可用。";
+    if (cli) setModelStatus("模型来自 CLI / 受信部署允许列表，不请求 API 网关。推理强度会明确传入 CLI。");
     if (available) {
       $("annotation-unavailable").hidden = true;
-      $("annotation-help").textContent = options.api_key_configured
+      $("annotation-help").textContent = cli ? "使用服务器用户的 Codex CLI 登录执行模板批量任务；无需 baseURL 或 API Key。"
+        : options.api_key_configured
         ? "提交后在独立队列执行，不会阻塞转换或 Doctor；服务器已配置默认模型密钥，本次可留空。"
         : "提交后在独立队列执行，不会阻塞转换或 Doctor；请填写本次任务的模型 API Key。";
     } else {
-      showUnavailable(options.reason || "服务器未找到可用的 Argus");
+      showUnavailable(cli?.reason || options.reason || "服务器未找到可用的 Argus");
     }
     $("annotation-execution-support").textContent = options.execution_contract_v2
       ? options.unlimited
@@ -580,6 +612,13 @@
       box.textContent = "正在读取预算…";
       return;
     }
+    if (isCodex()) {
+      const cap = $("annotation-cap");
+      cap.required = false; cap.disabled = true; cap.value = ""; cap.placeholder = "不限额";
+      box.textContent = "不设任务、每日或 Episode 费用上限。保留 CLI 调用、状态与 token 用量；实际金额未知。";
+      $("annotation-boundary-cost").textContent = "复用粗定位与边界加密取证。每个逻辑请求首次加最多三次重试；认证、额度不足及未知调用状态停止自动重发。";
+      return;
+    }
     $("annotation-boundary-cost").textContent = options.unlimited
       ? "粗定位后在窗口内加密采样，额外调用与重试的费用、用量及未结算状态继续记录；当前不限额。"
       : "粗定位后在窗口内加密采样，额外调用、重试和未结算预留均计入预算。";
@@ -614,17 +653,18 @@
 
   function updateSubmit() {
     const button = $("annotation-submit");
-    const needsKey = !options?.api_key_configured;
+    const needsKey = !isCodex() && !options?.api_key_configured;
     const model = $("annotation-model").value;
     const usable =
-      Boolean(options?.available) &&
+      backendAvailable() &&
       Boolean($("annotation-dataset").value) &&
       ($("annotation-scope").value === "full" || options?.execution_contract_v2) &&
       Boolean(model) &&
-      (options?.unlimited || modelPriced(model)) &&
+      (isCodex() || options?.unlimited || modelPriced(model)) &&
+      (!isCodex() || Boolean($("annotation-template").value)) &&
       (!$("annotation-template").value || (options?.template_available && templateLibrary.templates.some((t) => t.id === $("annotation-template").value))) &&
       (!needsKey || Boolean($("annotation-api-key").value.trim())) &&
-      !modelFetching &&
+      (!modelFetching || isCodex()) &&
       !submitting;
     button.disabled = !usable;
     button.textContent = submitting ? "正在提交…" : "提交自动标注";
@@ -641,14 +681,14 @@
         ui.api("/api/annotations"),
         ui.api("/api/annotations/options"),
       ]);
-      const wasAvailable = Boolean(options?.available);
+      const wasAvailable = backendAvailable();
       options = freshOptions || options;
       renderTemplates();
       candidates = candidateResult.datasets || [];
       rows = list || [];
-      if (options && !options.available) {
-        showUnavailable(options.reason || "服务器未找到可用的 Argus");
-      } else if (!wasAvailable && options?.available) {
+      if (options && !backendAvailable()) {
+        showUnavailable((isCodex() ? options.backends?.codex?.reason : options.reason) || "后端不可用");
+      } else if (!wasAvailable && backendAvailable()) {
         applyOptions();
       }
       renderDatasetOptions();
@@ -699,7 +739,7 @@
               .join("");
             return `<tr>
               <td><strong class="task-name">${esc(row.dataset_name)}</strong><span class="sub">${esc(row.id.slice(0, 12))} · ${time(row.created_at)}</span><span class="sub">${esc(row.robot_type || "未知机器人")} · ${esc(row.rig || "")}</span></td>
-              <td>${esc(row.model || "—")}<span class="sub">${esc(row.note ? row.note.slice(0, 48) : "无额外说明")}</span></td>
+              <td>${esc(backendLabel(row))} · ${esc(row.model || "—")}<span class="sub">${esc(row.note ? row.note.slice(0, 48) : "无额外说明")}</span></td>
               <td>${esc(progress)}<span class="sub">${esc(row.stage || "")}</span><div class="progress"><span data-annotation-width="${percent}"></span></div></td>
               <td>${money(row.cost_usd)}<span class="sub">${row.cap_usd == null ? "不限额" : `上限 ${money(row.cap_usd)}`}</span></td>
               <td>${stateBadge(row.state)}${row.error ? `<span class="sub job-error">${esc(row.error.slice(0, 120))}</span>` : ""}</td>
@@ -771,7 +811,8 @@
       </div>
       <div class="annotation-meta small muted">
         <span>数据集：${esc(row.dataset_name)} · ${esc(row.robot_type || "未知机器人")} · rig ${esc(row.rig || "—")}</span>
-        <span>模型：${esc(row.model || "—")} · 并发 ${esc(row.concurrency ?? "—")} · 推理 ${esc(row.reasoning || "默认")} · 采样 ${esc(row.sample_fps || "默认")}</span>
+        <span>后端：${esc(backendLabel(row))} · 模型 ${esc(row.model || "—")} · 并发 ${esc(row.concurrency ?? "—")} · 推理 ${esc(row.reasoning || "默认")} · 采样 ${esc(row.sample_fps || "默认")} Hz</span>
+        ${row.backend === "codex" ? `<span>CLI 调用 ${esc(row.cli_call_count || 0)} · 输入 ${esc(row.cli_usage?.input_tokens || 0)} / 输出 ${esc(row.cli_usage?.output_tokens || 0)} tokens · 实际金额未知</span>` : ""}
         <span>模板：${esc(row.task_template?.name || "自由分析")} ${row.task_template ? `· 模板库版本 ${esc(row.template_library_revision)} · AI 初稿待人工确认` : ""}</span>
         <span>路径：${esc(row.dataset_path || "—")}</span>
         <span>创建 ${time(row.created_at)} · 开始 ${time(row.started_at)} · 结束 ${time(row.finished_at)}</span>
@@ -1354,6 +1395,7 @@
     const apiKey = $("annotation-api-key").value.trim();
     const body = {
       job_id: jobId,
+      backend: $("annotation-backend").value,
       run_scope: scope, episodes: selectedEpisodes,
       boundary_target_s: Number($("annotation-boundary-target").value),
       boundary_window_s: Number($("annotation-boundary-window").value),
@@ -1366,10 +1408,10 @@
       inspection: $("annotation-inspection").value,
       sample_fps: sampleFps && sampleFps > 0 ? sampleFps : null,
       field_dictionary: $("annotation-field-dictionary").checked,
-      max_tokens: Number($("annotation-max-tokens").value),
+      max_tokens: isCodex() ? null : Number($("annotation-max-tokens").value),
       note: $("annotation-note").value.trim() || null,
-      base_url: baseUrl || null,
-      api_key: apiKey || null,
+      base_url: isCodex() ? null : baseUrl || null,
+      api_key: isCodex() ? null : apiKey || null,
     };
     submitting = true;
     updateSubmit();
@@ -1414,11 +1456,18 @@
     $("annotation-resume-cost").textContent = options?.unlimited
       ? "模板任务会保留有效初稿，对不符合模板的模型回复重新请求；费用与用量继续记录，当前不限额。"
       : "模板任务会保留有效初稿，对不符合模板的模型回复重新请求；重试费用计入本次预算。";
-    const configured = Boolean(options?.api_key_configured);
+    const cli = row.backend === "codex";
+    const configured = cli || Boolean(options?.api_key_configured);
+    ["annotation-resume-base-url", "annotation-resume-api-key"].forEach(id => {
+      $(id).hidden = cli; $(id).disabled = cli;
+      document.querySelector(`label[for="${id}"]`).hidden = cli;
+    });
     $("annotation-resume-base-url").value = row.base_url || "";
     $("annotation-resume-api-key").value = "";
     $("annotation-resume-api-key").required = !configured;
-    $("annotation-resume-hint").textContent = configured
+    $("annotation-resume-hint").textContent = cli
+      ? "沿用原 Codex 模型、提供方、模板与采样配置，并复用已成功结果。未知调用状态不会自动重新发送；费用仍为未知。"
+      : configured
       ? "服务器已配置默认模型密钥；API Key 可留空，也可为本次续跑填写专用密钥。"
       : "服务器未配置默认模型密钥，必须填写本次续跑的 API Key。";
     $("annotation-resume-dialog").showModal();

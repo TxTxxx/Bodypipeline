@@ -156,6 +156,16 @@ class Settings:
     argus_annotation_inspection: str = "auto"
     argus_annotation_field_dictionary: bool = False
     argus_annotation_note: str = ""
+    # Trusted deployment paths/settings; never accepted as HTTP commands.
+    codex_bin: str = "codex"
+    codex_model: str = ""
+    codex_models: list[str] = field(default_factory=list)
+    codex_reasoning: str = ""
+    codex_timeout: int = 1800
+    codex_max_images: int = 96
+    codex_max_image_bytes: int = 32 * 1024 * 1024
+    codex_max_prompt_chars: int = 180000
+    codex_max_output_bytes: int = 2 * 1024 * 1024
     slurm: dict = field(default_factory=dict)
     # Trusted deployment setting, not a user-supplied conversion option.
     conversion_image_storage: str = "materialized"
@@ -173,6 +183,24 @@ class Settings:
         self.argus_prices = validate_argus_prices(self.argus_prices)
         if type(self.argus_annotation_unlimited) is not bool:
             raise ValueError("argus_annotation_unlimited 必须是布尔值")
+        if not isinstance(self.codex_bin, str) or not self.codex_bin.strip():
+            raise ValueError("codex_bin 必须是受信 CLI 路径或可执行文件名")
+        if not isinstance(self.codex_models, list) or any(
+            not isinstance(v, str) or not v.strip() for v in self.codex_models
+        ):
+            raise ValueError("codex_models 必须是模型名列表")
+        if self.codex_reasoning not in {"", "low", "medium", "high", "xhigh"}:
+            raise ValueError("codex_reasoning 无效")
+        for key, low, high in (
+            ("codex_timeout", 10, 86400),
+            ("codex_max_images", 1, 500),
+            ("codex_max_image_bytes", 1024, 200 * 1024 * 1024),
+            ("codex_max_prompt_chars", 1000, 1000000),
+            ("codex_max_output_bytes", 1024, 16 * 1024 * 1024),
+        ):
+            value = getattr(self, key)
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"{key} 应在 {low} 到 {high} 之间")
         if self.conversion_image_storage not in {"materialized", "reference"}:
             raise ValueError(
                 "conversion_image_storage 必须是 materialized 或 reference"

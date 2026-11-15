@@ -104,6 +104,7 @@ class AnalysisRequest(BaseModel):
 
 class AnnotationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    backend: Literal["argus", "codex"] = "argus"
     job_id: str = Field(min_length=1, max_length=128)
     note: str | None = Field(default=None, max_length=4000)
     model: str | None = Field(default=None, min_length=1, max_length=200)
@@ -785,6 +786,7 @@ def create_app(settings, background=True):
     def annotation_start(body: AnnotationRequest):
         return annotations.enqueue(
             body.job_id,
+            backend=body.backend,
             note=body.note,
             model=body.model,
             cap_usd=body.cap_usd,

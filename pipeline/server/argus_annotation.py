@@ -437,6 +437,29 @@ def environment(
     cameras = provider_context.get("cameras") or {}
     if cameras:
         env["PIPELINE_ARGUS_CAMERA_MOUNTING"] = json.dumps(cameras, ensure_ascii=False)
+    if annotation.get("backend", "argus") == "codex":
+        from .annotation_backends import ensure_snapshot
+
+        ensure_snapshot(settings, annotation)
+        for name in (
+            *NATIVE_KEY_ENVS,
+            "PIPELINE_ARGUS_API_KEY",
+            "PIPELINE_ARGUS_BASE_URL",
+            "PIPELINE_ARGUS_GENERIC_GATEWAY",
+            "PIPELINE_ARGUS_ROUTE_MODEL",
+            "PIPELINE_ARGUS_PRICES",
+        ):
+            env.pop(name, None)
+        env["PIPELINE_ANNOTATION_BACKEND"] = "codex"
+        env["PIPELINE_CODEX_CONFIG"] = json.dumps(annotation["backend_config"])
+        env["PIPELINE_CODEX_RECEIPTS"] = str(
+            Path(annotation["work_path"]) / "codex-calls"
+        )
+        env["PIPELINE_CODEX_RESUME_INDEX"] = str(annotation.get("attempts") or 1)
+        env["RDA_DECODE_CONCURRENCY"] = str(
+            max(2, 2 * int(annotation.get("concurrency") or 1))
+        )
+        return env
     if settings.argus_base_url:
         env["PIPELINE_ARGUS_BASE_URL"] = settings.argus_base_url
         env["PIPELINE_ARGUS_GENERIC_GATEWAY"] = "1"
@@ -517,7 +540,7 @@ def command(settings, annotation: dict, data: Path, work: Path) -> list[str]:
     elif annotation.get("field_dictionary") is False:
         args += ["--field-dictionary", "off"]
     max_tokens = annotation.get("max_tokens")
-    if max_tokens:
+    if max_tokens and annotation.get("backend", "argus") != "codex":
         args += ["--max-tokens", str(int(max_tokens))]
     if int(annotation.get("attempts") or 0) > 1:
         if annotation.get("task_template"):
@@ -540,6 +563,17 @@ def command(settings, annotation: dict, data: Path, work: Path) -> list[str]:
                     or (data.get("labels") or {}).get("_schema_violations")
                 )
             ]
+        if annotation.get("backend") == "codex":
+            # Explicit user resume may retry a rejected CLI login/configuration
+            # after it is repaired. Unknown outcomes remain held, successes stay
+            # cached, and the transport's durable four-send limit still applies.
+            invalid += [
+                name
+                for name, path in _raw_files(Path(work) / "argus").items()
+                if (_read_json(path).get("codex_error") or {}).get("kind")
+                in {"authentication", "quota", "unavailable", "configuration"}
+            ]
+            invalid = sorted(set(invalid))
         for name in invalid:
             args += ["--retry-received", name]
     return [python, *args]

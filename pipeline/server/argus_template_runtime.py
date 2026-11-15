@@ -317,6 +317,14 @@ def refine_record(
             )
             reserve = bound(content)
             while len(entry["attempts"]) < 4:
+                # A crashed CLI call with an unknown billing outcome is never
+                # resent by the boundary loop merely because the server resumed.
+                if entry.get("pause_reason") == "codex_unknown" or (
+                    entry.get("pause_reason") == "codex_configuration"
+                    and entry.get("resume_index", 1)
+                    >= int(os.environ.get("PIPELINE_CODEX_RESUME_INDEX", "1"))
+                ):
+                    break
                 verify()
                 if reserve > remaining() + 1e-10:
                     entry["pause_reason"] = "budget"
@@ -340,6 +348,7 @@ def refine_record(
                     out_path, record
                 )  # a crash cannot erase an unsettled reserve
                 try:
+                    response = None
                     response = call(content)
                     cost, cost_source = price(response.get("usage") or {})
                     invoice.update(
@@ -362,6 +371,10 @@ def refine_record(
                     updated, evidence = apply_boundaries(
                         task, reply, batch, spec, context, window
                     )
+                    if os.environ.get("PIPELINE_ANNOTATION_BACKEND") == "codex":
+                        from label.pipeline_codex import acknowledge
+
+                        acknowledge(response, True)
                     task = updated
                     record["labels"]["bodypipeline_task"] = task
                     entry.update(complete=True, evidence=evidence, pause_reason=None)
@@ -369,6 +382,29 @@ def refine_record(
                     write_atomic(out_path, record)
                     break
                 except Exception as error:
+                    if os.environ.get("PIPELINE_ANNOTATION_BACKEND") == "codex":
+                        from label.pipeline_codex import CLIError, acknowledge
+
+                        if response is not None:
+                            acknowledge(response, False)
+                        if isinstance(error, CLIError) and not error.retryable:
+                            entry["pause_reason"] = (
+                                "codex_configuration"
+                                if error.kind
+                                in {
+                                    "authentication",
+                                    "quota",
+                                    "unavailable",
+                                    "configuration",
+                                }
+                                else "codex_unknown"
+                            )
+                            entry["resume_index"] = int(
+                                os.environ.get("PIPELINE_CODEX_RESUME_INDEX", "1")
+                            )
+                            attempt.update(status="failed", error=str(error))
+                            write_atomic(out_path, record)
+                            break
                     # Verified unpaid rejections release their reserve; uncertain
                     # outcomes retain it even when the request will be retried.
                     if getattr(error, "verified_unpaid", False):

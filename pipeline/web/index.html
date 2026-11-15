@@ -458,6 +458,9 @@
                 <p class="panel-note small muted">自由分析保留 Argus 原生分析；模板标注使用专用提示词和一套模板业务时间线。两种模式共用准备、采样、调用、费用及续跑，来源数据只读。</p>
                 <div id="annotation-unavailable" class="warning" hidden></div>
                 <form id="annotation-form" class="conversion-form">
+                  <label for="annotation-backend">标注后端 / 执行方式</label>
+                  <select id="annotation-backend"><option value="argus">API / Argus</option><option value="codex">本机 Codex</option></select>
+                  <p id="annotation-backend-status" class="small muted" aria-live="polite">API / Argus 使用服务器或本次任务的模型网关。</p>
                   <label for="annotation-template">标注模式与任务模板</label>
                   <div class="action-row">
                     <select id="annotation-template" disabled><option value="">自由分析（不使用模板）</option></select>
@@ -480,7 +483,7 @@
                       <p class="small annotation-model-warning" id="annotation-model-price" hidden aria-live="polite"></p>
                     </div>
                   </div>
-                  <div class="conversion-grid">
+                  <div class="conversion-grid" id="annotation-gateway-fields">
                     <div>
                       <label for="annotation-base-url">模型 baseURL（可选）</label>
                       <input id="annotation-base-url" type="url" autocomplete="off" placeholder="留空使用服务器默认" disabled />
@@ -501,7 +504,7 @@
                     <div>
                       <label for="annotation-concurrency">并发 Episode 数</label>
                       <input id="annotation-concurrency" type="number" min="1" max="64" step="1" required disabled />
-                      <p class="small muted">并发越高，模型网关负载和峰值费用越高。</p>
+                      <p class="small muted">并发决定同时执行的 Episode 数；本机 Codex 默认一次一条，可调整。CLI 进程总量受此限制。</p>
                     </div>
                   </div>
                   <div class="conversion-grid">
@@ -528,12 +531,14 @@
                   </div>
                   <div class="conversion-grid">
                     <div>
-                      <label for="annotation-sample-fps">采样帧率（留空使用 Argus 默认）</label>
+                      <label for="annotation-sample-fps">采样帧率 Hz（每秒帧数）</label>
                       <input id="annotation-sample-fps" type="number" min="0.1" max="10" step="0.1" disabled />
+                      <p class="small muted">本机 Codex 默认 3 Hz，即每秒三帧；所有来源相机使用统一时间基准。</p>
                     </div>
                     <div>
                       <label for="annotation-max-tokens">单 Episode 输出 token 上限</label>
                       <input id="annotation-max-tokens" type="number" min="256" max="200000" step="1" required disabled />
+                      <p id="annotation-token-help" class="small muted" hidden>Codex CLI 自行管理输出 token 限制，本页不能设置；模型仍须通过模板业务校验。</p>
                     </div>
                   </div>
                   <div class="conversion-grid">

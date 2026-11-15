@@ -38,6 +38,15 @@ SAFE_ENV = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "REQUESTS_CA_BUNDLE",
+    "CODEX_HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
 )
 
 
@@ -325,8 +334,9 @@ def start(config, port, prepared=None):
         f"--property=StandardOutput=append:{log}",
         f"--property=StandardError=append:{log}",
     ]
-    # Only these non-secret environment values need to cross the user manager.
-    argv += [f"--setenv={name}={value}" for name, value in env.items()]
+    # NAME alone copies the variable from systemd-run's controlled environment.
+    # Proxy URLs may contain credentials: keep their values out of argv/logs.
+    argv += [f"--setenv={name}" for name in env]
     argv += [
         "--",
         sys.executable,

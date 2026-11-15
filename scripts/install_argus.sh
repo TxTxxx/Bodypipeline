@@ -70,6 +70,8 @@ if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-workbench-contract:v2" "$SRC/review/__main__.py" \
    || ! grep -q "pipeline-argus-unlimited:v1" "$SRC/review/__main__.py" \
    || ! grep -q "pipeline-argus-unlimited:v1" "$SRC/label/dictionary_stage.py" \
+   || ! grep -q "pipeline-argus-codex:v1" "$SRC/label/harness.py" \
+   || ! cmp -s "$ROOT/pipeline/server/codex_transport.py" "$SRC/label/pipeline_codex.py" \
    || ! cmp -s "$ROOT/pipeline/server/argus_template_runtime.py" "$SRC/label/pipeline_runtime.py" \
    || ! cmp -s "$TEMPLATE_HELPER" "$SRC/label/pipeline_template.py"; then
   git -C "$SRC" reset --hard "$REV"
@@ -77,7 +79,8 @@ if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
   python3 "$TEMPLATE_PATCH" "$SRC"
   python3 "$ROOT/patches/argus/0003-workbench-contract.py" "$SRC"
   python3 "$ROOT/patches/argus/0004-unlimited-review.py" "$SRC"
-  git -C "$SRC" add label/pipeline_template.py label/pipeline_runtime.py
+  python3 "$ROOT/patches/argus/0005-codex-transport.py" "$SRC"
+  git -C "$SRC" add label/pipeline_template.py label/pipeline_runtime.py label/pipeline_codex.py
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
     commit -am "$INTEGRATION_SUBJECT"
 fi
