@@ -82,6 +82,18 @@ def apply(root):
             '"provider": "codex_cli" if codex.enabled() else ("gateway" if _GENERIC else ("openrouter" if is_openrouter_key(api_key) else "openai")),',
         )
         harness.write_text(text)
+    text = harness.read_text()
+    if "codex delivery is known independently of billing" not in text:
+        text = once(
+            text,
+            "        if any(record.get('final_dispatch_outcome') in ('claimed', 'unverified') for _, record in records):\n",
+            "        # codex delivery is known independently of billing\n"
+            "        if codex.enabled() and all((record.get('response') or {}).get('provider') == 'codex_cli'\n"
+            "                and annotation_complete(record) for _, record in records):\n"
+            "            return True  # source/request attestation already matched; cost stays unknown\n"
+            "        if any(record.get('final_dispatch_outcome') in ('claimed', 'unverified') for _, record in records):\n",
+        )
+        harness.write_text(text)
     route = root / "label/route.py"
     text = route.read_text()
     if MARKER not in text:
@@ -106,6 +118,18 @@ def apply(root):
         )
         route.write_text(text)
     shutil.copyfile(source / "codex_transport.py", root / "label/pipeline_codex.py")
+    policy = root / "label/policy.py"
+    text = policy.read_text()
+    if "codex part request budget" not in text:
+        text = once(
+            text,
+            "    if sample_fps is None and saved.get('model') == model and saved.get('part_max_s') is not None:\n",
+            "    # codex part request budget\n"
+            "    from label import pipeline_codex as codex\n"
+            "    if codex.enabled():\n        maximum = codex.part_limit(ctx, period, maximum)\n"
+            "    if sample_fps is None and saved.get('model') == model and saved.get('part_max_s') is not None:\n",
+        )
+        policy.write_text(text)
     shutil.copyfile(
         source / "argus_template_runtime.py", root / "label/pipeline_runtime.py"
     )

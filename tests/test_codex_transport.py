@@ -24,7 +24,7 @@ def cli(tmp_path, monkeypatch):
     control = tmp_path / "control.json"
     control.write_text('{"mode":"valid"}')
     config = {
-        "version": 1,
+        "version": c.VERSION,
         "executable": str(binary),
         "model": "test-model",
         "reasoning": "high",
@@ -87,8 +87,8 @@ def test_argv_isolated_output_and_success_reuse_under_concurrent_callers(cli):
     assert args[args.index("--sandbox") + 1] == "read-only"
     assert "--image" in args and "--output-schema" in args
     assert "features.shell_tool=false" in args and "features.apps=false" in args
-    assert "model_providers.bodypipeline_cli.request_max_retries=0" in args
-    assert "model_providers.bodypipeline_cli.stream_max_retries=0" in args
+    assert 'model_provider="openai"' in args
+    assert not any("bodypipeline_cli" in a for a in args)
     assert "OPENAI_API_KEY" not in starts(root)[0]["env_names"]
     assert "PIPELINE_ARGUS_API_KEY" not in starts(root)[0]["env_names"]
     assert "--ignore-user-config" in args and "--ignore-rules" in args
@@ -135,6 +135,35 @@ def test_unknown_outcome_is_not_resent_on_restart_or_resume(cli, monkeypatch):
     with pytest.raises(c.CLIError):
         call()
     monkeypatch.setenv("PIPELINE_CODEX_RESUME_INDEX", "2")
+    with pytest.raises(c.CLIError):
+        call()
+    assert len(starts(root)) == 1
+
+
+def test_authentication_stops_undispatched_batch_calls_until_explicit_resume(
+    cli, monkeypatch
+):
+    root, _, control = cli
+    control.write_text('{"mode":"authentication"}')
+    with pytest.raises(c.CLIError):
+        call(content("episode A"))
+    with pytest.raises(c.CLIError, match="同批后续调用已暂停"):
+        call(content("episode B"))
+    assert len(starts(root)) == 1
+    monkeypatch.setenv("PIPELINE_CODEX_RESUME_INDEX", "2")
+    control.write_text('{"mode":"valid"}')
+    assert call(content("episode B"))["provider"] == "codex_cli"
+    assert len(starts(root)) == 2
+
+
+def test_timeout_stops_only_this_cli_and_retains_unknown_cost(cli):
+    root, _, control = cli
+    control.write_text('{"delay":3}')
+    with pytest.raises(c.CLIError, match="超时"):
+        c.call_model(content(), "test-model", "high", 0.1)
+    record = c.receipts(root / "receipts")[0]
+    assert record["status"] == "timeout" and record["cost_usd"] is None
+    assert not Path(f"/proc/{record['pid']}").exists()
     with pytest.raises(c.CLIError):
         call()
     assert len(starts(root)) == 1
@@ -187,3 +216,54 @@ def test_system_proxies_are_forwarded_without_gateway_keys(monkeypatch):
         }
     )
     assert set(env) == {"HTTP_PROXY", "https_proxy"}
+
+
+def test_template_schema_constrains_business_object_and_field_scopes():
+    request = {
+        "template_id": "english",
+        "template_signature": "signature",
+        "template": {
+            "subtasks": [{"id": "align", "name": "Align"}],
+            "fields": [
+                {"id": "quality", "scope": "attempt", "kind": "rating"},
+                {"id": "notes", "scope": "segment", "kind": "text"},
+            ],
+        },
+    }
+    schema = c.response_schema(
+        "BODYPIPELINE TASK TEMPLATE CONTRACT\n" + json.dumps(request)
+    )
+    assert set(schema["properties"]) == {"bodypipeline_task"}
+    task = schema["properties"]["bodypipeline_task"]["properties"]
+    assert task["values"]["properties"] == {}
+    assert set(task["attempts"]["items"]["properties"]["values"]["properties"]) == {
+        "quality"
+    }
+    assert set(task["segments"]["items"]["properties"]["values"]["properties"]) == {
+        "notes"
+    }
+    assert schema["additionalProperties"] is False
+
+
+def test_part_budget_uses_actual_camera_count_and_keeps_original_time(cli, monkeypatch):
+    _, config, _ = cli
+    config.update(max_images=96, max_image_bytes=32 * 1024 * 1024, max_part_seconds=60)
+    monkeypatch.setenv("PIPELINE_CODEX_CONFIG", json.dumps(config))
+    small = c.part_limit({"cameras": {"front": {}, "wrist": {}}}, 1 / 3, 220)
+    many = c.part_limit({"cameras": {f"view{i}": {} for i in range(8)}}, 1 / 3, 220)
+    assert 0 < many < small <= 60 < 220
+    assert c.boundary_batch_limit(8, 30, 0.2, 1) < c.boundary_batch_limit(2, 30, 0.2, 1)
+    request = {
+        "template_id": "x",
+        "template_signature": "s",
+        "frames": 1007,
+        "fps": 30,
+        "template": {"subtasks": [], "fields": []},
+    }
+    schema = c.response_schema(
+        "BODYPIPELINE TASK TEMPLATE CONTRACT\n" + json.dumps(request)
+    )
+    bounds = schema["properties"]["bodypipeline_task"]["properties"]["segments"][
+        "items"
+    ]["properties"]["end_s"]
+    assert bounds["maximum"] == 1007 / 30 and bounds["maximum"] < 33.5667

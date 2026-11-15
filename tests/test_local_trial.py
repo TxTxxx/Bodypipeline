@@ -74,12 +74,17 @@ def test_tool_environment_adds_cpu_tools_and_drops_inherited_credentials(tmp_pat
             "PIPELINE_ARGUS_API_KEY": "public-test-placeholder",
             "PIPELINE_TOKEN": "public-test-placeholder",
             "HF_TOKEN": "public-test-placeholder",
+            "HTTP_PROXY": "http://127.0.0.1:7897",
+            "https_proxy": "http://127.0.0.1:7897",
+            "NO_PROXY": "127.0.0.1,localhost",
         },
     )
     assert env["FFMPEG"] == str(tool / "bin/ffmpeg")
     assert env["FFPROBE"] == str(tool / "bin/ffprobe")
     assert env["LD_LIBRARY_PATH"] == str(tool / "lib/x86_64-linux-gnu")
     assert env["CUDA_VISIBLE_DEVICES"] == ""
+    assert env["HTTP_PROXY"] == env["https_proxy"] == "http://127.0.0.1:7897"
+    assert env["NO_PROXY"] == "127.0.0.1,localhost"
     assert not any("KEY" in key or "TOKEN" in key for key in env)
 
 

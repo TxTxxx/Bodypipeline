@@ -29,6 +29,7 @@ def service(settings_factory, tmp_path, monkeypatch):
     (source / "label/pipeline_codex.py").write_bytes(
         Path(codex_transport.__file__).read_bytes()
     )
+    (source / "label/policy.py").write_text("# codex part request budget\n")
     monkeypatch.setattr(
         backends, "_cli_status", lambda *a: (True, "已登录", "codex-cli 0.167.2")
     )

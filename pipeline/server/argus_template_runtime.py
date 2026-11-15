@@ -289,8 +289,15 @@ def refine_record(
     # Keep the original coarse layout as the identity of refinement requests.
     coarse = metadata.setdefault("coarse_task", copy.deepcopy(task))
     groups = boundary_groups(coarse, count / fps)
-    for begin in range(0, len(groups), 4):
-        batch = groups[begin : begin + 4]
+    batch_size = 4
+    if os.environ.get("PIPELINE_ANNOTATION_BACKEND") == "codex":
+        from label.pipeline_codex import boundary_batch_limit
+
+        batch_size = boundary_batch_limit(
+            len(me.views(me.load(Path(ep_dir)))), fps, target, window
+        )
+    for begin in range(0, len(groups), batch_size):
+        batch = groups[begin : begin + batch_size]
         indices = dense_frames(batch, fps, count, window, target)
         key = _fingerprint(
             [spec["signature"], target, window, batch, record.get("input_identity")]

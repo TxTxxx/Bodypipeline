@@ -166,6 +166,7 @@ class Settings:
     codex_max_image_bytes: int = 32 * 1024 * 1024
     codex_max_prompt_chars: int = 180000
     codex_max_output_bytes: int = 2 * 1024 * 1024
+    codex_max_part_seconds: float = 60.0
     slurm: dict = field(default_factory=dict)
     # Trusted deployment setting, not a user-supplied conversion option.
     conversion_image_storage: str = "materialized"
@@ -191,6 +192,12 @@ class Settings:
             raise ValueError("codex_models 必须是模型名列表")
         if self.codex_reasoning not in {"", "low", "medium", "high", "xhigh"}:
             raise ValueError("codex_reasoning 无效")
+        if (
+            type(self.codex_max_part_seconds) not in (int, float)
+            or not math.isfinite(self.codex_max_part_seconds)
+            or not 0.5 <= self.codex_max_part_seconds <= 450
+        ):
+            raise ValueError("codex_max_part_seconds 应在 0.5 到 450 秒之间")
         for key, low, high in (
             ("codex_timeout", 10, 86400),
             ("codex_max_images", 1, 500),

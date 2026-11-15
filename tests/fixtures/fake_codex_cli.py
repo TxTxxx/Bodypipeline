@@ -127,11 +127,15 @@ def main():
     else:
         answer = {"observation": "Controlled CLI test fixture"}
     reply = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
-    reply.write_text(
-        "not-json"
-        if mode == "invalid"
-        else json.dumps({"result_json": json.dumps(answer)})
+    schema = json.loads(
+        Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text()
     )
+    payload = (
+        {"result_json": json.dumps(answer)}
+        if "result_json" in schema["properties"]
+        else answer
+    )
+    reply.write_text("not-json" if mode == "invalid" else json.dumps(payload))
     print(
         json.dumps(
             {

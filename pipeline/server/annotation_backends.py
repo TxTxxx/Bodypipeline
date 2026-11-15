@@ -83,6 +83,10 @@ def codex_options(settings):
             "pipeline-argus-codex:v1"
             in (Path(settings.argus_src) / "label/harness.py").read_text()
         )
+        installed &= (
+            "codex part request budget"
+            in (Path(settings.argus_src) / "label/policy.py").read_text()
+        )
     except OSError:
         installed = False
     if not common or not installed:
@@ -110,6 +114,7 @@ def codex_options(settings):
             "max_image_bytes": settings.codex_max_image_bytes,
             "max_prompt_chars": settings.codex_max_prompt_chars,
             "timeout": settings.codex_timeout,
+            "max_part_seconds": settings.codex_max_part_seconds,
         },
         "notice": "本机指 CLI 在服务器上运行；模型计算可能由 Codex 服务完成。复用 CLI 登录和模型/提供方配置，隔离其工具、项目规则与插件。实际金额未知。",
     }
@@ -124,11 +129,13 @@ def codex_snapshot(settings, model, reasoning):
         "reasoning": reasoning,
         "model_provider": public.get("model_provider", "openai"),
         "provider_config": public.get("provider_config", {}),
+        "cli_settings": public.get("cli_settings", {}),
         "max_images": settings.codex_max_images,
         "max_image_bytes": settings.codex_max_image_bytes,
         "max_prompt_chars": settings.codex_max_prompt_chars,
         "max_output_bytes": settings.codex_max_output_bytes,
         "timeout": settings.codex_timeout,
+        "max_part_seconds": settings.codex_max_part_seconds,
     }
 
 

@@ -477,8 +477,12 @@
     updateModelControls();
   }
 
-  function applyOptions() {
+  function applyOptions(preserveValues = false) {
     if (!options) return;
+    const formValues = preserveValues ? Object.fromEntries([
+      "annotation-model", "annotation-reasoning", "annotation-concurrency",
+      "annotation-sample-fps", "annotation-note", "annotation-base-url",
+    ].map(id => [id, $(id).value])) : null;
     const cli = isCodex() ? options.backends?.codex : null;
     renderTemplates();
     const defaults = { ...options.defaults, ...(cli?.defaults || {}) };
@@ -546,6 +550,11 @@
       !modelFetchedFor
     ) {
       scheduleModelFetch();
+    }
+    if (formValues) {
+      Object.entries(formValues).forEach(([id, value]) => { $(id).value = value; });
+      updateModelPricing();
+      updateSubmit();
     }
   }
 
@@ -616,7 +625,7 @@
       const cap = $("annotation-cap");
       cap.required = false; cap.disabled = true; cap.value = ""; cap.placeholder = "不限额";
       box.textContent = "不设任务、每日或 Episode 费用上限。保留 CLI 调用、状态与 token 用量；实际金额未知。";
-      $("annotation-boundary-cost").textContent = "复用粗定位与边界加密取证。每个逻辑请求首次加最多三次重试；认证、额度不足及未知调用状态停止自动重发。";
+      $("annotation-boundary-cost").textContent = "复用粗定位与边界加密取证。同一请求最多首次加三次 CLI 调用；CLI 内部连接恢复由 Codex 管理。认证、额度不足及未知调用状态停止自动重发。";
       return;
     }
     $("annotation-boundary-cost").textContent = options.unlimited
@@ -689,7 +698,7 @@
       if (options && !backendAvailable()) {
         showUnavailable((isCodex() ? options.backends?.codex?.reason : options.reason) || "后端不可用");
       } else if (!wasAvailable && backendAvailable()) {
-        applyOptions();
+        applyOptions(true);
       }
       renderDatasetOptions();
       renderList();
@@ -806,7 +815,7 @@
       <div class="annotation-summary">
         <div><span class="small muted">状态</span><div>${stateBadge(row.state)} ${esc(row.stage || "")}</div></div>
         <div><span class="small muted">进度</span><div>${done} / ${total || "?"} Episodes</div><div class="progress"><span data-annotation-width="${percent}"></span></div></div>
-        <div><span class="small muted">已结算费用</span><div>${money(row.cost_usd)} / ${row.cap_usd == null ? "不限额" : `上限 ${money(row.cap_usd)}`}</div><span class="sub">${row.cost_complete ? "费用完整" : "费用仍在结算或为估算"} · 预留 ${money(row.reserved_cost_usd)}</span></div>
+        <div><span class="small muted">已结算费用</span><div>${money(row.cost_usd)} / ${row.cap_usd == null ? "不限额" : `上限 ${money(row.cap_usd)}`}</div><span class="sub">${row.backend === "codex" ? "CLI 不提供美元账单" : row.cost_complete ? "费用完整" : "费用仍在结算或为估算"} · 预留 ${money(row.reserved_cost_usd)}</span></div>
         <div><span class="small muted">Episode 失败</span><div>${row.episodes_failed || 0}</div><span class="sub">退出码 ${esc(row.exit_code ?? "—")}</span></div>
       </div>
       <div class="annotation-meta small muted">
@@ -817,6 +826,7 @@
         <span>路径：${esc(row.dataset_path || "—")}</span>
         <span>创建 ${time(row.created_at)} · 开始 ${time(row.started_at)} · 结束 ${time(row.finished_at)}</span>
       </div>
+      ${row.backend === "codex" && row.cli_calls?.length ? `<details><summary>CLI 调用回执（最近 ${Math.min(20, row.cli_calls.length)} 条，完整记录见导出）</summary><div class="table-wrap"><table><thead><tr><th>调用 ID / CLI 会话</th><th>状态</th><th>图像</th><th>用量 / 金额</th></tr></thead><tbody>${row.cli_calls.slice(-20).map(call => `<tr><td>${esc(call.id)}<span class="sub">${esc(call.thread_id || "尚无会话回执")}</span></td><td>${esc(call.status)}<span class="sub">${esc(call.error || "")}</span></td><td>${esc(call.images)}</td><td>输入 ${esc(call.usage?.input_tokens ?? "未知")} / 输出 ${esc(call.usage?.output_tokens ?? "未知")}<span class="sub">实际金额未知</span></td></tr>`).join("")}</tbody></table></div></details>` : ""}
       ${row.note ? `<p class="annotation-note small"><strong>任务说明：</strong>${esc(row.note)}</p>` : ""}
       ${row.error ? `<p class="warning annotation-error">${esc(row.error)}</p>` : ""}
       <div class="action-row annotation-actions">${actions}</div>
