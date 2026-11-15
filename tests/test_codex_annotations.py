@@ -161,6 +161,11 @@ def test_cli_not_available_does_not_disable_api(service, monkeypatch):
         runner.enqueue("job-1", backend="codex", template_id="english")
 
 
+def test_template_summary_does_not_invent_overall_failure():
+    summary = argus_annotation._summary("episode", {"labels": {}}, "template")
+    assert summary["completed"] is None and summary["outcome"] is None
+
+
 @pytest.mark.parametrize(
     "reason",
     [

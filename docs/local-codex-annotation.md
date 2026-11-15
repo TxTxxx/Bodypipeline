@@ -29,8 +29,8 @@ Server 和已有 Argus/CPU 媒体工具链必须可用。新安装使用 `script
   "codex_max_images": 96,
   "codex_max_image_bytes": 33554432,
   "codex_max_prompt_chars": 180000,
-  "codex_max_output_bytes": 2097152
-  ,"codex_max_part_seconds": 60.0
+  "codex_max_output_bytes": 2097152,
+  "codex_max_part_seconds": 60.0
 }
 ```
 

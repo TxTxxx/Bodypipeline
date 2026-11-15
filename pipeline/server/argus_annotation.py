@@ -697,7 +697,9 @@ def _summary(name: str, data: dict, source: str) -> dict:
         "run_episode": meta.get("run_episode") or name,
         "prompt": prompt,
         "duration_s": duration,
-        "completed": outcome == "success",
+        "completed": None
+        if source == "template" and outcome is None
+        else outcome == "success",
         "outcome": outcome,
         "failure_kind": completion.get("failure_kind"),
         "completed_at_s": completion.get("completed_at_s"),
