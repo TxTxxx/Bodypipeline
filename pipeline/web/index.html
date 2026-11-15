@@ -461,6 +461,7 @@
                   <label for="annotation-backend">标注后端 / 执行方式</label>
                   <select id="annotation-backend"><option value="argus">API / Argus</option><option value="codex">本机 Codex</option></select>
                   <p id="annotation-backend-status" class="small muted" aria-live="polite">API / Argus 使用服务器或本次任务的模型网关。</p>
+                  <details id="annotation-backend-diagnostics" hidden><summary>运行配置与诊断</summary><p id="annotation-backend-diagnostic-text" class="small muted"></p></details>
                   <label for="annotation-template">标注模式与任务模板</label>
                   <div class="action-row">
                     <select id="annotation-template" disabled><option value="">自由分析（不使用模板）</option></select>

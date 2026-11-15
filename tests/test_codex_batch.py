@@ -234,3 +234,36 @@ def test_budget_splits_two_camera_episode_and_resumes_only_failed_part(batch):
     )
     document = runner.episode(final["id"], "episode_000000")["task_document"]
     assert max(s["end"] for s in document["segments"]) == 48
+
+
+@pytest.mark.parametrize("kind", ["authentication", "quota"])
+def test_account_failure_stops_batch_at_current_concurrency_and_explicitly_recovers(
+    batch, kind
+):
+    runner, root, control = batch
+    control.write_text(json.dumps({"delay": 0.2, "mode": kind}))
+    first = runner.run(start_row(runner, concurrency=2))
+    assert first["state"] == "FAILED" and first["episodes_done"] == 0
+    dispatched = [r for r in calls(root) if r["phase"] == "start"]
+    assert 1 <= len(dispatched) <= 2
+    assert first["cli_call_count"] == len(dispatched)
+    assert first["cost_usd"] is None and first["cost_complete"] is False
+    assert all(r["cost_usd"] is None for r in first["cli_calls"])
+    control.write_text('{"delay":0.05,"mode":"valid"}')
+    final = runner.run(runner.resume(first["id"]))
+    assert final["state"] == "COMPLETED", final.get("error")
+    assert final["episodes_done"] == 3 and final["cost_usd"] is None
+
+
+def test_one_bad_business_reply_retries_without_blocking_other_episodes(batch):
+    runner, root, control = batch
+    control.write_text(
+        json.dumps(
+            {"delay": 0.05, "episodes": {"episode_000001": "business_invalid_once"}}
+        )
+    )
+    result = runner.run(start_row(runner, concurrency=2))
+    assert result["state"] == "COMPLETED", result.get("error")
+    counts = Counter(r["episode"] for r in calls(root) if r["phase"] == "start")
+    assert counts == {"episode_000000": 1, "episode_000001": 2, "episode_000002": 1}
+    assert result["cli_call_count"] == 4 and result["cost_usd"] is None

@@ -497,7 +497,8 @@
     $("annotation-reasoning").value = cli?.default_reasoning || defaults.reasoning || "";
     $("annotation-inspection").value = cli ? "off" : defaults.inspection || "auto";
     $("annotation-sample-fps").value = defaults.sample_fps ? String(defaults.sample_fps) : "";
-    $("annotation-max-tokens").value = String(defaults.max_tokens || 12000);
+    $("annotation-max-tokens").value = cli ? "" : String(defaults.max_tokens || 12000);
+    $("annotation-max-tokens").placeholder = cli ? "CLI 自动管理" : "";
     $("annotation-field-dictionary").checked = cli ? false : Boolean(defaults.field_dictionary);
     $("annotation-note").value = defaults.note || "";
     const defaultBaseUrl = String(options.default_base_url || "").trim();
@@ -524,8 +525,12 @@
     $("annotation-field-dictionary").disabled = Boolean(cli) || !available;
     Array.from($("annotation-reasoning").options).forEach(o => { o.disabled = Boolean(cli) && !cli.capabilities?.reasoning?.includes(o.value); });
     $("annotation-backend-status").textContent = cli
-      ? `${cli.version || "Codex CLI"} · ${cli.reason || ""} · provider ${cli.provider || "—"}${cli.provider_url ? ` (${cli.provider_url})` : ""}。${cli.notice || ""} 每次请求最多 ${cli.limits?.max_images || "—"} 张采样图像。`
+      ? "复用服务器上的本机 Codex 登录，支持模板标注，无需网关密钥；实际金额未知。"
       : "API / Argus 使用服务器或本次任务的模型网关。自由分析与模板标注均可用。";
+    $("annotation-backend-diagnostics").hidden = !cli;
+    $("annotation-backend-diagnostic-text").textContent = cli
+      ? `${cli.version || "Codex CLI"} · ${cli.reason || ""} · provider ${cli.provider || "—"}${cli.provider_url ? ` (${cli.provider_url})` : ""}。${cli.notice || ""} 每次请求最多 ${cli.limits?.max_images || "—"} 张采样图像；分段最多 ${cli.limits?.max_part_seconds || "—"} 秒，并按实际相机数与输入预算继续收紧。`
+      : "";
     if (cli) setModelStatus("模型来自 CLI / 受信部署允许列表，不请求 API 网关。推理强度会明确传入 CLI。");
     if (available) {
       $("annotation-unavailable").hidden = true;

@@ -126,6 +126,21 @@ def main():
         }
     else:
         answer = {"observation": "Controlled CLI test fixture"}
+    if mode == "business_invalid_once":
+        starts = [
+            json.loads(line)
+            for line in (home / "invocations.jsonl").read_text().splitlines()
+        ]
+        if (
+            sum(
+                r.get("phase") == "start" and r.get("episode") == episode
+                for r in starts
+            )
+            == 1
+        ):
+            answer["bodypipeline_task"]["template_id"] = (
+                "deliberately-invalid-fixture-template"
+            )
     reply = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
     schema = json.loads(
         Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text()
