@@ -71,6 +71,7 @@ if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-unlimited:v1" "$SRC/review/__main__.py" \
    || ! grep -q "pipeline-argus-unlimited:v1" "$SRC/label/dictionary_stage.py" \
    || ! grep -q "pipeline-argus-codex:v1" "$SRC/label/harness.py" \
+   || ! grep -q "codex part request budget" "$SRC/label/policy.py" \
    || ! cmp -s "$ROOT/pipeline/server/codex_transport.py" "$SRC/label/pipeline_codex.py" \
    || ! cmp -s "$ROOT/pipeline/server/argus_template_runtime.py" "$SRC/label/pipeline_runtime.py" \
    || ! cmp -s "$TEMPLATE_HELPER" "$SRC/label/pipeline_template.py"; then
