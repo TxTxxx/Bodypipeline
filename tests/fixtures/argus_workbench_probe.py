@@ -78,6 +78,7 @@ def control_probe(argus):
 
 
 def integrated(argus, work, source):
+    unlimited = os.environ.get("PIPELINE_TEST_ARGUS_UNLIMITED") == "1"
     counts = Counter()
     seen = []
     spec = json.loads((work / "task-template.json").read_text())
@@ -208,7 +209,7 @@ def integrated(argus, work, source):
                 "usage": {
                     "prompt_tokens": 50,
                     "completion_tokens": 100,
-                    "cost": 0.0001,
+                    "cost": 40.0 if unlimited else 0.0001,
                 },
             }
             raw = json.dumps(response).encode()
@@ -263,6 +264,12 @@ def integrated(argus, work, source):
         "--max-tokens",
         "2048",
     ]
+    if unlimited:
+        cap_at = cmd.index("--cap")
+        cmd[cap_at : cap_at + 2] = ["--no-cap"]
+        # An unknown model rate must not prevent coarse or fine dispatch when
+        # explicitly unlimited; the loopback provider still reports its cost.
+        env.pop("PIPELINE_ARGUS_PRICES", None)
     try:
         env["PIPELINE_ARGUS_EPISODES"] = "[1]"
         first = subprocess.run(
@@ -284,6 +291,10 @@ def integrated(argus, work, source):
         )
         assert trial["pipeline_boundary"]["pending"] == []
         assert trial["pipeline_boundary"]["requests"]
+        run_info = json.loads((work / "argus/run/run.json").read_text())
+        assert run_info["cap_usd"] == (None if unlimited else 1)
+        if unlimited:
+            assert run_info["cost_usd"] > 20
         trial_ep = next(k for k in counts if k.startswith("coarse:"))
         env["PIPELINE_ARGUS_EPISODES"] = "null"
         second = subprocess.run(
@@ -315,6 +326,9 @@ def integrated(argus, work, source):
             "prepared_receipt_verified": True,
             "continuation_rejected_before_retry": True,
             "synthetic_model": True,
+            "unlimited_cli": unlimited,
+            "cap_usd": run_info["cap_usd"],
+            "trial_cost_usd": run_info["cost_usd"],
         }
     finally:
         server.shutdown()

@@ -68,12 +68,15 @@ if ! grep -q "pipeline-argus-integration:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-task-template:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-template-retry:v1" "$SRC/label/harness.py" \
    || ! grep -q "pipeline-argus-workbench-contract:v2" "$SRC/review/__main__.py" \
+   || ! grep -q "pipeline-argus-unlimited:v1" "$SRC/review/__main__.py" \
+   || ! grep -q "pipeline-argus-unlimited:v1" "$SRC/label/dictionary_stage.py" \
    || ! cmp -s "$ROOT/pipeline/server/argus_template_runtime.py" "$SRC/label/pipeline_runtime.py" \
    || ! cmp -s "$TEMPLATE_HELPER" "$SRC/label/pipeline_template.py"; then
   git -C "$SRC" reset --hard "$REV"
   python3 "$PATCH" "$SRC"
   python3 "$TEMPLATE_PATCH" "$SRC"
   python3 "$ROOT/patches/argus/0003-workbench-contract.py" "$SRC"
+  python3 "$ROOT/patches/argus/0004-unlimited-review.py" "$SRC"
   git -C "$SRC" add label/pipeline_template.py label/pipeline_runtime.py
   git -C "$SRC" -c user.name=bodypipeline -c user.email=bodypipeline@local \
     commit -am "$INTEGRATION_SUBJECT"
@@ -134,6 +137,10 @@ grep -q -- '--rig' <<<"$REVIEW_HELP" || {
 }
 grep -q -- '--inspection' <<<"$REVIEW_HELP" || {
   echo "Argus review does not expose --inspection" >&2
+  exit 1
+}
+grep -q -- '--no-cap' <<<"$REVIEW_HELP" || {
+  echo "Argus review does not expose the unlimited budget contract --no-cap" >&2
   exit 1
 }
 echo "argus review ok"

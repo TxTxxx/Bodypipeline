@@ -47,7 +47,12 @@ def make_argus(root):
     python.chmod(0o755)
     for name in ("label/harness.py", "review/__main__.py"):
         (src / name).write_text("# pipeline-argus-workbench-contract:v2\n")
-    (src / "label/pipeline_runtime.py").write_text("def select_scope(): pass\n")
+    with (src / "review/__main__.py").open("a") as f:
+        f.write('# pipeline-argus-unlimited:v1\n# "--no-cap"\n')
+    (src / "label/dictionary_stage.py").write_text("# pipeline-argus-unlimited:v1\n")
+    (src / "label/pipeline_runtime.py").write_text(
+        "def select_scope(): pass\nUNLIMITED_BUDGET_VERSION = 1\n"
+    )
     return src
 
 
@@ -678,6 +683,25 @@ def test_unlimited_annotation_bypasses_all_monetary_limits_and_keeps_costs(servi
     assert resumed["cap_usd"] is None
     assert resumed["cost_usd"] == 500
     assert resumed["budget"]["daily_used_usd"] == 1500
+
+
+def test_unlimited_refuses_an_old_tool_before_enqueue_or_dispatch(service):
+    runner, _store, source, data = service
+    runner.settings.argus_annotation_unlimited = True
+    (source / "review/__main__.py").write_text(
+        "# pipeline-argus-workbench-contract:v2\n"
+    )
+    options = runner.options()
+    assert not options["available"] and options["unlimited"]
+    assert options["defaults"]["cap_usd"] is None
+    with pytest.raises(DomainError, match="0004"):
+        runner.enqueue("job-1")
+    with pytest.raises(DomainError, match="--no-cap"):
+        argus_annotation.command(
+            runner.settings, {"cap_usd": None}, data, Path("/tmp/work")
+        )
+    runner.settings.argus_annotation_unlimited = False
+    assert runner.options()["available"]
 
 
 def test_outputs_episode_and_cost_are_read_from_argus_sidecars(tmp_path):

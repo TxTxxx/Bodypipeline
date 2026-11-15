@@ -80,11 +80,34 @@ def available(settings) -> tuple[bool, str]:
         return False, f"Argus review 源码不存在：{source}"
     if _python(settings) is None:
         return False, "未找到 Argus Python 解释器"
+    if getattr(
+        settings, "argus_annotation_unlimited", False
+    ) and not unlimited_available(settings):
+        return (
+            False,
+            "Argus 尚不支持真正不限额；请运行 scripts/install_argus.sh 更新工具链（0004）",
+        )
     return True, ""
 
 
 def source_path(settings) -> Path:
     return Path(settings.argus_src).expanduser()
+
+
+def unlimited_available(settings) -> bool:
+    root = source_path(settings)
+    try:
+        return (
+            all(
+                "pipeline-argus-unlimited:v1" in (root / name).read_text()
+                for name in ("review/__main__.py", "label/dictionary_stage.py")
+            )
+            and '"--no-cap"' in (root / "review/__main__.py").read_text()
+            and "UNLIMITED_BUDGET_VERSION = 1"
+            in (root / "label/pipeline_runtime.py").read_text()
+        )
+    except OSError:
+        return False
 
 
 def execution_available(settings) -> bool:
@@ -449,6 +472,11 @@ def command(settings, annotation: dict, data: Path, work: Path) -> list[str]:
     python = _python(settings)
     if python is None:
         raise DomainError("未找到 Argus Python 解释器", 503)
+    if annotation.get("cap_usd") is None and not unlimited_available(settings):
+        raise DomainError(
+            "Argus 不支持 --no-cap；请运行 scripts/install_argus.sh 更新工具链（0004），不会退回固定额度",
+            503,
+        )
     args = [
         "-m",
         "review",

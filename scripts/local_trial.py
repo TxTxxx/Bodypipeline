@@ -130,13 +130,14 @@ def preflight(raw, env, repo=REPO):
     settings = SimpleNamespace(
         argus_src=str(absolute(raw["argus_src"], repo)),
         argus_python=str(absolute(raw["argus_python"], repo)),
+        argus_annotation_unlimited=bool(raw.get("argus_annotation_unlimited")),
     )
-    ok, _ = argus_annotation.available(settings)
-    if (
-        not ok
-        or not argus_annotation.template_available(settings)
-        or not argus_annotation.execution_available(settings)
-    ):
+    ok, reason = argus_annotation.available(settings)
+    if not ok:
+        raise RuntimeError(f"{reason}；未停止现有服务")
+    if not argus_annotation.template_available(
+        settings
+    ) or not argus_annotation.execution_available(settings):
         raise RuntimeError(
             "现有 Argus 缺少可用的模板/执行契约 v2；保留工具原状，请先核对安装"
         )
@@ -156,6 +157,14 @@ def preflight(raw, env, repo=REPO):
         )
         if result.returncode:
             raise RuntimeError("Argus 导入或 CLI 帮助检查失败；未改动现有环境")
+        if (
+            "--help" in args
+            and settings.argus_annotation_unlimited
+            and b"--no-cap" not in result.stdout
+        ):
+            raise RuntimeError(
+                "Argus review 未提供 --no-cap；请先更新工具链，现有服务保持运行"
+            )
     for tool in ("FFMPEG", "FFPROBE"):
         if subprocess.run(
             [env[tool], "-version"], env=env, capture_output=True, timeout=10

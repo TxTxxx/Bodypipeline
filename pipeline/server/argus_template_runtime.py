@@ -16,6 +16,8 @@ import os
 import shutil
 from pathlib import Path
 
+UNLIMITED_BUDGET_VERSION = 1
+
 
 def select_scope(job, eps, report, receipt, overrides, policy, checkpoint):
     raw = os.environ.get("PIPELINE_ARGUS_EPISODES")
@@ -440,7 +442,11 @@ def refine_outputs(job, args):
 
         def bound(parts):
             return h.final_cost_bound(
-                parts, tokens, model=model, require_known_pricing=True, **pricing
+                parts,
+                tokens,
+                model=model,
+                require_known_pricing=args.cap is not None,
+                **pricing,
             )
 
         def verify():

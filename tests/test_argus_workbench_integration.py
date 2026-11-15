@@ -10,7 +10,10 @@ import pytest
 from pipeline.shared.core import atomic_json, digest
 
 
-def test_pinned_argus_trial_then_full_reuses_success_and_refines_real_frames(tmp_path):
+@pytest.mark.parametrize("unlimited", [False, True], ids=["capped", "unlimited"])
+def test_pinned_argus_trial_then_full_reuses_success_and_refines_real_frames(
+    tmp_path, unlimited
+):
     root = Path(__file__).resolve().parents[1]
     argus = Path(
         os.environ.get("PIPELINE_TEST_ARGUS_ROOT", root / ".runtime/vendor/argus")
@@ -65,6 +68,10 @@ def test_pinned_argus_trial_then_full_reuses_success_and_refines_real_frames(tmp
         capture_output=True,
         text=True,
         timeout=420,
+        env={
+            **os.environ,
+            "PIPELINE_TEST_ARGUS_UNLIMITED": "1" if unlimited else "0",
+        },
     )
     assert result.returncode == 0, result.stderr[-7000:] + result.stdout[-2000:]
     summary = json.loads(result.stdout.splitlines()[-1])
@@ -74,3 +81,7 @@ def test_pinned_argus_trial_then_full_reuses_success_and_refines_real_frames(tmp
     assert summary["trial_success_reused"] and summary["coarse_requests"] == 15
     assert summary["fine_requests"] >= 12
     assert summary["trial_logical_sends"] == 4
+    assert summary["unlimited_cli"] == unlimited
+    assert summary["cap_usd"] == (None if unlimited else 1)
+    if unlimited:
+        assert summary["trial_cost_usd"] > 20
