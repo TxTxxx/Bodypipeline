@@ -135,6 +135,74 @@ def test_prompt_is_bound_to_snapshot_and_inactive_without_template(
         template_identity()
 
 
+def test_v2_prompt_and_candidate_keep_adjacent_retries_and_split_identity(
+    tmp_path, monkeypatch
+):
+    from pipeline.server.annotation_contract import count_attempts
+    from pipeline.server.template_annotation_v2 import make_v2_document
+
+    criteria = {
+        "definition": "对准目标，重置后再次下探另记尝试",
+        "includes": "同轮连续微调保留同一个身份",
+        "excludes": "相机移动不代表目标关系中断",
+        "startCondition": "开始下探",
+        "endCondition": "转为保持或明确退让",
+    }
+    template = {
+        "id": "alignment",
+        "name": "对准",
+        "subtasks": [{"id": "align", "name": "刀头对准", **criteria}],
+        "fields": [],
+    }
+    spec = {"version": 2, "template": template, "signature": digest(template)}
+    path = tmp_path / SPEC_NAME
+    atomic_json(path, spec)
+    monkeypatch.setenv("PIPELINE_ARGUS_TASK_TEMPLATE", str(path))
+    ctx = context(frames=90, fps=30)
+    prompt = task_contract(ctx)
+    assert all(value in prompt for value in criteria.values())
+    reply = {
+        "version": 2,
+        "template_id": template["id"],
+        "template_signature": spec["signature"],
+        "values": {},
+        "attempts": [
+            {"id": "first", "subtask_id": "align", "outcome": "failure", "values": {}},
+            {"id": "retry", "subtask_id": "align", "outcome": "unknown", "values": {}},
+        ],
+        "segments": [
+            {
+                "id": sid,
+                "label": "SUBTASK",
+                "subtask_id": "align",
+                "attempt_id": aid,
+                "start_s": lo,
+                "end_s": hi,
+                "note": "合成回复，仅验证身份与结果保留",
+                "values": {},
+            }
+            for sid, aid, lo, hi in [
+                ("first-half", "first", 0, 0.5),
+                ("second-half", "first", 0.5, 1),
+                ("retry-span", "retry", 1, 2),
+            ]
+        ],
+        "frames": [],
+    }
+    doc, _ = make_v2_document(
+        spec, ctx, [(ctx, {"parse_ok": True, "labels": {"bodypipeline_task": reply}})]
+    )
+    by_local_id = {a["provenance"]["localAttemptId"]: a for a in doc["attempts"]}
+    assert by_local_id["first"]["outcome"] == "failure"
+    assert by_local_id["retry"]["outcome"] == "unknown"
+    assert by_local_id["first"]["id"] != by_local_id["retry"]["id"]
+    first, second, retry = doc["segments"]
+    assert first["attemptId"] == second["attemptId"] != retry["attemptId"]
+    assert second["end"] == retry["start"] == 30
+    assert count_attempts(doc, "align", 90)["recorded_count"] == 2
+    assert not count_attempts(doc, "align", 90)["complete"]
+
+
 def test_patch_updates_prompt_and_request_identity_idempotently(tmp_path, monkeypatch):
     patch_path = Path("patches/argus/0002-task-template.py").resolve()
     spec = importlib.util.spec_from_file_location("template_patch", patch_path)
