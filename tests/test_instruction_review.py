@@ -4,6 +4,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from pipeline.server.app import create_app
 from pipeline.server.instruction_review import InstructionReview
 from pipeline.server.merges import source_snapshot
-from pipeline.server.recycle import dataset_lock
+from pipeline.server.recycle import dataset_lock, dataset_read_lock
 from pipeline.server.viewer_data import PreviewRegistry
 
 
@@ -590,6 +591,36 @@ def test_concurrent_instruction_reads_do_not_report_dataset_as_processing(
 
     assert first_response.status_code == 200, first_response.text
     assert second_response.status_code == 200, second_response.text
+
+
+def test_dataset_read_lock_waits_for_short_exclusive_operation(tmp_path):
+    store = SimpleNamespace(path=tmp_path)
+    key = "shared-read-lock"
+    exclusive_entered = threading.Event()
+    release_exclusive = threading.Event()
+    read_entered = threading.Event()
+
+    def hold_exclusive_lock():
+        with dataset_lock(store, key):
+            exclusive_entered.set()
+            assert release_exclusive.wait(2)
+
+    def acquire_read_lock():
+        with dataset_read_lock(store, key):
+            read_entered.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        exclusive = executor.submit(hold_exclusive_lock)
+        assert exclusive_entered.wait(2)
+        read = executor.submit(acquire_read_lock)
+        try:
+            assert not read_entered.wait(0.05)
+        finally:
+            release_exclusive.set()
+        exclusive.result(timeout=2)
+        read.result(timeout=2)
+
+    assert read_entered.is_set()
 
 
 def test_api_validation_episode_bounds_and_dataset_identity(instruction_app, tmp_path):
