@@ -14,6 +14,7 @@ import {
   parseInstructionSource,
   removePart,
   renderInstruction,
+  selectionsForTemplate,
   sourceText,
   updateText,
   type InstructionTemplate,
@@ -234,6 +235,9 @@ export function InstructionEditor({ repoId, episodeId }: Props) {
         writable: result.warnings.length === 0,
       });
       setTemplate(result.template);
+      setSelections((current) =>
+        selectionsForTemplate(result.template, current),
+      );
       setSavedTemplate(JSON.stringify(result.template));
       setSourceDraft(sourceText(result.template));
       setNotice(`模板草稿已保存为 v${result.revision}`);
@@ -252,6 +256,7 @@ export function InstructionEditor({ repoId, episodeId }: Props) {
     setError("");
     setNotice("");
     try {
+      const payloadSelections = selectionsForTemplate(template, nextSelections);
       const result = await request<{
         revision: number;
         source_signature: string;
@@ -260,7 +265,7 @@ export function InstructionEditor({ repoId, episodeId }: Props) {
       }>(`${base}/episodes/${episodeId}`, "PUT", {
         revision: head.revision,
         source_signature: head.source_signature,
-        selections: nextSelections,
+        selections: payloadSelections,
       });
       setHead({
         ...head,

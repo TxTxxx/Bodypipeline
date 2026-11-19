@@ -51,6 +51,17 @@ export function renderInstruction(
     .trim();
 }
 
+export function selectionsForTemplate(
+  template: InstructionTemplate,
+  selections: Record<string, string>,
+): Record<string, string> {
+  const next = defaultSelections(template);
+  for (const key of Object.keys(template.variables)) {
+    if (selections[key] !== undefined) next[key] = selections[key];
+  }
+  return next;
+}
+
 export function addVariable(
   template: InstructionTemplate,
   key: string,

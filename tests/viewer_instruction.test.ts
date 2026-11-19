@@ -5,6 +5,7 @@ import {
   parseInstructionSource,
   removePart,
   renderInstruction,
+  selectionsForTemplate,
   updateText,
   type InstructionTemplate,
 } from "../pipeline/server/viewer_ui/instruction-model";
@@ -56,4 +57,14 @@ test("advanced source syntax maps to the visual parts without losing definitions
   expect(parsed.parts).toEqual(template().parts);
   expect(parsed.variables).toEqual(template().variables);
   expect(() => parseInstructionSource("没有变量", template().variables)).toThrow("变量");
+});
+
+test("template changes drop stale selections and fill missing defaults", () => {
+  expect(selectionsForTemplate(template(), {
+    instruction: "旧模板变量",
+    object: "蓝色圆柱",
+  })).toEqual({
+    object: "蓝色圆柱",
+    target: "左侧盒子",
+  });
 });
