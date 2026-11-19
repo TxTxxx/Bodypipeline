@@ -62,6 +62,8 @@ class AnnotationRunner:
         # the annotation record, the work context, logs or exports.
         self.credentials: dict[str, dict] = {}
         self._running = False
+        self._workbench_lock = threading.RLock()
+        self._workbench_stamps = {}
 
     # ------------------------------------------------------------- persistence
     def save(self, row, **fields):
@@ -1265,6 +1267,38 @@ class AnnotationRunner:
             raise DomainError("标注 Episode 不存在", 404)
         return result
 
+    def refresh_workbench(self, dataset: str):
+        """Make completed AI replies available without rerunning inference."""
+        with self._workbench_lock:
+            stamps = self._workbench_stamps
+            for row in sorted(
+                self.store.all("annotation"), key=lambda row: row.get("created_at", 0)
+            ):
+                if row.get("job_id") != dataset or not row.get("task_template"):
+                    continue
+                work = self.work(row)
+                files = [
+                    p
+                    for folder in ("qa", "run/out", "run_final/out")
+                    for p in (work / "argus" / folder).glob("*.json")
+                ]
+                stamp = tuple(
+                    sorted(
+                        (str(p), p.stat().st_mtime_ns, p.stat().st_size)
+                        for p in files
+                        if p.is_file()
+                    )
+                )
+                if not stamp or stamps.get(row["id"]) == stamp:
+                    continue
+                try:
+                    self.workbench_candidates(row["id"])
+                except DomainError as exc:
+                    # Stale source results remain available in their original run.
+                    if exc.code != 409:
+                        raise
+                stamps[row["id"]] = stamp
+
     def workbench_candidates(self, aid: str):
         from .annotation_workbench import AnnotationWorkbench
         from .viewer_data import PreviewRegistry
@@ -1302,6 +1336,7 @@ class AnnotationRunner:
                 base_revision=row.get("base_revisions", {}).get(str(ep), 0),
                 provenance={
                     "annotation": aid,
+                    "runCreatedAt": row.get("created_at", 0),
                     "request": name,
                     "parameters": {
                         k: row.get(k)

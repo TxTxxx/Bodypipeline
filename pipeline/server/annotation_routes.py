@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import Request
+from fastapi import Body, Request
 from fastapi.responses import FileResponse, Response
 
 from pipeline.shared.core import DomainError, digest
@@ -50,7 +50,13 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
 
     @app.get("/workbench-assets/{name}")
     def asset(name: str):
-        if name not in {"workbench.js", "workbench.css"}:
+        if name not in {
+            "workbench.js",
+            "workbench.css",
+            "template-example.json",
+            "screw-alignment-en.json",
+            "screw-workflow-en.json",
+        }:
             raise DomainError("文件不存在", 404)
         return FileResponse(ASSETS / name)
 
@@ -153,6 +159,12 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
 
         return
 
+    @app.post("/api/annotation-workbench/templates/validate")
+    def validate_templates(body: dict | list = Body(...)):
+        from .task_annotations import parse_template_file
+
+        return {"templates": parse_template_file(body)}
+
     @app.get("/api/annotation-workbench/datasets")
     def datasets():
         from .datasets import DATA_READY_STATES, dataset_for_job
@@ -185,10 +197,14 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
     ):
         if count is not None and count < 0:
             raise DomainError("次数不能为负数", 422)
+        if annotations is not None:
+            annotations.refresh_workbench(dataset)
         return workbench.listing(dataset, subtask, count, recorded, template_signature)
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}")
     def episode(dataset: str, episode: int):
+        if annotations is not None:
+            annotations.refresh_workbench(dataset)
         return workbench.episode(dataset, episode)
 
     @app.post("/api/annotation-workbench/{dataset}/episodes/{episode}")
@@ -285,7 +301,7 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
             or job.get("source_job_id") != dataset
         ):
             raise DomainError("导出任务不存在", 404)
-        return {
+        result = {
             k: job.get(k)
             for k in (
                 "id",
@@ -298,3 +314,15 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
                 "subtask_report",
             )
         }
+        if job.get("state") == "CONVERTED":
+            from .datasets import dataset_for_job
+
+            row = workbench.legacy.registry.register(
+                export_id, dataset_for_job(settings, job)
+            )
+            result["viewer_url"] = (
+                settings.viewer_origin.rstrip("/")
+                + row["page_path"]
+                + "?tab=annotations"
+            )
+        return result

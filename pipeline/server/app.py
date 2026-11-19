@@ -325,7 +325,7 @@ def create_app(settings, background=True):
     app = FastAPI(title="Embodied Pipeline Server", lifespan=lifespan)
     from .annotation_routes import mount_workbench
 
-    mount_workbench(app, settings, ingest.store, runner)
+    mount_workbench(app, settings, ingest.store, runner, annotations)
     app.state.ingest, app.state.runner, app.state.viewer = ingest, runner, viewer
     app.state.imports = imports
     app.state.deliveries = deliveries

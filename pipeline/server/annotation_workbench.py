@@ -217,7 +217,19 @@ class AnnotationWorkbench:
         data = self.legacy._source(path, snapshot)
         return key, path, job, snapshot, data
 
-    def _head(self, dataset, ep, path, job, snapshot, data):
+    def _head(
+        self,
+        dataset,
+        ep,
+        path,
+        job,
+        snapshot,
+        data,
+        *,
+        initial_ai=True,
+        pin=False,
+        initial_candidates=None,
+    ):
         item = self.legacy._episode(data, ep)
         try:
             row = self.store.get("annotation_episode", self.key(dataset, ep))
@@ -231,6 +243,48 @@ class AnnotationWorkbench:
                 document["manualAtoms"] = deepcopy(
                     legacy.get("atoms", {}).get(str(ep), item.get("atoms", []))
                 )
+            # A saved head (even an intentionally emptied one) always wins.
+            # Legacy manual edits are authoritative too. Only a pristine source
+            # may start from the most recent compatible AI result.
+            initial = None
+            manual = str(ep) in legacy.get("episodes", {}) or str(ep) in legacy.get(
+                "task_documents", {}
+            )
+            if (
+                initial_ai
+                and not manual
+                and not any(
+                    document.get(k)
+                    for k in ("segments", "attempts", "values", "frames", "manualAtoms")
+                )
+            ):
+                candidates = [
+                    c
+                    for c in (
+                        self.store.all("annotation_candidate")
+                        if initial_candidates is None
+                        else initial_candidates
+                    )
+                    if c["dataset"] == dataset
+                    and c["episode"] == ep
+                    and c["source_signature"] == snapshot["signature"]
+                    and c.get("provenance", {}).get("annotation")
+                ]
+                if candidates:
+                    initial = max(
+                        candidates,
+                        key=lambda c: (
+                            c.get("run_created_at", c["created_at"]),
+                            c["id"],
+                        ),
+                    )
+                    document = deepcopy(initial["document"])
+                    document["provenance"] = {
+                        **document.get("provenance", {}),
+                        "initialAI": initial["id"],
+                        "annotation": initial["run"],
+                    }
+                    document = reconcile_review(None, document)
             row = {
                 "id": self.key(dataset, ep),
                 "dataset": dataset,
@@ -238,8 +292,12 @@ class AnnotationWorkbench:
                 "revision": 0,
                 "source_signature": snapshot["signature"],
                 "document": validate_annotation(document, item["frames"]),
-                "complete": item.get("annotation_complete", False),
+                "complete": False
+                if initial
+                else item.get("annotation_complete", False),
             }
+            if initial and pin:
+                self._publish(row, row["document"], operation="ai-initial")
         if row["source_signature"] != snapshot["signature"]:
             raise DomainError("来源版本已变化：旧标注保留，禁止套用到新来源", 409)
         return deepcopy(row), item
@@ -274,11 +332,20 @@ class AnnotationWorkbench:
                 "此 Episode 或来源已变化；本地与服务器内容均保留，请对照处理冲突", 409
             )
 
-    def episode(self, dataset, episode):
+    def episode(self, dataset, episode, *, initial_ai=True):
         key, path, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key, [episode]):
             _, path, job, snapshot, data = self.context(dataset)
-            row, item = self._head(dataset, episode, path, job, snapshot, data)
+            row, item = self._head(
+                dataset,
+                episode,
+                path,
+                job,
+                snapshot,
+                data,
+                initial_ai=initial_ai,
+                pin=initial_ai,
+            )
             return {
                 **row,
                 "frames": item["frames"],
@@ -374,6 +441,16 @@ class AnnotationWorkbench:
                     ),
                     None,
                 )
+            if content_key(old) != content_key(doc) and body.operation not in {
+                "undo",
+                "redo",
+                "restore",
+            }:
+                doc["provenance"] = {
+                    **old.get("provenance", {}),
+                    **doc.get("provenance", {}),
+                    "humanEdited": True,
+                }
             # Client cannot forge count evidence by submitting a content hash.
             doc["countEvidence"] = (
                 deepcopy(old.get("countEvidence", {}))
@@ -396,7 +473,12 @@ class AnnotationWorkbench:
                 }
             status = completion(doc, item["frames"])
             if body.complete and not status["eligible"]:
-                raise DomainError("不能声明完成：" + "；".join(status["missing"]), 422)
+                raise DomainError(
+                    "还不能标记检查完成："
+                    + "；".join(status["missing"])
+                    + "。请补充标注后再试，也可直接导出当前内容。",
+                    422,
+                )
             # Metadata-only autosave need not clear an unchanged completed head.
             done = (
                 body.complete
@@ -417,9 +499,23 @@ class AnnotationWorkbench:
         with annotation_lock(self.store, key):
             _, path, job, snapshot, data = self.context(dataset)
             rows = []
+            candidate_index = {}
+            for candidate in self.store.all("annotation_candidate"):
+                if candidate["dataset"] == dataset:
+                    candidate_index.setdefault(candidate["episode"], []).append(
+                        candidate
+                    )
             for item in data["episodes"]:
                 ep = item["episode_index"]
-                row, _ = self._head(dataset, ep, path, job, snapshot, data)
+                row, _ = self._head(
+                    dataset,
+                    ep,
+                    path,
+                    job,
+                    snapshot,
+                    data,
+                    initial_candidates=candidate_index.get(ep, []),
+                )
                 doc = row["document"]
                 valid_target = (
                     template_signature is None
@@ -557,7 +653,7 @@ class AnnotationWorkbench:
         base_revision,
         provenance=None,
     ):
-        head = self.episode(dataset, episode)
+        head = self.episode(dataset, episode, initial_ai=False)
         if source_signature != head["source_signature"]:
             raise DomainError("AI 候选的来源身份不匹配", 409)
         doc = validate_annotation(document, head["frames"])
@@ -574,7 +670,22 @@ class AnnotationWorkbench:
             "run": run,
             "provenance": provenance or {},
             "created_at": now(),
+            "run_created_at": (provenance or {}).get("runCreatedAt", now()),
         }
+        try:
+            existing = self.store.get("annotation_candidate", cid)
+        except DomainError as exc:
+            if exc.code != 404:
+                raise
+        else:
+            if (
+                provenance
+                and "runCreatedAt" in provenance
+                and "run_created_at" not in existing
+            ):
+                existing["run_created_at"] = provenance["runCreatedAt"]
+                self.store.put("annotation_candidate", cid, existing)
+            return existing
         self.store.put("annotation_candidate", cid, record)
         return record
 

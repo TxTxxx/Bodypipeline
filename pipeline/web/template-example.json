@@ -1,0 +1,16 @@
+{
+  "id": "example-task-en",
+  "name": "Example Task Template",
+  "subtasks": [
+    {
+      "id": "approach-target",
+      "name": "Approach the Target",
+      "definition": "Move the tool toward the target.",
+      "includes": "Directed motion toward the target.",
+      "excludes": "Searching or making contact.",
+      "startCondition": "Directed motion begins.",
+      "endCondition": "The tool reaches the target area."
+    }
+  ],
+  "fields": []
+}

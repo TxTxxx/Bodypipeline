@@ -365,7 +365,9 @@
       }
       const workbench = event.target.closest("[data-annotation-workbench]");
       if (workbench) {
-        void ui.api(`/api/annotations/${workbench.dataset.annotationWorkbench}/workbench`, "POST", {}).then(result => { window.location.href = result.url; }).catch(error => ui.notice(error.message, true));
+        const row = rows.find(row => row.id === workbench.dataset.annotationWorkbench);
+        if (!row) return;
+        void ui.api(`/api/jobs/${row.job_id}/viewer`, "POST", {}).then(result => { window.location.href = result.url + "?tab=annotations"; }).catch(error => ui.notice(error.message, true));
         return;
       }
       const cancel = event.target.closest("[data-annotation-cancel]");
@@ -800,7 +802,7 @@
     const percent = total ? Math.min(100, Math.round((100 * done) / total)) : 0;
     const actions = [
       `<button class="secondary" type="button" data-annotation-reload>刷新</button>`,
-      row.task_template && row.episodes_done ? `<button class="primary" type="button" data-annotation-workbench="${esc(row.id)}">发送独立候选到标注工作区</button>` : "",
+      row.task_template && row.episodes_done ? `<button class="primary" type="button" data-annotation-workbench="${esc(row.id)}">在数据预览中编辑标注</button>` : "",
       ACTIVE.has(row.state)
         ? `<button class="danger" type="button" data-annotation-cancel="${esc(row.id)}" ${row.cancel_requested ? "disabled" : ""}>${row.cancel_requested ? "正在取消" : "取消任务"}</button>`
         : "",

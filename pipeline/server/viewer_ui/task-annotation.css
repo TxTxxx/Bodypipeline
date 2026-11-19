@@ -829,5 +829,161 @@
   padding: 0.8rem 0;
 }
 
-/* The embedded workspace owns its synchronized exact-frame preview. */
-.ta-annotation-page:has(.bp-workbench-frame) .ta-preview-dock { display: none; }
+/* One Episode list owns annotation navigation, filtering and export selection. */
+.annotation-sidebar {
+  width: 294px;
+}
+.annotation-navigation {
+  margin-top: 18px;
+  color: var(--text-primary, #cbd5e1);
+  font-size: 12px;
+}
+.annotation-nav-heading,
+.annotation-nav-selection,
+.annotation-nav-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 12px 0;
+}
+.annotation-nav-heading h2 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.annotation-navigation button {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--border-subtle, #34425a);
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.annotation-navigation button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.annotation-navigation button:hover:not(:disabled) {
+  background: var(--surface-1, #253249);
+}
+.annotation-navigation label {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0;
+}
+.annotation-navigation input:not([type="checkbox"]),
+.annotation-navigation select {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--border-subtle, #34425a);
+  border-radius: 5px;
+  color: inherit;
+  background: var(--surface-1, #1b2738);
+  font: inherit;
+}
+.annotation-nav-jump > div {
+  display: flex;
+  gap: 7px;
+}
+.annotation-nav-jump label {
+  margin-bottom: 5px;
+}
+.annotation-nav-filters {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle, #34425a);
+  border-radius: 6px;
+}
+.annotation-nav-filters summary {
+  cursor: pointer;
+}
+.annotation-nav-filters p,
+.annotation-nav-hint {
+  color: var(--text-muted, #94a3b8);
+  font-size: 11px;
+  line-height: 1.7;
+  margin-top: 8px;
+}
+.annotation-nav-buttons {
+  display: flex;
+  gap: 7px;
+  margin-top: 9px;
+}
+.annotation-nav-buttons button {
+  flex: 1;
+  font-size: 11px;
+}
+.annotation-navigation .annotation-nav-inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+.annotation-nav-list {
+  margin: 10px 0;
+  padding: 0;
+  list-style: none;
+}
+.annotation-nav-list > li {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  gap: 7px;
+  padding: 9px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.annotation-nav-list > li.current {
+  background: #5b8cff1a;
+  border-color: #5b8cff55;
+}
+.annotation-nav-list > li > input {
+  margin-top: 4px;
+  accent-color: #5b8cff;
+}
+.annotation-nav-list > li > button {
+  text-align: left;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.annotation-nav-list small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+}
+.annotation-nav-list small.checked {
+  color: #52bd90;
+}
+.annotation-nav-row-tools {
+  display: flex;
+  align-items: center;
+  align-self: start;
+  gap: 3px;
+}
+.annotation-nav-row-tools button {
+  padding: 2px;
+  border: 0;
+}
+.annotation-nav-row-tools .episode-score-badge {
+  font-size: 10px;
+}
+.annotation-nav-pagination {
+  font-size: 11px;
+}
+.annotation-nav-error {
+  padding: 9px;
+  border-radius: 5px;
+  background: #9f2f3c22;
+  color: #ee8795;
+  margin-top: 9px;
+}
+
+.annotation-nav-jump > div > input {
+  flex: 1;
+  width: 0;
+}
+.annotation-nav-jump > div > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

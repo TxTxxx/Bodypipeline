@@ -65,8 +65,33 @@ def patch_annotation_preview_layout(text: str) -> str:
     if start < 0 or end < 0:
         raise RuntimeError("Unexpected Visualizer annotation tab layout")
     block = text[start:end]
+    if (
+        '<details className="ta-legacy">' in block
+        and '{!datasetInfo.repoId.startsWith("bp/") && <details className="ta-legacy">'
+        not in block
+    ):
+        block = block.replace(
+            '<details className="ta-legacy">',
+            '{!datasetInfo.repoId.startsWith("bp/") && <details className="ta-legacy">',
+            1,
+        )
+        block = block.replace("</details>", "</details>}", 1)
     if 'className="ta-preview-dock"' in block:
-        return text
+        if (
+            '{!datasetInfo.repoId.startsWith("bp/") && <div className="ta-preview-dock">'
+            not in block
+        ):
+            block = block.replace(
+                '<div className="ta-preview-dock">',
+                '{!datasetInfo.repoId.startsWith("bp/") && <div className="ta-preview-dock">',
+                1,
+            )
+            block = block.replace(
+                "<PlaybackBar />\n              </div>",
+                "<PlaybackBar />\n              </div>}",
+                1,
+            )
+        return text[:start] + block + text[end:]
     root = 'className="annotations-skin flex flex-col gap-4"'
     video = "              {videosInfo.length > 0 && ("
     playback = "              <PlaybackBar />"
@@ -81,7 +106,37 @@ def patch_annotation_preview_layout(text: str) -> str:
         video, '              <div className="ta-preview-dock">\n' + video, 1
     )
     block = block.replace(playback, playback + "\n              </div>", 1)
-    return text[:start] + block + text[end:]
+    return patch_annotation_preview_layout(text[:start] + block + text[end:])
+
+
+def preserve_player_position(text: str) -> str:
+    marker = "// bodypipeline: preserve shared time when mounting videos"
+    if marker in text:
+        return text
+    replacements = {
+        "  const lastSeekVersionRef = useRef(externalSeekVersion);": "  const lastSeekVersionRef = useRef(-1);\n  "
+        + marker
+        + "\n  const requestedTimeRef = useRef(currentTime);\n  requestedTimeRef.current = currentTime;",
+        "      resolved = true;\n      setVideosReady(true);": """      resolved = true;
+      videoRefs.current.forEach((video, index) => {
+        if (!video) return;
+        const info = videosInfo[index];
+        const start = info.isSegmented ? (info.segmentStart ?? 0) : 0;
+        const end = info.isSegmented ? (info.segmentEnd ?? video.duration) : video.duration;
+        const duration = Number.isFinite(end) ? Math.max(0, end - start - 0.00001) : requestedTimeRef.current;
+        video.currentTime = start + Math.max(0, Math.min(requestedTimeRef.current, duration));
+      });
+      setVideosReady(true);""",
+        "      setIsPlaying(true);": "      setIsPlaying(playbackActiveRef.current);",
+        "        if (video.seeking) return;": "        if (!resolved || video.seeking) return;",
+    }
+    for old, new in replacements.items():
+        if text.count(old) != 1:
+            raise RuntimeError(
+                "Unexpected Visualizer player; cannot preserve shared time"
+            )
+        text = text.replace(old, new, 1)
+    return text
 
 
 def patch_annotation_player(source: Path):
@@ -97,6 +152,7 @@ def patch_annotation_player(source: Path):
             "  const { currentTime, seek, externalSeekVersion, isPlaying, setIsPlaying, setDuration } =\n    useTime();",
             duration_binding,
         )
+        normalized = preserve_player_position(normalized)
         if normalized != text:
             path.write_text(normalized)
         return
@@ -138,13 +194,52 @@ def patch_annotation_player(source: Path):
             )
     for old, new in replacements.items():
         text = text.replace(old, new, 1)
-    path.write_text(text)
+    path.write_text(preserve_player_position(text))
+
+
+def patch_navigation_context(source: Path):
+    from .viewer_annotations import _replace
+
+    page = source / "src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    _replace(
+        page,
+        'import Sidebar from "@/components/side-nav";',
+        'import Sidebar from "@/components/side-nav";\nimport { AnnotationNavigationProvider } from "@/components/annotation-navigation";',
+    )
+    _replace(
+        page,
+        "        <AnnotationsProvider>\n          <EpisodeBootstrap",
+        "        <AnnotationsProvider>\n          <AnnotationNavigationProvider repoId={data!.datasetInfo.repoId}>\n          <EpisodeBootstrap",
+    )
+    _replace(
+        page,
+        "          <EpisodeViewerInner data={data!} org={org} dataset={dataset} />\n        </AnnotationsProvider>",
+        "          <EpisodeViewerInner data={data!} org={org} dataset={dataset} />\n          </AnnotationNavigationProvider>\n        </AnnotationsProvider>",
+    )
+    _replace(
+        page,
+        "          <Sidebar\n            datasetInfo={datasetInfo}",
+        '          <Sidebar\n            annotationMode={activeTab === "annotations" && datasetInfo.repoId.startsWith("bp/")}\n            datasetInfo={datasetInfo}',
+    )
+    text = page.read_text()
+    text = text.replace(
+        'datasetInfo.repoId.startsWith("bp/") && key === " ") return;',
+        'datasetInfo.repoId.startsWith("bp/") && [" ", "ArrowUp", "ArrowDown"].includes(key)) return;',
+    )
+    page.write_text(text)
 
 
 def patch_task_annotations(cache: Path):
     source = cache / "source"
     assets = Path(__file__).with_name("viewer_ui")
     for name, destination in {
+        "side-nav.tsx": "src/components/side-nav.tsx",
+        "annotation-navigation.tsx": "src/components/annotation-navigation.tsx",
+        "annotation-navigation-model.ts": "src/utils/annotation-navigation-model.ts",
+        "workbench.ts": "src/utils/workbench.ts",
+        "workbench-model.ts": "src/utils/workbench-model.ts",
+        "workbench-media.ts": "src/utils/workbench-media.ts",
+        "workbench-markup.ts": "src/utils/workbench-markup.ts",
         "task-annotation-model.ts": "src/utils/task-annotation-model.ts",
         "task-annotation-studio.tsx": "src/components/task-annotation-studio.tsx",
         "task-annotation-timeline.tsx": "src/components/task-annotation-timeline.tsx",
@@ -153,15 +248,40 @@ def patch_task_annotations(cache: Path):
         "task-annotation.css": "src/app/task-annotation.css",
     }.items():
         (source / destination).write_bytes((assets / name).read_bytes())
+    (source / "src/app/workbench.css").write_bytes(
+        (assets.parent.parent / "web/workbench.css").read_bytes()
+    )
     layout = source / "src/app/layout.tsx"
     text = layout.read_text()
     css_import = 'import "./task-annotation.css";\n'
+    if 'import "./workbench.css";' not in text:
+        text = 'import "./workbench.css";\n' + text
+        layout.write_text(text)
     # Keep the base presentation patch's import context intact on restart.
     if not text.startswith(css_import):
         text = css_import + text.replace(css_import, "")
         layout.write_text(text)
+    patch_navigation_context(source)
     viewer = source / "src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
     text = viewer.read_text()
+    text = text.replace(
+        'newParams.set("t", currentSec.toString());',
+        'newParams.set("t", currentTime.toFixed(6));',
+    )
+    tab_anchor = "const [activeTab, setActiveTab] = useState<ActiveTab>(() => {"
+    if 'searchParams.get("tab") === "annotations"' not in text:
+        text = text.replace(
+            tab_anchor,
+            tab_anchor
+            + '\n    if (searchParams.get("tab") === "annotations") return "annotations";',
+        )
+    keyboard_anchor = "      const s = keyStateRef.current;"
+    if "native annotation workspace owns playback shortcuts" not in text:
+        text = text.replace(
+            keyboard_anchor,
+            keyboard_anchor
+            + '\n      // native annotation workspace owns playback shortcuts\n      if (s.activeTab === "annotations" && datasetInfo.repoId.startsWith("bp/") && [" ", "ArrowUp", "ArrowDown"].includes(key)) return;',
+        )
     if MARKER in text:
         viewer.write_text(patch_annotation_preview_layout(text))
         patch_annotation_player(source)

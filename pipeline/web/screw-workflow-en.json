@@ -1,0 +1,79 @@
+{
+  "id": "body2-screw-alignment-button-en-v2",
+  "name": "Screwdriver Alignment and Button Operation (English v2)",
+  "fields": [],
+  "subtasks": [
+    {
+      "id": "screw-workflow-v2-pickup",
+      "name": "Pick Up and Hold the Screwdriver",
+      "definition": "Approach, grasp, and lift the screwdriver to establish a stable usable grip. Shared rules for the entire workflow: use the exact English subtask names and write notes and descriptions in English. The task goal is successful stable seating of the bit in the screw-head recess followed by a visible button press, hold, and release. Neither screw rotation nor screw loosening/removal is required. Annotate the actual sequence; do not force phases to occur, and preserve repetitions. Use a single main timeline. When right-hand motion toward the observation pose or button is the active phase, label that action and describe concurrent left-hand holding or seated contact in local notes. Once the right hand is stationary at the observation pose, label the active bit approach/search/seating phase. An ongoing button press, hold, and release remains the button-operation subtask even while the right hand is stationary; do not replace the button-hold interval with a separate seating label. Record the other hand's maintained seating or any visible loss of seating in notes. Do not invent serial ordering for overlapping hand actions. Identify the right hand from recorded mechanical-side identity and continuous cross-view evidence, never from screen left/right. Entry into the recess plus stable seating is the engagement-success criterion; mere contact or stillness is insufficient. Use continuous source frames and relevant views, with no invented dwell-time requirement. Distinguish an uninterrupted search from a visible withdrawal/reset followed by a new round. Assess outcomes from evidence; a later retry alone does not prove earlier failure. Each subtask has its own attempt identity. Preserve uncertainty and standard NULL/UNKNOWN/OUT_OF_TEMPLATE states. Completing the button sequence after established seating meets the task objective; final withdrawal/put-away is an optional observed finishing phase rather than an extra success requirement. Throughout the button press, hold, and release, the bit must remain seated in the screw-head recess. A visible loss of seating before release means that operation round has not completed the task objective, even if the button motion itself occurs. If continued seating cannot be judged because of occlusion, retain an unknown outcome rather than declaring success or failure.",
+      "includes": "Tool-directed reaching, grasp closure, lifting, and grip adjustment within the same pickup.",
+      "excludes": "Moving an already held tool toward the screw, right-hand camera positioning, slot searching, and final put-away.",
+      "startCondition": "The first visible motion directed at acquiring the screwdriver; if the recording begins with a stable existing grip, do not invent a pickup phase.",
+      "endCondition": "The last frame of acquiring or adjusting the grip before a stable hold is established and another active phase begins; end an abandoned or truncated attempt accordingly."
+    },
+    {
+      "id": "screw-workflow-v2-observe",
+      "name": "Move the Right Hand to the Observation Position",
+      "definition": "Move the right hand and its wrist camera to a pose from which the screwdriver bit and target screw head can be observed. Label the observable positioning action, including concurrent work by the tool-holding hand in notes.",
+      "includes": "Moving toward the work point, adjusting the viewing angle, and settling into the observation pose.",
+      "excludes": "Remaining stationary at the observation pose, tool alignment itself, approaching the handle button, and inferred workpiece grasping unsupported by evidence.",
+      "startCondition": "The first visible movement of the right hand from its prior pose toward a view of the work point.",
+      "endCondition": "The last arrival or viewing-angle adjustment frame before the observation pose is stable and the next active phase takes over."
+    },
+    {
+      "id": "screw-workflow-v2-approach",
+      "name": "Approach the Target Screw Head",
+      "definition": "With the screwdriver already held, move its bit from outside the target area toward an existing screw head on the workpiece. This phase covers overall approach before local slot finding.",
+      "includes": "Moving the held screwdriver toward the selected screw head; larger position and orientation adjustments needed to reach the area where local slot finding can begin.",
+      "excludes": "Local slot searching, downward probing near the screw head, withdrawal for another search round, successful seated holding, and movements made only to change a camera's viewing angle.",
+      "startCondition": "The first frame showing identifiable motion of the bit toward the target screw head from outside its local area; if the recording begins during approach, use the first observable frame and note truncation.",
+      "endCondition": "The last frame before local slot searching, downward probing, or fine positioning begins; otherwise end at visible abandonment or the recording boundary."
+    },
+    {
+      "id": "screw-workflow-v2-search",
+      "name": "Find the Slot and Adjust the Bit",
+      "definition": "Near the target screw head, search for its slot or recess by lowering the bit and adjusting its lateral position or angle, attempting to seat it. This phase is used while successful stable seating has not yet been established. An observable searching action can remain known even when its outcome is unknown.",
+      "includes": "Downward probing, fine lateral motion, tilt correction, and brief pauses or small lifts within the same uninterrupted search round. A pause without evidence of entry and stable seating remains part of searching rather than a successful-seating phase.",
+      "excludes": "Overall approach from outside the target area; clear withdrawal to abandon the current position and reset; confirmed stable seating in the screw-head recess; button pressing or final put-away.",
+      "startCondition": "The first frame of local slot searching, probing, or fine adjustment at the screw head. After a visible reset, start a new search attempt at the first renewed local search or downward probe.",
+      "endCondition": "The last frame before confirmed entry and stable seating begins, or before a clear withdrawal/reset or another action begins. Do not end searching as successful merely because motion stops."
+    },
+    {
+      "id": "screw-workflow-v2-reset",
+      "name": "Withdraw and Reposition",
+      "definition": "Visibly abandon the current bit position or bit-to-screw contact/alignment relationship by lifting or moving away, then reposition for a renewed slot search. The reset can be short in distance. This is a visible action phase and does not itself mean the preceding attempt failed.",
+      "includes": "Opening a visible gap, lifting or moving the bit away from its current target relationship, and changing position or angle in preparation for another search on the identified target.",
+      "excludes": "Continuous fine adjustment within one search round, minor control jitter, a brief pause, visual changes caused solely by a moving camera, and final withdrawal after the operation has ended.",
+      "startCondition": "The first frame showing that the current position is being abandoned and the bit clearly begins lifting or moving away to reset; use the relative bit-to-screw relationship rather than screen motion alone.",
+      "endCondition": "The last frame before renewed local searching, fine positioning, or downward probing begins. If the target changes or the operation ends, end according to the visible action and explain the transition."
+    },
+    {
+      "id": "screw-workflow-v2-seated",
+      "name": "Bit Seated and Stable (Engagement Success)",
+      "definition": "The screwdriver bit has entered the target screw-head slot or recess and is stably seated there. This is the explicit successful-engagement phase, including the interval in which that achieved seating is maintained. Success is defined by entry plus stable seating, without requiring screw rotation, motor activation, or loosening. The entering/settling motion before this condition is established belongs to slot searching and adjustment.",
+      "includes": "Confirmed seating followed by stable holding, including slight jitter that does not break the seated relationship. If the recording starts with the bit already observably seated and stable, this phase may start at the first frame.",
+      "excludes": "Touching only the screw-head surface, hovering or stopping beside/above the recess, continued searching, and unverified seating hidden by an ambiguous view. Stable appearance alone without evidence of entry is insufficient.",
+      "startCondition": "The first frame at which the bit is in the screw-head slot or recess and stably seated, supported by subsequent continuous frames and relevant views. Mark the first frame of the supported seated interval rather than delaying the boundary until later confirmation. Do not impose an arbitrary minimum hold duration.",
+      "endCondition": "The last frame before the bit leaves the recess, substantial repositioning or a new search begins, or another operation takes over. If stable seating continues to the recording's end, include the final frame."
+    },
+    {
+      "id": "screw-workflow-v2-button",
+      "name": "Press, Hold, and Release the Button with the Right Hand",
+      "definition": "After the screwdriver bit is seated and stable, move the right hand to the screwdriver-handle button, press it, maintain the press, and release it. The whole button operation is one subtask. Its success requires the visible press, hold, and release sequence; a completed press alone is insufficient. Describe continued seated contact of the other hand in notes. Do not infer motor activity, rotation, or loosening. Throughout the button press, hold, and release, the bit must remain seated in the screw-head recess. A visible loss of seating before release means that operation round has not completed the task objective, even if the button motion itself occurs. If continued seating cannot be judged because of occlusion, retain an unknown outcome rather than declaring success or failure. Mark this subtask successful only when the full visible press-hold-release sequence is completed while seating is maintained. After visible loss of seating, retain the observed action but mark the round unsuccessful and annotate any actual reset and renewed search.",
+      "includes": "Directed movement from the observation pose to the handle button, final finger/gripper positioning, pressing, holding, and releasing the button; small adjustments within the same operation.",
+      "excludes": "Moving to the observation pose, searching for the screw-head recess, uncertain contact presented as a confirmed press, or general withdrawal/put-away after button release. A button sequence with visibly lost bit seating does not qualify as a successful completed round; unobservable seating cannot be asserted as maintained.",
+      "startCondition": "The first frame of clear right-hand motion toward the button for this operation; if the recording starts during a press, mark that observable partial interval and note truncation.",
+      "endCondition": "The last frame of completing button release before general withdrawal begins. If release is not observed, retain a partial or unknown outcome rather than declaring the operation complete."
+    },
+    {
+      "id": "screw-workflow-v2-putaway",
+      "name": "Withdraw and Put Away the Screwdriver",
+      "definition": "Withdraw the hands/tool from the work point after the current operation ends or is abandoned, and put the screwdriver down if that action is recorded. This finishing action does not by itself establish task success or failure.",
+      "includes": "Departing from the button/work area after release, removing the bit, moving the tool away, returning it, lowering it, and releasing the tool when visible.",
+      "excludes": "A short withdrawal to start another slot-search round, moving to the button, and the button-release movement itself.",
+      "startCondition": "The first general withdrawal or tool-return movement that ends the operation; use subsequent frames to distinguish it from a reset for another search round.",
+      "endCondition": "The last visible withdrawal, put-away, or release frame, or the final recorded frame if finishing is truncated. Do not invent unrecorded put-away."
+    }
+  ]
+}

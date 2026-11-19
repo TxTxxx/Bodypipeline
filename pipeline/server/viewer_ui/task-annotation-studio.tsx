@@ -1,5 +1,9 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { useAnnotationNavigation } from "./annotation-navigation";
+import { mountWorkbench } from "../utils/workbench";
+import { workbenchMarkup } from "../utils/workbench-markup";
 import React, { useEffect, useRef, useState } from "react";
 import { useAnnotations } from "../context/annotations-context";
 import { useTime } from "../context/time-context";
@@ -1649,15 +1653,62 @@ function ManagedStudio({
   );
 }
 
+function NativeAnnotationWorkspace({
+  dataset,
+  episode,
+}: {
+  dataset: string;
+  episode: number;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const controller = useRef<ReturnType<typeof mountWorkbench> | null>(null);
+  const time = useTime();
+  const latestTime = useRef(time);
+  latestTime.current = time;
+  const router = useRouter();
+  const navigation = useAnnotationNavigation();
+  useEffect(() => {
+    const node = host.current!;
+    node.innerHTML = workbenchMarkup;
+    const workspace = mountWorkbench(node, {
+      dataset,
+      episode,
+      native: true,
+      navigation: navigation || undefined,
+      initialTime: latestTime.current.currentTime,
+      onTime: (seconds, playing) => {
+        latestTime.current.seek(seconds, playing ? "video" : "external");
+        if (latestTime.current.isPlaying !== playing)
+          latestTime.current.setIsPlaying(playing);
+      },
+      onEpisode: (ep) => router.push(`./episode_${ep}`),
+    });
+    controller.current = workspace;
+    return () => {
+      workspace.destroy();
+      controller.current = null;
+      latestTime.current.setIsPlaying(false);
+    };
+  }, [dataset, episode, router, navigation]);
+  useEffect(() => {
+    controller.current?.seekTime(latestTime.current.currentTime);
+  }, [time.externalSeekVersion]);
+  return (
+    <div
+      className="bp-workbench native-workspace"
+      ref={host}
+      aria-label="数据标注工作区"
+    />
+  );
+}
 export function TaskAnnotationStudio() {
   const { ident, episodeId } = useAnnotations();
   if (ident.repoId?.startsWith("bp/") && episodeId != null) {
     return (
-      <iframe
-        className="bp-workbench-frame"
-        title="统一标注工作区"
-        src={`/workbench?dataset=${encodeURIComponent(ident.repoId.slice(3))}&episode=${episodeId}`}
-        style={{ width: "100%", height: "1600px", border: 0, borderRadius: 8 }}
+      <NativeAnnotationWorkspace
+        key={`${ident.repoId}:${episodeId}`}
+        dataset={ident.repoId.slice(3)}
+        episode={episodeId}
       />
     );
   }

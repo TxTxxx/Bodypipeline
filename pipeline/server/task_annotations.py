@@ -347,3 +347,39 @@ class TemplateLibrary:
                 raise DomainError("任务模板库不能超过 4 MiB", 422)
             self.store.put("task_templates", "library", row)
             return row
+
+
+def parse_template_file(value: dict | list) -> list[dict]:
+    """Validate an import preview without writing the shared library."""
+    from pydantic import ValidationError
+
+    if len(json.dumps(value, ensure_ascii=False).encode()) > 4 * 1024 * 1024:
+        raise DomainError("模板文件不能超过 4 MiB", 422)
+    items = value if isinstance(value, list) else value.get("templates", [value])
+    if not isinstance(items, list) or not 1 <= len(items) <= 200:
+        raise DomainError("模板文件需要包含 1–200 套模板", 422)
+    templates = []
+    for index, item in enumerate(items):
+        try:
+            templates.append(
+                TaskTemplate.model_validate(item).model_dump(exclude_none=True)
+            )
+        except ValidationError as exc:
+            details = []
+            for error in exc.errors(include_input=False):
+                location = " → ".join(
+                    str(key + 1) if isinstance(key, int) else str(key)
+                    for key in error["loc"]
+                )
+                reason = {
+                    "missing": "缺少必填内容",
+                    "extra_forbidden": "包含不支持的字段",
+                    "string_too_short": "内容不能为空",
+                    "list_type": "需要填写列表",
+                    "string_type": "需要填写文字",
+                }.get(error["type"], error["msg"].removeprefix("Value error, "))
+                details.append(f"第 {index + 1} 套模板 → {location}：{reason}")
+            raise DomainError("；".join(details), 422) from exc
+    if len({t["id"] for t in templates}) != len(templates):
+        raise DomainError("文件内存在重复的模板 ID，请先分别命名", 422)
+    return templates

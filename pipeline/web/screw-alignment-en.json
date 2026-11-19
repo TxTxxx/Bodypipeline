@@ -1,0 +1,43 @@
+{
+  "id": "body2-tool-screw-alignment-en-v2",
+  "name": "Screwdriver Bit Alignment and Successful Seating (English v2)",
+  "fields": [],
+  "subtasks": [
+    {
+      "id": "screw-align-v2-approach",
+      "name": "Approach the Target Screw Head",
+      "definition": "With the screwdriver already held, move its bit from outside the target area toward an existing screw head on the workpiece. This phase covers overall approach before local slot finding. Shared rules for this entire template: use the exact English subtask names and write all notes, descriptions, and auxiliary observations in English. Annotate the actual sequence; phases may repeat or be absent, and the recording may begin mid-phase. Successful engagement means that the bit has entered the screw-head slot or recess and is stably seated there. Screw rotation, motor activation, thread engagement, or screw loosening is NOT required. Mere surface contact, remaining still above or beside the recess, or camera motion does not establish successful seating. Do not infer seating when the bit-to-recess relationship cannot be established; record the uncertainty. Use continuous frames and all relevant camera views, without inventing a fixed dwell-time threshold. A visible withdrawal/reset followed by renewed searching starts a new search attempt; uninterrupted fine adjustments and segment splits do not. Each subtask has its own attempt identity; do not share an attempt ID across different subtask IDs. Assess each attempt's outcome independently and do not infer failure just because a retry follows. NULL, UNKNOWN, and OUT_OF_TEMPLATE retain their standard meanings and are not formal subtasks. Task-related stable seating is not background.",
+      "includes": "Moving the held screwdriver toward the selected screw head; larger position and orientation adjustments needed to reach the area where local slot finding can begin.",
+      "excludes": "Local slot searching, downward probing near the screw head, withdrawal for another search round, successful seated holding, and movements made only to change a camera's viewing angle.",
+      "startCondition": "The first frame showing identifiable motion of the bit toward the target screw head from outside its local area; if the recording begins during approach, use the first observable frame and note truncation.",
+      "endCondition": "The last frame before local slot searching, downward probing, or fine positioning begins; otherwise end at visible abandonment or the recording boundary."
+    },
+    {
+      "id": "screw-align-v2-search",
+      "name": "Find the Slot and Adjust the Bit",
+      "definition": "Near the target screw head, search for its slot or recess by lowering the bit and adjusting its lateral position or angle, attempting to seat it. This phase is used while successful stable seating has not yet been established. An observable searching action can remain known even when its outcome is unknown.",
+      "includes": "Downward probing, fine lateral motion, tilt correction, and brief pauses or small lifts within the same uninterrupted search round. A pause without evidence of entry and stable seating remains part of searching rather than a successful-seating phase.",
+      "excludes": "Overall approach from outside the target area; clear withdrawal to abandon the current position and reset; confirmed stable seating in the screw-head recess; button pressing or final put-away.",
+      "startCondition": "The first frame of local slot searching, probing, or fine adjustment at the screw head. After a visible reset, start a new search attempt at the first renewed local search or downward probe.",
+      "endCondition": "The last frame before confirmed entry and stable seating begins, or before a clear withdrawal/reset or another action begins. Do not end searching as successful merely because motion stops."
+    },
+    {
+      "id": "screw-align-v2-reset",
+      "name": "Withdraw and Reposition",
+      "definition": "Visibly abandon the current bit position or bit-to-screw contact/alignment relationship by lifting or moving away, then reposition for a renewed slot search. The reset can be short in distance. This is a visible action phase and does not itself mean the preceding attempt failed.",
+      "includes": "Opening a visible gap, lifting or moving the bit away from its current target relationship, and changing position or angle in preparation for another search on the identified target.",
+      "excludes": "Continuous fine adjustment within one search round, minor control jitter, a brief pause, visual changes caused solely by a moving camera, and final withdrawal after the operation has ended.",
+      "startCondition": "The first frame showing that the current position is being abandoned and the bit clearly begins lifting or moving away to reset; use the relative bit-to-screw relationship rather than screen motion alone.",
+      "endCondition": "The last frame before renewed local searching, fine positioning, or downward probing begins. If the target changes or the operation ends, end according to the visible action and explain the transition."
+    },
+    {
+      "id": "screw-align-v2-seated",
+      "name": "Bit Seated and Stable (Engagement Success)",
+      "definition": "The screwdriver bit has entered the target screw-head slot or recess and is stably seated there. This is the explicit successful-engagement phase, including the interval in which that achieved seating is maintained. Success is defined by entry plus stable seating, without requiring screw rotation, motor activation, or loosening. The entering/settling motion before this condition is established belongs to slot searching and adjustment.",
+      "includes": "Confirmed seating followed by stable holding, including slight jitter that does not break the seated relationship. If the recording starts with the bit already observably seated and stable, this phase may start at the first frame.",
+      "excludes": "Touching only the screw-head surface, hovering or stopping beside/above the recess, continued searching, and unverified seating hidden by an ambiguous view. Stable appearance alone without evidence of entry is insufficient.",
+      "startCondition": "The first frame at which the bit is in the screw-head slot or recess and stably seated, supported by subsequent continuous frames and relevant views. Mark the first frame of the supported seated interval rather than delaying the boundary until later confirmation. Do not impose an arbitrary minimum hold duration.",
+      "endCondition": "The last frame before the bit leaves the recess, substantial repositioning or a new search begins, or another operation takes over. If stable seating continues to the recording's end, include the final frame."
+    }
+  ]
+}

@@ -380,6 +380,7 @@ def _fingerprint(cache: Path, data_origin: str) -> str:
                     + SCORE_FILTER_PATCH.read_bytes()
                     + EPISODE_LENGTHS_PATCH.read_bytes()
                     + THEME_SCRIPT.read_bytes()
+                    + (Path(__file__).parents[1] / "web/workbench.css").read_bytes()
                     + Path(__file__).read_bytes()
                     + Path(__file__).with_name("viewer_annotations.py").read_bytes()
                     + Path(__file__).with_name("viewer_task_annotations.py").read_bytes()
