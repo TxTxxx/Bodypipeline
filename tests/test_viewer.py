@@ -445,6 +445,32 @@ def test_presentation_patch_accepts_an_already_patched_source(tmp_path, monkeypa
     assert "videosInfo: sourceVideosInfo" in videos.read_text()
 
 
+def test_instruction_patch_removes_duplicate_navigation_import(tmp_path):
+    from pipeline.server.viewer_instructions import MARKER, patch_instruction_editor
+
+    page = tmp_path / "source/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    page.parent.mkdir(parents=True)
+    navigation_import = (
+        "import {\n"
+        "  initialEpisodePage,\n"
+        "  pageForEpisode,\n"
+        '} from "@/utils/episode-navigation-state";\n'
+    )
+    page.write_text(
+        navigation_import
+        + MARKER
+        + '\nimport { InstructionEditor } from "@/components/instruction-editor";\n'
+        + navigation_import
+        + "export const viewer = true;\n"
+    )
+
+    patch_instruction_editor(tmp_path)
+
+    patched = page.read_text()
+    assert patched.count(navigation_import) == 1
+    assert "export const viewer = true;" in patched
+
+
 def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     from pipeline.server import viewer_bootstrap as bootstrap
 

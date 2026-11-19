@@ -5,6 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 MARKER = "// bodypipeline: visual instruction editor v1"
+NAVIGATION_IMPORT = (
+    "import {\n"
+    "  initialEpisodePage,\n"
+    "  pageForEpisode,\n"
+    '} from "@/utils/episode-navigation-state";\n'
+)
+
+
+def _deduplicate_navigation_import(text: str) -> str:
+    first = text.find(NAVIGATION_IMPORT)
+    if first < 0:
+        return text
+    end = first + len(NAVIGATION_IMPORT)
+    return text[:end] + text[end:].replace(NAVIGATION_IMPORT, "")
 
 
 def _replace(text: str, before: str, after: str, label: str) -> str:
@@ -21,7 +35,9 @@ def patch_instruction_editor(cache: Path):
     source = cache / "source/src"
     page = source / "app/[org]/[dataset]/[episode]/episode-viewer.tsx"
     text = page.read_text()
+    text = _deduplicate_navigation_import(text)
     if MARKER in text:
+        page.write_text(text)
         return
 
     text = _replace(
