@@ -19,18 +19,30 @@ from .datasets import _dataset_roots
 
 
 @contextlib.contextmanager
-def dataset_lock(store: Store, key: str):
+def _dataset_file_lock(store: Store, key: str, operation: int):
     directory = store.path / "recycle-locks"
     directory.mkdir(exist_ok=True)
     with (directory / f"{key}.lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, operation | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise DomainError("该数据集正在处理，请稍后重试", 409) from exc
         try:
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def dataset_read_lock(store: Store, key: str):
+    with _dataset_file_lock(store, key, fcntl.LOCK_SH):
+        yield
+
+
+@contextlib.contextmanager
+def dataset_lock(store: Store, key: str):
+    with _dataset_file_lock(store, key, fcntl.LOCK_EX):
+        yield
 
 
 class RecycleBin:

@@ -19,7 +19,7 @@ from .instruction_templates import (
     render_instruction,
 )
 from .merges import source_snapshot
-from .recycle import RecycleBin, dataset_lock
+from .recycle import RecycleBin, dataset_lock, dataset_read_lock
 from .viewer_data import PreviewRegistry
 
 
@@ -180,7 +180,7 @@ class InstructionReview:
 
     def dataset(self, dataset_id):
         key, path, _ = self.resolve(dataset_id)
-        with dataset_lock(self.store, key):
+        with dataset_read_lock(self.store, key):
             self.resolve(dataset_id)
             snapshot = source_snapshot(path)
             data = self._source(path, snapshot)
@@ -189,7 +189,7 @@ class InstructionReview:
 
     def episode(self, dataset_id, episode):
         key, path, _ = self.resolve(dataset_id)
-        with dataset_lock(self.store, key):
+        with dataset_read_lock(self.store, key):
             self.resolve(dataset_id)
             snapshot = source_snapshot(path)
             data = self._source(path, snapshot)

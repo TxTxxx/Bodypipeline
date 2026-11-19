@@ -1,6 +1,8 @@
 """Server drafts for structured per-Episode language instructions."""
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -207,6 +209,45 @@ def test_stale_drafts_source_changes_and_locks_are_rejected(instruction_app):
 
     (runner.settings.root / "source/changed").write_text("new")
     assert client.get("/api/instructions/source").status_code == 409
+
+
+def test_concurrent_instruction_reads_do_not_report_dataset_as_processing(
+    instruction_app, monkeypatch
+):
+    first_read_entered = threading.Event()
+    release_first_read = threading.Event()
+    call_lock = threading.Lock()
+    fixture_source = InstructionReview._source
+    call_count = 0
+
+    def slow_first_source(*args):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+            current_call = call_count
+        if current_call == 1:
+            first_read_entered.set()
+            assert release_first_read.wait(2)
+        return fixture_source(*args)
+
+    monkeypatch.setattr(InstructionReview, "_source", slow_first_source)
+    first_client = client_for(instruction_app)
+    second_client = client_for(instruction_app)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(first_client.get, "/api/instructions/source")
+        assert first_read_entered.wait(2)
+        second = executor.submit(
+            second_client.get, "/api/instructions/source/episodes/0"
+        )
+        try:
+            second_response = second.result(timeout=2)
+        finally:
+            release_first_read.set()
+        first_response = first.result(timeout=2)
+
+    assert first_response.status_code == 200, first_response.text
+    assert second_response.status_code == 200, second_response.text
 
 
 def test_api_validation_episode_bounds_and_dataset_identity(instruction_app, tmp_path):
