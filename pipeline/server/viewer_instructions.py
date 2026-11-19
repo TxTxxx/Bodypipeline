@@ -48,13 +48,28 @@ def patch_instruction_editor(cache: Path):
         restored + '\n          "instructions",',
         1,
     )
-    text = _replace(
-        text,
-        '{renderTab("episodes", "Episodes")}',
-        '{renderTab("episodes", "Episodes")}\n'
-        '        {renderTab("instructions", "Instructions", '
-        '"Edit one language instruction for every episode in place")}',
-        "tab button",
+    episode_tab = next(
+        (
+            anchor
+            for anchor in (
+                '{renderTab("episodes", "Episodes")}',
+                '{renderTab("episodes", "Episode")}',
+            )
+            if anchor in text
+        ),
+        None,
+    )
+    if episode_tab is None:
+        raise RuntimeError(
+            "Unexpected Visualizer instruction-editor anchor (tab button)"
+        )
+    text = text.replace(
+        episode_tab,
+        episode_tab
+        + "\n"
+        + '        {renderTab("instructions", "语言指令", '
+        + '"在原数据集中批量编辑每个 Episode 的语言指令")}',
+        1,
     )
     sidebar_variants = [
         (
