@@ -161,8 +161,16 @@ class CaptureService:
             refresh()
         with self.batch_lock:
             batch = self.current_batch()
+            if not batch and not final:
+                batch = self._adopt_external_session()
             if not batch:
                 return
+            if (
+                not final
+                and batch.get("state") == "RECOVERY_REQUIRED"
+                and batch.get("adapter_session")
+            ):
+                self._rebind_replaced_session(batch)
             if not final and not batch.get("adapter_session"):
                 return  # Never turn a failed preflight/unknown launch into ACTIVE.
             status = {}
@@ -281,8 +289,123 @@ class CaptureService:
                     raise
             self.store.put("batch", batch["id"], batch)
 
-            if not final and batch.get("end_requested") and status.get("service_stopped"):
+            if (
+                not final
+                and status.get("service_stopped")
+                and batch.get("adapter_session")
+            ):
                 self.end_batch(batch["id"])
+
+    def _rebind_replaced_session(self, batch):
+        discover = getattr(self.adapter, "discoverable_session", None)
+        if not discover:
+            return False
+        try:
+            session = discover()
+        except (DomainError, OSError, ValueError):
+            return False
+        if not session:
+            return False
+        previous = batch.get("adapter_session") or {}
+        if previous.get("native_session") == session["native_session"]:
+            return False
+        output_name = Path(session["output"]).name
+        expected = re.sub(
+            r"[^A-Za-z0-9_-]+", "-", batch["dataset_name"]
+        ).strip("-")
+        if output_name != expected:
+            return False
+        history = list(batch.get("replaced_sessions") or [])
+        history.append(
+            {
+                "native_session": previous.get("native_session"),
+                "output": previous.get("output"),
+            }
+        )
+        batch.update(
+            **{
+                "adapter_session": {
+                    key: value
+                    for key, value in session.items()
+                    if key not in {"task", "phase", "capture_options"}
+                },
+                "adopted": True,
+                "replaced_sessions": history[-20:],
+                "state": (
+                    "RECOVERY_REQUIRED"
+                    if session.get("phase") == "error"
+                    else "STOPPING"
+                    if session.get("phase") == "stopping"
+                    else "ACTIVE"
+                ),
+                "error": None,
+            }
+        )
+        self.store.put("batch", batch["id"], batch)
+        self.adapter.recover(batch)
+        return True
+
+    def _adopt_external_session(self):
+        discover = getattr(self.adapter, "discoverable_session", None)
+        if not discover:
+            return None
+        try:
+            session = discover()
+        except (DomainError, OSError, ValueError):
+            return None
+        if not session:
+            return None
+        native_session = session["native_session"]
+        for previous in self.store.all("batch"):
+            previous_session = previous.get("adapter_session") or {}
+            if previous_session.get("native_session") == native_session:
+                return None
+        roots = list(self.roots)
+        if not roots:
+            return None
+        output_name = Path(session["output"]).name
+        dataset_name = re.sub(r"[^A-Za-z0-9_-]+", "-", output_name).strip("-")
+        dataset_name = dataset_name[:64] or "native-session"
+        task = session.get("task")
+        instruction = (
+            task.strip()
+            if isinstance(task, str) and task.strip() and task.strip() != "~"
+            else dataset_name
+        )
+        row = self.create(
+            {
+                "dataset_name": dataset_name,
+                "instruction": instruction[:2000],
+                "idempotency_key": "adopt-" + digest(session)[:40],
+                "local_root": roots[0],
+                "local_prefix": "",
+                "remote_target": "default",
+                "remote_prefix": "",
+                "capture_options": session["capture_options"],
+            }
+        )
+        batch = {
+            **row,
+            "state": (
+                "RECOVERY_REQUIRED"
+                if session.get("phase") == "error"
+                else "STOPPING"
+                if session.get("phase") == "stopping"
+                else "ACTIVE"
+            ),
+            "adopted": True,
+            "episode_count": 0,
+            "adapter_session": {
+                key: value
+                for key, value in session.items()
+                if key not in {"task", "phase", "capture_options"}
+            },
+        }
+        self.store.delete("capture", row["id"])
+        self.store.put("batch", batch["id"], batch)
+        self.batch_active.set()
+        self.adapter.recover(batch)
+        return batch
 
     def end_batch(self, bid, force=False):
         with self.batch_lock:
@@ -341,7 +464,8 @@ class CaptureService:
 
     def prepare_capture_service(self):
         with self.batch_lock:
-            if self.current_batch():
+            current = self.current_batch()
+            if current and current.get("state") != "RECOVERY_REQUIRED":
                 raise DomainError("请先结束当前采集批次")
             if getattr(self, "replay", None) and self.replay.row["state"] in {
                 "PREPARING", "RUNNING", "STOPPING", "RECOVERY_REQUIRED",

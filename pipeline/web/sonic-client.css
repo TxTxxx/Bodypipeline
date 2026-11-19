@@ -369,6 +369,10 @@
   overflow-wrap: anywhere;
 }
 
+.bp-client .bp-discarded {
+  color: #ffd166;
+}
+
 .bp-client .bp-empty {
   padding: 36px 18px;
   color: var(--bp-muted);

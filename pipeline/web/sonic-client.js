@@ -130,10 +130,15 @@ window.SonicClient = (() => {
           .map((rows) => {
             const first = rows[0];
             const name = first.dataset_name || first.instruction || "未命名任务";
+            const discarded = rows.filter(
+              (row) => row.state === "DISCARDED",
+            ).length;
             return `<tr>
               <td><span class="bp-task">${esc(name)}</span><span class="bp-sub">${esc(
                 rows.length,
-              )} 段采集</span></td>
+              )} 段采集 · <span class="bp-discarded">已丢弃 ${esc(
+                discarded,
+              )} 段</span></span></td>
               <td>${rows.filter((row) => row.state === "SEALED").length} / ${
                 rows.filter((row) => row.upload_state === "ACKED").length
               }</td>
@@ -369,7 +374,7 @@ window.SonicClient = (() => {
     rawOnly.checked = true;
     rawOnly.disabled = true;
     rawOnly.indeterminate = false;
-    rawOnly.title = "BodyPipeline Client 仅支持 Raw，上传后由 Server 转换";
+    rawOnly.title = "imply Client 仅支持 Raw，上传后由 Server 转换";
   }, 250);
 
   boot().catch((error) => notice(`Client 初始化失败：${error.message}`, true));

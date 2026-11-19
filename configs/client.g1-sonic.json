@@ -24,6 +24,7 @@
     "enabled": true,
     "idle_seconds": 20,
     "sample_seconds": 1,
+    "parallel_uploads": 3,
     "chunk_bytes": 1048576,
     "memory_pause_ratio": 0.15,
     "memory_resume_ratio": 0.20,

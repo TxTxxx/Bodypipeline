@@ -51,6 +51,14 @@ def test_linux_differential_metrics_and_optional_psi(tmp_path, monkeypatch):
     assert result["io_pressure"] == 12.5
 
 
+@pytest.mark.parametrize("value", [0, 5, True, 1.5])
+def test_parallel_uploads_must_be_bounded_integer(settings_factory, value):
+    with pytest.raises(ValueError, match="parallel_uploads"):
+        CaptureService(
+            settings_factory(background_transfer={"parallel_uploads": value})
+        )
+
+
 @pytest.mark.parametrize("kind", ["network", "disk"])
 def test_io_throughput_hysteresis_and_sampler_failure(
     settings_factory, monkeypatch, kind

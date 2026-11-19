@@ -34,8 +34,10 @@
   --web-host 127.0.0.1 --web-port 8081 --enable-web-control \
   --deploy-checkpoint policy/sonic_v1_1/model \
   --deploy-obs-config policy/sonic_v1_1/observation_config.yaml \
-  --raw-only --camera-depth off --pose-walk --pose-walk-max-speed 0.3
+  --raw-only --pose-walk --pose-walk-max-speed 0.3
 ```
+
+基础服务启动不强制切换相机深度。这样某一路相机或相机控制服务暂时不可用时，8081 仍可启动并显示具体诊断；真正创建采集批次时仍会检查 Profile 要求的全部相机是否就绪。
 
 已有原生服务可复用，但须开启 Web 控制和 Raw 模式，且处于 idle。若已有外部会话在运行或处于异常状态，Client 显示实际状态并拒绝另起采集器，不隐式停止或接管该会话。首次切换时，应先在原管理入口正常保存、结束旧会话。
 
@@ -50,6 +52,10 @@
 7. 使用原版“强制停止服务”结束后，必须同时确认原生会话退出、最终 episode 核对完成，才解除批次门控。资源稳定空闲后自动封存和上传。
 
 “强制停止服务”需要前端二次确认，调用原生 supervisor 的停止逻辑，未保存的录制段可能被丢弃。Client 不会以“已发出停止请求”代替退出确认。
+
+`background_transfer.parallel_uploads` 控制同时上传的 Episode 数，允许 1–4，G1 配置为 3。每个 worker 独立分块、断点续传和重试，同一个 Episode 不会重复并发上传；开始采集或封存仍会等待当前上传批次让出后台租约。
+
+`capture.adopt_existing_session=true` 时，Client 空闲期间会自动发现 8081 上已经处于 `starting`、`running`、`stopping` 或 `error` 的 raw-only 会话。确认 session、输出路径和归属后，Client 创建接入批次并开始登记其 Episodes；`error` 会话会直接进入 `RECOVERY_REQUIRED`，只允许检查和恢复。8081 会话结束后自动执行最终核对，再进入本地封存与上传队列。`idle`、非 raw、路径不安全或归属不完整的会话不会自动接入。
 
 原始数据存储在 `repository/outputs/<batch-id-prefix>/<dataset-name>`；每个批次独立，避免同名任务覆盖。Client 管理目录保留批次、episode、Manifest 和上传状态，小元数据快照和 raw 源路径映射沿用现有封存实现。
 

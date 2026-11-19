@@ -44,6 +44,8 @@ class G1OnboardAdapter(G1SonicAdapter):
             )
         self.origin = self.origin.rstrip("/")
         self.config["preview_url"] = self.origin
+        if type(self.config.get("adopt_existing_session", False)) is not bool:
+            raise DomainError("capture.adopt_existing_session must be boolean")
         self.web_process = None
         self.snapshot = {"phase": "unavailable", "error": "Service status pending"}
         self.snapshot_at = 0.0
@@ -53,6 +55,9 @@ class G1OnboardAdapter(G1SonicAdapter):
             **super().capabilities,
             "preview_stream": True,
             "native_client_page": True,
+            "adopt_existing_session": self.config.get(
+                "adopt_existing_session", False
+            ),
             "telemetry": {
                 "path": "/api/capture-telemetry",
                 "max_signals": 16,
@@ -148,7 +153,7 @@ addEventListener("load", reportSonicHeight);
             / "sonic-client.html"
         )
         if not fragment_path.is_file():
-            raise DomainError("BodyPipeline Client page fragment is missing")
+            raise DomainError("imply Client page fragment is missing")
         fragment = fragment_path.read_text(encoding="utf-8")
         if "</head>" not in html or "</body>" not in html:
             raise DomainError("Native SONIC visualizer HTML has an unsupported format")
@@ -161,6 +166,48 @@ addEventListener("load", reportSonicHeight);
 
     def collection_dataset(self, body):
         return self._http("POST", "/api/collection/dataset", body)
+
+    def discoverable_session(self):
+        """Return a complete native session that Client may safely adopt."""
+
+        if not self.capabilities.get("adopt_existing_session"):
+            return None
+        state = self.refresh_service()
+        if state.get("phase") not in {"starting", "running", "stopping", "error"}:
+            return None
+        native_session = state.get("session")
+        output = state.get("output")
+        if (
+            not isinstance(native_session, str)
+            or not NAME.fullmatch(native_session)
+            or not isinstance(output, str)
+            or state.get("raw_only") is not True
+        ):
+            return None
+        path = Path(output)
+        native_root = (self.repo / "outputs").resolve()
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(native_root)
+        except (OSError, ValueError):
+            return None
+        if not path.is_absolute() or resolved != path or not path.is_dir():
+            return None
+        return {
+            "onboard": True,
+            "adopted": True,
+            "native_session": native_session,
+            "output": str(path),
+            "service_url": self.origin,
+            "task": state.get("task"),
+            "phase": state["phase"],
+            "capture_options": {
+                "raw_only": True,
+                "camera_depth": bool(
+                    (state.get("camera") or {}).get("depth", False)
+                ),
+            },
+        }
 
     def telemetry_status(self):
         if (
@@ -363,8 +410,6 @@ addEventListener("load", reportSonicHeight);
                 str(urlsplit(self.origin).port),
                 "--enable-web-control",
                 "--raw-only",
-                "--camera-depth",
-                "off",
                 "--deploy-checkpoint",
                 self.config.get("deploy_checkpoint", "policy/sonic_v1_1/model"),
                 "--deploy-obs-config",
@@ -520,10 +565,16 @@ addEventListener("load", reportSonicHeight);
         if not self.session:
             return {"state": "IDLE", "managed": False, "error": state.get("error")}
         if (
-            self.session.get("stop_requested")
+            self.session.get("adopted")
             and state.get("phase") == "idle"
             and not state.get("session")
         ):
+            return {
+                "state": "STOPPED",
+                "service_stopped": True,
+                "managed": True,
+            }
+        if state.get("phase") == "idle" and not state.get("session"):
             return {"state": "STOPPED", "service_stopped": True, "managed": True}
         if not self._matches(state):
             return {
@@ -570,12 +621,7 @@ addEventListener("load", reportSonicHeight);
 
     def end(self, force=False):
         state = self.refresh_service()
-        if (
-            self.session
-            and self.session.get("stop_requested")
-            and state.get("phase") == "idle"
-            and not state.get("session")
-        ):
+        if self.session and state.get("phase") == "idle" and not state.get("session"):
             return True
         state = self._owned_state()
         if state.get("phase") == "stopping":
@@ -591,10 +637,7 @@ addEventListener("load", reportSonicHeight);
 
     def observe(self):
         if self.session and not Path(self.session["output"]).exists():
-            if self.snapshot.get("phase") in {"starting", "stopping"} or (
-                self.session.get("stop_requested")
-                and self.snapshot.get("phase") == "idle"
-            ):
+            if self.snapshot.get("phase") in {"starting", "stopping", "idle"}:
                 return []
         return super().observe()
 

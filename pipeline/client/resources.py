@@ -117,6 +117,7 @@ class BackgroundWork:
         defaults = {
             "idle_seconds": 20,
             "sample_seconds": 1,
+            "parallel_uploads": 1,
             "memory_pause_ratio": 0.15,
             "memory_resume_ratio": 0.20,
             "cpu_pause_percent": 85,
@@ -144,6 +145,13 @@ class BackgroundWork:
         if type(cfg.get("enabled", True)) is not bool:
             raise ValueError("background_transfer.enabled must be boolean")
         if (
+            type(self.config["parallel_uploads"]) is not int
+            or not 1 <= self.config["parallel_uploads"] <= 4
+        ):
+            raise ValueError(
+                "background_transfer.parallel_uploads must be an integer in [1,4]"
+            )
+        if (
             not 0
             < self.config["memory_pause_ratio"]
             < self.config["memory_resume_ratio"]
@@ -165,6 +173,7 @@ class BackgroundWork:
             raise ValueError("Background chunk_bytes must be 64 KiB–16 MiB")
         self.sampler = LinuxResources()
         self.lock = threading.Lock()
+        self.hash_lock = threading.Lock()
         self.serial = threading.Lock()
         self.stop = threading.Event()
         self.last_sample = -math.inf
@@ -268,7 +277,8 @@ class BackgroundWork:
     def hash_file(self, path, *, progress=None):
         identity = file_identity(path)
         key = str(path)
-        saved = self.hashes.get(key)
+        with self.hash_lock:
+            saved = self.hashes.get(key)
         h, offset = (
             (saved[1], saved[2])
             if saved and saved[0] == identity
@@ -279,19 +289,24 @@ class BackgroundWork:
             while True:
                 self.checkpoint()
                 if file_identity(path) != identity:
-                    self.hashes.pop(key, None)
+                    with self.hash_lock:
+                        self.hashes.pop(key, None)
                     raise DomainError("校验过程中源文件发生变化")
                 data = stream.read(self.config["chunk_bytes"])
                 if not data:
                     break
                 h.update(data)
                 offset += len(data)
-                # Keep at most one resumable hash to bound memory across queues.
-                self.hashes.clear()
-                self.hashes[key] = (identity, h, offset)
+                # Parallel uploads may need several resumable hashes at once.
+                with self.hash_lock:
+                    limit = self.config["parallel_uploads"] + 1
+                    while len(self.hashes) >= limit and key not in self.hashes:
+                        self.hashes.pop(next(iter(self.hashes)))
+                    self.hashes[key] = (identity, h, offset)
                 if progress:
                     progress(len(data))
-        self.hashes.pop(key, None)
+        with self.hash_lock:
+            self.hashes.pop(key, None)
         return h.hexdigest()
 
     def status(self):

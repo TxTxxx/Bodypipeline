@@ -94,6 +94,9 @@ class NativeCollectionCameraDepthRequest(BaseModel):
     depth: StrictBool
 
 
+NATIVE_CHALLENGE_SECONDS = 300
+
+
 def create_app(settings, background=True):
     service = CaptureService(settings)
     replay = ReplayService(settings, service)
@@ -286,7 +289,10 @@ def create_app(settings, background=True):
         @app.post("/capture-visualizer/api/collection/challenge")
         def native_collection_challenge(body: NativeCollectionChallengeRequest):
             nonce = secrets.token_urlsafe(24)
-            native_challenges[nonce] = (body.operation, time.monotonic() + 30)
+            native_challenges[nonce] = (
+                body.operation,
+                time.monotonic() + NATIVE_CHALLENGE_SECONDS,
+            )
             return {"nonce": nonce}
 
         @app.post("/capture-visualizer/api/collection/start")
@@ -294,7 +300,7 @@ def create_app(settings, background=True):
             consume_native_challenge(body.nonce, "start")
             if body.raw_only is not True:
                 raise DomainError(
-                    "BodyPipeline Client 仅支持保存 Raw，再由 Server 转换", 400
+                    "imply Client 仅支持保存 Raw，再由 Server 转换", 400
                 )
             roots = list(service.roots)
             if not roots:

@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -19,18 +20,55 @@ class UploadAgent:
         self.settings = service.settings
 
     def process_once(self):
-        for row in self.service.store.all("capture"):
-            if (
-                row["state"] != "SEALED"
-                or row["upload_state"] not in {"QUEUED", "UPLOADING", "RETRY", "PAUSED"}
-                or row.get("retry_at", 0) > time.time()
-            ):
-                continue
-            self.upload(row)
-            return True
-        return False
+        limit = self.service.background.config["parallel_uploads"]
+        priority = {"UPLOADING": 0, "QUEUED": 1, "RETRY": 2, "PAUSED": 3}
+        candidates = sorted(
+            (
+                row
+                for row in self.service.store.all("capture")
+                if row["state"] == "SEALED"
+                and row["upload_state"] in priority
+                and row.get("retry_at", 0) <= time.time()
+            ),
+            key=lambda row: (
+                priority[row["upload_state"]],
+                row.get("created_at", 0),
+                row["id"],
+            ),
+        )[:limit]
+        if not candidates:
+            return False
+        try:
+            # One lease covers the whole concurrent batch. Sealing and starting a
+            # capture still wait for every upload worker, while workers do not
+            # contend with each other on the existing serial background lock.
+            with self.service.background.lease():
+                selected = []
+                for candidate in candidates:
+                    row = self.service.store.get("capture", candidate["id"])
+                    if (
+                        row["state"] == "SEALED"
+                        and row["upload_state"] in priority
+                        and row.get("retry_at", 0) <= time.time()
+                    ):
+                        selected.append(row)
+                if not selected:
+                    return False
+                with ThreadPoolExecutor(
+                    max_workers=len(selected), thread_name_prefix="bp-upload"
+                ) as pool:
+                    futures = [pool.submit(self._upload, row) for row in selected]
+                    for future in futures:
+                        future.result()
+        except WorkPaused as exc:
+            for row in candidates:
+                self.service.update(
+                    row["id"], upload_state="PAUSED", background_wait=str(exc)
+                )
+        return True
 
     def upload(self, row):
+        """Upload one Episode while holding the exclusive background lease."""
         try:
             with self.service.background.lease():
                 row = self.service.store.get("capture", row["id"])

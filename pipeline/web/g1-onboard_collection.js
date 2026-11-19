@@ -54,7 +54,9 @@ export function mountCollection(root) {
     });
     const response = await fetch(path, options);
     const result = await response.json();
-    if (!response.ok) throw Error(result.error || `HTTP ${response.status}`);
+    if (!response.ok) {
+      throw Error(result.error || result.detail || `HTTP ${response.status}`);
+    }
     return result;
   }
 

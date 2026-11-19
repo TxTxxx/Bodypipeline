@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from test_client import request
 from test_g1_sonic_provider import write_episode
 
+from pipeline.client import app as client_app_module
 from pipeline.client.adapters import g1_onboard as module
 from pipeline.client.adapters.g1_onboard import G1OnboardAdapter
 from pipeline.client.app import create_app
@@ -378,6 +379,7 @@ def test_native_visualizer_is_the_composed_client_document(
         collection_js = http.get("/assets/g1-onboard_collection.js")
         assert collection_js.status_code == 200
         assert "/capture-visualizer/api/collection/status" in collection_js.text
+        assert "result.error || result.detail" in collection_js.text
         assert http.get("/assets/g1-onboard_collection.css").status_code == 200
         root_policy = index.headers["content-security-policy"]
         assert "script-src 'self' 'unsafe-inline'" in root_policy
@@ -433,6 +435,7 @@ def test_native_client_page_rejects_incomplete_captured_html(onboard, monkeypatc
 
 def test_native_collection_controls_use_client_batch_contract(onboard):
     settings, native = onboard
+    assert client_app_module.NATIVE_CHALLENGE_SECONDS == 300
     with TestClient(create_app(settings, background=False)) as http:
         http.headers["Authorization"] = "Bearer " + settings.token
         dataset = http.post(
@@ -707,6 +710,126 @@ def test_unmanaged_native_session_blocks_background_even_without_client_batch(on
         service.configure_capture_service({"camera_depth": True})
 
 
+def test_running_native_session_is_adopted_and_finalized(onboard):
+    settings, native = onboard
+    settings.capture["adopt_existing_session"] = True
+    output = native.repo / "outputs/native-managed/transfer-box"
+    output.mkdir(parents=True)
+    native.state.update(
+        phase="running",
+        session="sonic-web-adopted",
+        output=str(output),
+        task="Transfer the box",
+        raw_only=True,
+    )
+    service = CaptureService(settings)
+    service.sync_external()
+    batch = service.current_batch()
+    assert batch["state"] == "ACTIVE"
+    assert batch["adopted"] is True
+    assert batch["adapter_session"]["native_session"] == "sonic-web-adopted"
+    assert batch["adapter_session"]["output"] == str(output)
+    assert batch["dataset_name"] == "transfer-box"
+    assert batch["instruction"] == "Transfer the box"
+    assert service.adapter.session == batch["adapter_session"]
+
+    native.stopped()
+    service.sync_external()
+    current = service.current_batch()
+    assert current is None, {
+        "state": current.get("state"),
+        "error": current.get("error"),
+        "end_requested": current.get("end_requested"),
+        "adapter_status": current.get("adapter_status"),
+    }
+    assert service.store.get("batch", batch["id"])["state"] == "ENDED"
+    assert not service.batch_active.is_set()
+
+
+def test_native_initiated_exit_finalizes_owned_batch(onboard):
+    settings, native = onboard
+    service = CaptureService(settings)
+    batch = service.begin_batch(batch_request())
+    native.running()
+    service.sync_external()
+    assert service.current_batch()["state"] == "ACTIVE"
+
+    native.stopped()
+    service.sync_external()
+    current = service.current_batch()
+    assert current is None, {
+        "state": current.get("state"),
+        "error": current.get("error"),
+        "end_requested": current.get("end_requested"),
+        "adapter_status": current.get("adapter_status"),
+    }
+    assert service.store.get("batch", batch["id"])["state"] == "ENDED"
+    assert not service.batch_active.is_set()
+
+
+def test_recovery_batch_rebinds_when_8081_replaces_same_dataset_session(onboard):
+    settings, native = onboard
+    settings.capture["adopt_existing_session"] = True
+    service = CaptureService(settings)
+    batch = service.begin_batch(batch_request())
+    native.running()
+    service.sync_external()
+    original = dict(batch["adapter_session"])
+
+    replacement = native.repo / "outputs/replacement/transfer-box"
+    replacement.mkdir(parents=True)
+    native.state.update(
+        phase="running",
+        error=None,
+        session="sonic-web-replacement",
+        output=str(replacement),
+        task="Fold the cloth",
+  )
+    service.store.put(
+        "batch",
+        batch["id"],
+        {
+            **service.store.get("batch", batch["id"]),
+            "state": "RECOVERY_REQUIRED",
+            "error": "Native service ownership changed or service exited",
+        },
+    )
+    service.sync_external()
+
+    rebound = service.current_batch()
+    assert rebound["id"] == batch["id"]
+    assert rebound["state"] == "ACTIVE"
+    assert rebound["adopted"] is True
+    assert rebound["error"] is None
+    assert rebound["adapter_session"]["native_session"] == "sonic-web-replacement"
+    assert rebound["adapter_session"]["output"] == str(replacement)
+    assert rebound["replaced_sessions"][-1]["native_session"] == original[
+        "native_session"
+    ]
+
+
+def test_error_native_session_is_adopted_as_recovery(onboard):
+    settings, native = onboard
+    settings.capture["adopt_existing_session"] = True
+    output = native.repo / "outputs/native-error/transfer-box-error"
+    output.mkdir(parents=True)
+    native.state.update(
+        phase="error",
+        error="collection sources did not become ready",
+        session="sonic-web-error",
+        output=str(output),
+        task="Transfer the box",
+        raw_only=True,
+    )
+    service = CaptureService(settings)
+    service.sync_external()
+    batch = service.current_batch()
+    assert batch["state"] == "RECOVERY_REQUIRED"
+    assert batch["adopted"] is True
+    assert batch["error"] == "collection sources did not become ready"
+    assert batch["adapter_session"]["native_session"] == "sonic-web-error"
+
+
 def test_common_http_api_is_public_and_options_episode_commands_validated(onboard):
     settings, native = onboard
     app = create_app(settings, background=False)
@@ -794,7 +917,7 @@ def test_prepare_bootstraps_configured_robotics_and_native_web_only(
         command[command.index("--deploy-obs-config") + 1]
         == "policy/sonic_v1_1/observation_config.yaml"
     )
-    assert command[command.index("--camera-depth") + 1] == "off"
+    assert "--camera-depth" not in command
     assert command[command.index("--pose-walk-max-speed") + 1] == "0.3"
     assert "--raw-only" in command and "--pose-walk" in command
     assert not any(route == "/api/collection/start" for _, route, _ in native.calls)
