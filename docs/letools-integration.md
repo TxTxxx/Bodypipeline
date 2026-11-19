@@ -246,6 +246,14 @@ Visualizer 时重新构建，无需重新转换数据集。
 原始采样和单位不变，支持图例开关、时间联动、通道筛选和单列放大。三路视频等宽铺满，
 保持画面比例，顺序为左腕、Head、右腕；支持隐藏、恢复、放大和 Esc 退出放大。
 
+“Episode 时长”统计（最短、最长、平均值、中位数、标准差和分布直方图）和“Episode 时长筛选”
+对 LeRobot v2.1 与 v3.0 数据集都可用，不由机器人型号决定。v3.0 从
+`meta/episodes/*.parquet` 读取每段 `length`，v2.1 从 `meta/episodes.jsonl` 逐行读取同样的
+`episode_index` / `length`，统一除以 `meta/info.json` 的 `fps` 换算秒数后再统计。缺少 `length`、
+文件不可读或版本不受支持时这两块保持隐藏，而不是回退成按总帧数估算平均时长。
+`pipeline/server/viewer_episode_lengths.patch` 同样参与构建指纹，部署后重启 Viewer
+会自动重建，不需要转换数据集或改动服务端数据。
+
 工作台、预览、登录和质检报告默认使用深夜模式，可切换浅色。`pipeline/web/theme.js`
 通过同主机 Cookie 在 Server / Viewer 端口间共享偏好，并用 localStorage 保留设置。
 页面头部先初始化主题，避免进入页面时闪白。所有展示补丁、UI 源文件与主题脚本都参与
@@ -288,10 +296,86 @@ bash scripts/install_visualizer_zh_patch.sh
 - 这是展示层补丁，不改变 Doctor 检查项、数据读取、转换或任何质量判定；
 - 上游业务逻辑与组件结构不变，升级 letools 时需要重新核对补丁是否仍能干净应用；
 - 报告中 Doctor 的逐条明细仍保留英文原文，便于与上游工具对照；
-- `--no-annotations` 仍然生效，标注页只做本地会话内编辑，不写回数据集；
+- `--no-annotations` 仍然生效。对 Server 登记的 `bp/<preview-id>` 数据集，任务模板标注与语言 / VQA 共用服务端草稿和版本号，保存不改来源数据集；普通 Hub / 本地独立预览仍保留浏览器编辑模式；
 - Doctor 标签页里的报告由 letools 以硬编码深色样式渲染，因此宿主在
   `pipeline/server/viewer.py` 的 Viewer Gateway 中给 `/_data/doctor` 注入共享主题，
   不 fork 固定版本工具链。该路由只在 Viewer 进程内生效，改动后需重启 `bodypipeline-viewer`。
+
+任务标注时，视频与播放条固定在标注区上方，向下编辑字段时仍可查看画面。时间轴的普通点击和拖动只定位视频；按住 **Shift** 在空白轨道拖动新建片段，在已有片段上拖动移动片段，在左右边缘拖动调整边界。片段边界吸附源帧，视频预览按鼠标所在的实际时间定位；点击片段不会强制跳回其起点。
+
+右键时间轴片段或左侧记录可删除这条标注，右下角提供撤销。`NULL · 无任务片段` 表示已经确认没有任务内容，和仍未标注的空白区分保存。服务端模式每帧只允许一个 Subtask，Subtask / NULL 片段之间不能重叠。
+
+### 3.7 AI 初标、人工修订与服务端保存
+
+自动标注页可以选择工作区里保存的同一共享模板。AI 使用冻结的固定 Subtask ID 和字段定义生成初稿，导出时携带完整 `task_document`，新工作区直接恢复该模板、逐次尝试、评分、备注和作用范围；不再把模板任务的自由动作描述追加成新 Subtask。模板输出校验失败的 Episode 会明确标记失败。原来的自由分析模式继续保留。安装和本地离线演示见 [自动标注任务](deployment.md#641-自动标注任务)。
+
+管理台现有 AI 标注流程生成 Subtask 数据集后，在 Viewer 打开其预览。新时间轴直接加载该数据集的 AI / 来源片段；同名的多次尝试各自保留 ID、边界和评分。新工作区负责 Subtask / NULL、Episode 评价和单帧字段；下方的「更多标注：语言、计划与 VQA」继续编辑非 Subtask 内容，共用一次保存和一次导出。
+
+- **保存到服务器**：`POST /api/subtask-review/<dataset-id>/episodes/<episode>` 同时保存 `segments`、完整 `task_document` 和手动 / VQA `atoms`。草稿位于 Server `state/subtask_draft/`，每次保存先写 `state/subtask_draft_history/` 历史，再发布新版本。另一窗口已保存或来源变化时返回 409，不覆盖旧版本。
+- **共用任务模板**：`GET/POST /api/task-templates` 通过同源 Viewer Gateway 访问服务端模板库，保存需要模板库 `revision`。已保存 Episode 的模板快照和填写结果随草稿保留；重新打开时在页面应用共用模板的最新字段，核对后再保存。改变已填写字段的类型或作用范围时，旧值以「历史字段」保留。新 Episode 沿用数据集最近绑定的模板，同类数据集也可选择同一模板。
+- **浏览器恢复**：未保存的完整工作区以 sessionStorage 做本窗口备份，返回 Episode 时可恢复；它不是已保存服务器的替代。旧版 localStorage 记录通过「导入浏览器旧标注」显式载入，核对后再保存，不自动覆盖 AI / 服务端草稿，原记录保留。
+- **导出修订数据集**：先保存当前修改，再使用原有修订导出队列生成独立 v3.0 副本。每帧 `subtask_index` 和 `meta/subtasks.parquet` 表达最终 Subtask；`meta/bodypipeline-task-annotations.json` 无损保存模板、各作用范围的自定义值、尝试 ID、NULL 和单帧备注。NULL 与未标注空白在逐帧标签中均为 -1，通过该 sidecar 区分；相邻同名尝试也通过 sidecar 保持独立。语言 / VQA 仍通过 `meta/bodypipeline-manual-annotations.json` 保存。
+- **重新打开**：修订副本的预览同时读取逐帧标签与任务 sidecar，核对语义覆盖一致后恢复新界面。后续人工修改不会影响已排队导出的快照。重新运行 AI 仍生成独立候选数据集；如果复制的旧任务 sidecar 已不适用于新标签，会作为 `meta/bodypipeline-task-annotations-source-*.json` 归档，不作为候选结果的当前标注。
+
+这些字段通过 sidecar 随修订数据集交付，尚未将星级、备注等自定义字段展开成训练 Parquet 列。永久清理导致来源签名或 Episode 编号变化时，旧服务端草稿拒绝自动套用，需要重新核对。
+
+### 3.8 本机 Mock 标注预览
+
+已有 Python 基础环境、固定版本 letools、Node.js、Bun 和 FFmpeg 时，可准备一份独立的 Viewer 缓存并启动本机演示：
+
+```bash
+.runtime/letools-venv/bin/letools visualizer setup --cache-dir .runtime/annotation-preview/viewer
+uv run --with pyarrow python scripts/preview_annotations.py
+```
+
+脚本会应用本仓库的 Viewer 补丁，生成两条含三路合成视频的 LeRobot v2.1 数据，并启动 Mock Client（18080）、Server（18081）和 Viewer（18082，内部 UI 13100）。这些服务只监听 `127.0.0.1`，运行数据及配置位于 `.runtime/annotation-preview/`。打开 `http://127.0.0.1:18082/annotation-demo.html`，演示登录密码为 `annotation-demo`，按 Ctrl+C 停止本次服务。
+
+### 批量视频预览
+
+管理台“预览与质检”的数据集行增加“批量预览”，单条 Viewer 的侧边栏也可进入。
+页面路径为 `/<org>/<dataset>/batch`，支持每批 **4 / 9 / 16 / 32** 个 Episode，
+统一选择摄像头、静音播放/暂停、0.5–4 倍速、从头播放、按各自时长百分比定位与翻批。
+视频播完停在末帧；v3.0 共享视频文件按各 Episode 的摄像头时间范围播放。
+双击画面或点放大按钮可放大，Esc 返回，原播放器与播放位置保留。
+每格可标记“待检查”、筛选待检查数据，或进入现有单条标注页面。
+
+待检查标记与单条 Viewer 的旗标共用，按数据集保存在当前浏览器 `localStorage`，
+刷新仍保留、同源标签页同步，不作为服务端标注字段导出。标记与编号版本在同一条记录中保存，
+永久清理后按顺序补齐错过的映射；服务端保留最近 32 次清理历史。
+若旧浏览器标记没有版本、或所需历史已不存在，原记录保留但不显示在新的 Episode 上，
+页面提示重新核查，避免静默标错视频。升级后的记录使用 `bodypipeline:review-flags:v2:`，
+旧 v1 记录不删除。浏览器存储失败时保留本页修改；恢复写入时不以旧存储覆盖本页记录，
+若其他标签页在此期间也已更新，则暂停同步并提示核对。
+
+标记的真实 Chrome 组件回归可独立运行（不启动生产服务、不写采集数据）：
+
+```bash
+# 在独立目录安装测试依赖，避免改动项目依赖。
+npm install --prefix "$TMPDIR/bodypipeline-browser-tests" react@19 react-dom@19 esbuild playwright-core
+NODE_PATH="$TMPDIR/bodypipeline-browser-tests/node_modules" node tests/browser/review-flags.cjs
+# 非 macOS 默认 Chrome 路径时，通过 CHROME_BIN 指定浏览器可执行文件。
+```
+
+该测试使用原标记 Context 和批量页组件，目录与回收站响应受控；不替代真实视频性能验收。
+旧版无数据集归属的 `sessionStorage` 旗标不会自动分配给某个数据集。
+软删除的 Episode 不进入批量播放；切换批次或视角会暂停并释放上一批播放器。
+后台标签页暂停，重新聚焦会刷新目录，以读取其他窗口的清理结果。
+仅读取 Episode 元数据，不读取逐帧动作数据，也不使用帧总览的抽样上限。
+小屏幕减少网格列数，32 路仍可用，必要时滚动查看；实际解码流畅度取决于视频分辨率和设备。
+
+本地 40 条数据演示（3 个视角，6 / 9 / 12 秒，含冻结和偏暗画面）：
+
+```bash
+uv run --with pyarrow python scripts/preview_annotations.py --batch \
+  --viewer-source .runtime/annotation-preview/viewer/source
+```
+
+启动后使用终端打印的批量预览链接，密码同为 `annotation-demo`。
+mock 数据单独写入 `datasets/mock-batch-preview-v1`，保留原两条标注演示数据。
+
+脚本首次启动会通过真实保存接口在演示 Server 中建立示例模板、重试片段和评价；已有服务端草稿不会被覆盖。演示入口保留旧浏览器示例，便于手动验证旧记录导入。可用 `--viewer-source <独立缓存>/source` 选择其他固定版本的演示源码缓存；该缓存会被应用界面补丁并采用本机字体，不要指向正在使用的生产 Viewer 缓存。
+
+预览需要可用的 LeTools Python 环境读取源数据并执行修订导出，使用合成数据，不会调用付费 AI 或连接机器人。浏览器新窗口打开后可以读取已保存的 Server 草稿。
 
 ## 4. 与上游协作
 
@@ -349,3 +433,49 @@ Viewer 侧边栏垃圾箱按钮位于标记按钮左侧，数据集回收站地�
 验证：`tests/test_recycle.py` 测试 API、权限、路径约束及持久化；
 `tests/fixtures/recycle_scenario.py` 在独立 letools 环境中验证共享数据/视频的
 实际删除、非关键帧边界、全部清空，以及发布前后中断恢复。
+
+## 7. 首尾静止帧裁剪
+
+`pipeline.server.stationary_trim` 只包含策略校验、特征解析和边界检测，可同时在
+Server 进程和 letools 环境中导入。`pipeline.server.trim_worker` 在 letools Python
+环境执行 `detect` 或 `trim`：读取每个 Episode 的数值特征，按 Provider 解析后的
+阈值判断运动，只裁剪首尾空闲区间，并把同一区间应用到全部相机视频。
+
+worker 不调用 Doctor 的 `trim_dataset()`，因为该实现覆盖向量动作、视频同步和
+元数据的范围不完整。裁剪后重新编号 Episode、`frame_index`、全局 `index`、时间
+戳、tasks、split 和统计信息，v2.1 与 v3.0 分别写入对应元数据格式，再执行
+`validate_dataset(..., deep=True)`。视频复用回收站实现的 GOP 感知剪切：可安全
+保持关键帧时直接复制 packet，否则重新编码 H.264。
+
+同一 worker 也服务于原始数据转换表单中的“转换时自动删除首尾静止帧”：Server
+在转换后对 `work/dataset` 执行 `detect`，确认计划后把结果写入 `work/trimmed`，
+校验 Episode / 帧数一致再原子替换。该路径复用转换任务已打开的 Slurm 分配和日志
+基础设施（`trim-detect` / `trim`），并且始终使用 `remove_fully_static=False`，
+避免转换任务静默丢弃整段 Episode。
+
+验证：`tests/test_stationary_trim.py` 覆盖策略、阈值单位、Preview API、Doctor
+门禁，并在真实 letools 环境中对 v2.1 / v3.0 数据集执行检测和裁剪；
+`tests/fixtures/trim_scenario.py` 生成带首尾静止帧的固定数据集并检查索引、
+时间戳、统计和视频帧数。
+
+## 8. 全程静止区间裁剪
+
+`pipeline.server.static_intervals` 负责全程静止检测：与首尾裁剪共用数值特征、
+单位阈值和 `resolve_policy`，但拥有独立的最短静止时长、抖动容忍、边界余量和最短
+输出片段策略。它返回每个来源 Episode 的保留区间列表，而不是单一首尾范围。
+
+`pipeline.server.trim_worker` 的 `detect-static` 模式读取同一 letools 数据集并输出
+区间计划；`trim` 模式接受 `keep_ranges`，把一个来源 Episode 写成多个输出 Episode。
+数值行、全部相机视频、Episode 编号、`frame_index`、全局 `index`、时间戳、tasks、
+split 和统计都按区间重建。v3.0 共享视频按来源时间范围合并裁剪，v2.1 为每个输出
+Episode 生成独立视频；切点无法安全复用关键帧时重新编码。
+
+转换表单中的“转换时自动删除全程静止区间”调用
+`TrimRunner.apply_intervals_to_conversion`：检测、写入 `work/trimmed`、校验
+Episode / 帧数与计划一致后才原子替换 `work/dataset`。整段静止的 Episode 保留并
+标记。该选项与 `trim_idle_frames` 互斥。
+
+验证：`tests/test_static_intervals.py` 覆盖策略、抖动容忍、整段静止、短片段回退、
+API 互斥与真实 letools 多区间裁剪；`tests/fixtures/static_scenario.py` 构造含中间
+静止段和整段静止 Episode 的 v2.1 / v3.0 数据集，检查拆分长度、索引、状态和视频
+帧数。`tests/test_stationary_trim.py` 另覆盖转换任务内的实际执行与溯源文件。

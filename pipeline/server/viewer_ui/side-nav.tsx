@@ -37,7 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onEpisodeSelect,
 }) => {
   const [mobileVisible, setMobileVisible] = useState(false);
-  const { flagged, count, toggle } = useFlaggedEpisodes();
+  const { flagged, count, toggle, remap, canReload, storageError } = useFlaggedEpisodes();
   const { result: scores, retry: retryScores } = useEpisodeScores(datasetInfo.repoId);
   const scoreByEpisode = useMemo(() => new Map(scores.report?.episodes.map(row => [row.episode_index, row]) || []), [scores.report]);
   const [recycle, setRecycle] = useState<{entries: {episode: number}[]; revision: number; total_episodes: number; operation?: {id: string; state: string; mapping?: Record<string, number>}} | null>(null);
@@ -47,18 +47,27 @@ const Sidebar: React.FC<SidebarProps> = ({
   const api = `/api/recycle/${encodeURIComponent(datasetInfo.repoId.split("/")[1])}`;
   useEffect(() => {
     let active = true;
+    let request = 0;
     const load = async () => {
+      const current = ++request;
       try {
         const response = await fetch(api, {cache: "no-store"});
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || "无法读取回收站");
-        if (active) {
+        if (active && current === request) {
+          if (!remap(result)) {
+            setNotice("待检查版本已更新，请重试");
+            return;
+          }
           const operation = result.operation;
           if (operation?.state === "completed") {
             const key = `recycle-generation:${datasetInfo.repoId}`;
             if (sessionStorage.getItem(key) !== operation.id) {
-              const previous: number[] = JSON.parse(sessionStorage.getItem("flagged-episodes") || "[]");
-              sessionStorage.setItem("flagged-episodes", JSON.stringify(previous.filter(i => operation.mapping?.[i] !== undefined).map(i => operation.mapping[i])));
+              if (!canReload()) {
+                setRecycle(result);
+                setNotice("编号已更新；本页待检查记录尚未保存，暂停自动刷新，请核对浏览器存储");
+                return;
+              }
               sessionStorage.setItem(key, operation.id);
               window.location.reload();
               return;
@@ -66,13 +75,13 @@ const Sidebar: React.FC<SidebarProps> = ({
           }
           setRecycle(result);
         }
-      } catch (error) { if (active) setNotice(String(error instanceof Error ? error.message : error)); }
+      } catch (error) { if (active && current === request) setNotice(String(error instanceof Error ? error.message : error)); }
     };
     void load();
     const timer = setInterval(load, 5000);
     window.addEventListener("focus", load);
     return () => { active = false; clearInterval(timer); window.removeEventListener("focus", load); };
-  }, [api, datasetInfo.repoId]);
+  }, [api, datasetInfo.repoId, remap, canReload]);
   const trashed = useMemo(() => new Set(recycle?.entries.map(e => e.episode) || []), [recycle]);
   const cleaning = ["pending", "running"].includes(recycle?.operation?.state || "");
   async function changeEpisode(episode: number, action: "trash" | "restore") {
@@ -127,6 +136,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         </dl>
 
         <EpisodeScorePanel result={scores} episodeId={episodeId} retry={retryScores} />
+
+        <a href={`/${datasetInfo.repoId}/batch`} className="pipeline-batch-link"><span aria-hidden="true">▦</span> 批量视频预览</a>
+        {storageError && <p role="alert" className="pipeline-recycle-notice">{storageError}</p>}
 
         <a href={`/${datasetInfo.repoId}/trash`} className="pipeline-recycle-link"><TrashIcon /> 回收站 <span>{recycle?.entries.length ?? "…"}</span></a>
         {notice && <div role="status" className="pipeline-recycle-notice">{notice} {undo !== null && <button disabled={busy || cleaning} onClick={() => changeEpisode(undo, "restore")}>撤销</button>}</div>}

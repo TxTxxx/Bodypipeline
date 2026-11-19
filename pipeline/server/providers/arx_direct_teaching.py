@@ -6,6 +6,7 @@ import io
 import json
 import math
 import os
+from functools import partial
 from pathlib import Path
 
 import h5py
@@ -20,6 +21,7 @@ from ..episode_validation import EpisodeValidationError
 from ..quality import validate_robot_policy
 from .aloha_hdf5 import AlohaHDF5Provider
 from .gripper_closure import capabilities, correct_actions
+from .hdf5_images import copy_images, inspect_images
 from .raw_contract import RawFileContract
 
 RAW_FORMAT = "arx_direct_teaching_hdf5_v1"
@@ -60,6 +62,14 @@ def _self_contained(group, seen=None):
         if not isinstance(group.get(key, getlink=True), h5py.HardLink):
             raise EpisodeValidationError("ARX HDF5 不允许外部或软链接")
         _self_contained(group[key], seen)
+
+
+def _image_size(frame, name):
+    with Image.open(io.BytesIO(np.asarray(frame, dtype=np.uint8).tobytes())) as image:
+        image.load()
+        if image.format != "JPEG" or image.mode != "RGB":
+            raise EpisodeValidationError(f"ARX 相机不是 RGB JPEG：{name}")
+        return image.size
 
 
 def _read(
@@ -176,18 +186,10 @@ def _read(
                 if ds.ndim not in (1, 2) or len(ds) != n:
                     raise EpisodeValidationError(f"ARX 相机帧数不匹配：{name}")
                 size = None
-                for frame in ds:
-                    with Image.open(
-                        io.BytesIO(np.asarray(frame, dtype=np.uint8).tobytes())
-                    ) as image:
-                        image.load()
-                        if image.format != "JPEG" or image.mode != "RGB":
-                            raise EpisodeValidationError(
-                                f"ARX 相机不是 RGB JPEG：{name}"
-                            )
-                        if size is not None and size != image.size:
-                            raise EpisodeValidationError(f"ARX 相机分辨率变化：{name}")
-                        size = image.size
+                for current_size in inspect_images(ds, partial(_image_size, name=name)):
+                    if size is not None and size != current_size:
+                        raise EpisodeValidationError(f"ARX 相机分辨率变化：{name}")
+                    size = current_size
                 cameras[name] = size
             metadata = {}
             if "metadata" in h:
@@ -384,8 +386,7 @@ class ARXDirectTeachingProvider(AlohaHDF5Provider):
                         dtype=h5py.vlen_dtype(np.dtype("uint8")),
                     )
                     ds.attrs.update(width=width, height=height, encoded_format="jpeg")
-                    for i, source_index in enumerate(indices):
-                        ds[i] = source[f"observations/images/{name}"][int(source_index)]
+                    copy_images(source[f"observations/images/{name}"], ds, indices)
             os.replace(temporary, aligned)
         except BaseException:
             temporary.unlink(missing_ok=True)

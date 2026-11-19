@@ -26,6 +26,70 @@ def annotation_rig(profile: dict) -> str:
     return rig
 
 
+def configured_trim_policy(profile: dict) -> dict:
+    """Read the optional trusted ``trim`` block a Profile may declare.
+
+    Providers whose data needs different signal semantics or thresholds override
+    this method; the Server never guesses them from the robot model.
+    """
+
+    config = profile.get("trim")
+    if not isinstance(config, dict):
+        return {}
+    allowed = (
+        "feature",
+        "candidate_features",
+        "unit_thresholds",
+        "default_threshold",
+        "threshold_per_frame",
+        "trim_start",
+        "trim_end",
+        "min_idle_seconds",
+        "min_active_seconds",
+        "padding_before_seconds",
+        "padding_after_seconds",
+        "remove_fully_static",
+    )
+    return {key: config[key] for key in allowed if key in config}
+
+
+def configured_interval_policy(profile: dict) -> dict:
+    """Read the optional trusted ``static_intervals`` block a Profile declares.
+
+    Whole-recording static detection reuses the signal definition of the
+    ``trim`` block (feature, candidate features, units and thresholds) but keeps
+    its own timing defaults. A Profile that declares only ``trim`` therefore
+    still gets consistent motion semantics, while the longer static threshold is
+    never inherited from a boundary rule.
+    """
+
+    signal_keys = (
+        "feature",
+        "candidate_features",
+        "unit_thresholds",
+        "default_threshold",
+        "threshold_per_frame",
+    )
+    values: dict = {}
+    trim = profile.get("trim")
+    if isinstance(trim, dict):
+        for key in signal_keys:
+            if key in trim:
+                values[key] = trim[key]
+    config = profile.get("static_intervals")
+    if isinstance(config, dict):
+        values.update(config)
+    allowed = (
+        *signal_keys,
+        "min_static_seconds",
+        "min_motion_seconds",
+        "jitter_amplitude_seconds",
+        "padding_seconds",
+        "min_output_seconds",
+    )
+    return {key: values[key] for key in allowed if key in values}
+
+
 class RobotProvider(Protocol):
     """Robot-specific conversion boundary.
 
@@ -102,10 +166,31 @@ class RobotProvider(Protocol):
         """
         return {"rig": annotation_rig(profile), "cameras": {}}
 
+    def stationary_trim_policy(self, profile: dict) -> dict:
+        """Trusted idle-frame detection configuration, or ``{}`` to use units.
+
+        Boundary trimming must compare movement in the signal that actually
+        reflects the robot's motion. A Profile whose action is a velocity or a
+        motion token declares that here instead of letting the Server infer it.
+        """
+        return configured_trim_policy(profile)
+
+    def stationary_interval_policy(self, profile: dict) -> dict:
+        """Trusted whole-recording static-interval configuration.
+
+        Removing sustained static spans (including mid-recording pauses) needs
+        both motion semantics and its own timing thresholds. Providers that use
+        a different signal override this hook; the page and jobs never branch on
+        a robot model.
+        """
+        return configured_interval_policy(profile)
+
 
 __all__ = [
     "ANNOTATION_RIGS",
     "RobotProvider",
     "RobotRuntime",
     "annotation_rig",
+    "configured_interval_policy",
+    "configured_trim_policy",
 ]

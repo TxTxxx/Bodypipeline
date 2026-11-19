@@ -385,6 +385,7 @@ def test_viewer_patch_is_version_checked_and_idempotent(tmp_path):
 
 
 def test_presentation_patch_accepts_an_already_patched_source(tmp_path, monkeypatch):
+    from pipeline.server import viewer_batch_preview, viewer_task_annotations
     from pipeline.server import viewer_bootstrap as bootstrap
 
     source = tmp_path / "source"
@@ -439,8 +440,11 @@ def test_presentation_patch_accepts_an_already_patched_source(tmp_path, monkeypa
 
     monkeypatch.setattr(bootstrap, "UI_ASSETS", assets)
     monkeypatch.setattr(bootstrap, "patch_score_filter", lambda cache: None)
+    monkeypatch.setattr(bootstrap, "patch_episode_lengths", lambda cache: None)
     monkeypatch.setattr(bootstrap, "patch_subtask_review", lambda cache: None)
     monkeypatch.setattr(bootstrap, "patch_instruction_editor", lambda cache: None)
+    monkeypatch.setattr(viewer_task_annotations, "patch_task_annotations", lambda cache: None)
+    monkeypatch.setattr(viewer_batch_preview, "patch_batch_preview", lambda cache: None)
 
     bootstrap.patch_presentation(tmp_path)
 
@@ -485,6 +489,9 @@ def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     score_filter_patch = tmp_path / "score-filter.patch"
     score_filter_patch.write_text("score-filter-v1")
     monkeypatch.setattr(bootstrap, "SCORE_FILTER_PATCH", score_filter_patch)
+    episode_lengths_patch = tmp_path / "episode-lengths.patch"
+    episode_lengths_patch.write_text("episode-lengths-v1")
+    monkeypatch.setattr(bootstrap, "EPISODE_LENGTHS_PATCH", episode_lengths_patch)
     (tmp_path / "source/.next").mkdir(parents=True)
     (tmp_path / ".letools-source.json").write_text(json.dumps({"fingerprint": "f1"}))
     builds = []
@@ -514,6 +521,9 @@ def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     score_filter_patch.write_text("score-filter-v2")
     bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
     assert len(builds) == 7
+    episode_lengths_patch.write_text("episode-lengths-v2")
+    bootstrap.build_if_needed(tmp_path, "bun", {}, "http://y/_data")
+    assert len(builds) == 8
 
 
 def test_corrupt_viewer_state_is_not_reported_as_stopped(settings_factory):
