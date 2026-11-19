@@ -282,7 +282,12 @@ def _rollback(root: Path, journal: dict):
 
 
 def _write_journal(path: Path, row: dict):
-    path.write_text(json.dumps(row, indent=2), encoding="utf-8")
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, indent=2))
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
     _fsync_dir(path.parent)
 
 
@@ -424,17 +429,19 @@ def apply_instructions(spec: dict) -> dict:
         validation = validate_dataset(root, deep=True)
         if not validation.valid:
             raise ValueError("LeTools 校验失败：" + str(validation))
-        journal["state"] = "committed"
-        journal["validation"] = {"valid": True}
-        _write_journal(journal_path, journal)
-        shutil.rmtree(stage, ignore_errors=True)
-        shutil.rmtree(backup, ignore_errors=True)
-        return {
+        report = {
             "updated_episodes": sorted(assignments),
             "rewritten_shards": rewritten_shards,
             "total_tasks": len(tasks),
             "noop": False,
         }
+        journal["state"] = "committed"
+        journal["validation"] = {"valid": True}
+        journal["report"] = report
+        _write_journal(journal_path, journal)
+        shutil.rmtree(stage, ignore_errors=True)
+        shutil.rmtree(backup, ignore_errors=True)
+        return report
     except Exception as exc:
         _rollback(root, journal)
         journal["state"] = "rolled_back"

@@ -3,12 +3,14 @@
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from pipeline.server.app import create_app
 from pipeline.server.instruction_review import InstructionReview
+from pipeline.server.merges import source_snapshot
 from pipeline.server.recycle import dataset_lock
 from pipeline.server.viewer_data import PreviewRegistry
 
@@ -178,6 +180,261 @@ def test_template_changes_report_removed_values_without_destroying_assignments(i
     assert episode["selections"]["object"] == "蓝色圆柱"
     assert episode["valid"] is False
     assert "已移除选项" in episode["error"]
+
+
+def test_episode_apply_freezes_only_the_requested_episode(instruction_app):
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    head = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    ).json()
+    for episode, selections in (
+        (0, {"object": "蓝色圆柱", "target": "右侧盒子"}),
+        (1, {"object": "红色方块", "target": "左侧盒子"}),
+    ):
+        head = client.put(
+            f"/api/instructions/source/episodes/{episode}",
+            json={**versioned(head), "selections": selections},
+        ).json()
+
+    started = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(head),
+    )
+    assert started.status_code == 202, started.text
+    job = instruction_app.state.runner.store.get(
+        "instruction_apply", started.json()["id"]
+    )
+    assert json.loads(Path(job["spec_path"]).read_text())["assignments"] == [
+        {"episode_index": 0, "instruction": "请将蓝色圆柱放入右侧盒子"}
+    ]
+
+
+def test_active_apply_job_does_not_absorb_a_different_episode_scope(
+    instruction_app,
+):
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    head = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    ).json()
+    for episode, selections in (
+        (0, {"object": "蓝色圆柱", "target": "右侧盒子"}),
+        (1, {"object": "红色方块", "target": "左侧盒子"}),
+    ):
+        head = client.put(
+            f"/api/instructions/source/episodes/{episode}",
+            json={**versioned(head), "selections": selections},
+        ).json()
+
+    first = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(head),
+    )
+    duplicate = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(head),
+    )
+    other_scope = client.post(
+        "/api/instructions/source/episodes/1/apply",
+        json=versioned(head),
+    )
+
+    assert first.status_code == 202, first.text
+    assert duplicate.status_code == 202, duplicate.text
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert other_scope.status_code == 409, other_scope.text
+    assert "另一批语言指令" in other_scope.json()["detail"]
+
+
+def test_unrelated_episode_edit_does_not_invalidate_queued_scoped_apply(
+    instruction_app, monkeypatch
+):
+    runner = instruction_app.state.instruction_apply
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    head = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    ).json()
+    head = client.put(
+        "/api/instructions/source/episodes/0",
+        json={
+            **versioned(head),
+            "selections": {
+                "object": "蓝色圆柱",
+                "target": "右侧盒子",
+            },
+        },
+    ).json()
+    head = client.put(
+        "/api/instructions/source/episodes/1",
+        json={
+            **versioned(head),
+            "selections": {
+                "object": "红色方块",
+                "target": "左侧盒子",
+            },
+        },
+    ).json()
+    queued = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(head),
+    )
+    assert queued.status_code == 202, queued.text
+
+    saved = client.put(
+        "/api/instructions/source/episodes/1",
+        json={
+            **versioned(head),
+            "selections": {
+                "object": "蓝色圆柱",
+                "target": "左侧盒子",
+            },
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    retry = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(saved.json()),
+    )
+    assert retry.status_code == 202, retry.text
+    assert retry.json()["id"] == queued.json()["id"]
+
+    monkeypatch.setattr(
+        runner,
+        "_worker",
+        lambda action, *_args: (
+            {"recovered": []}
+            if action == "recover"
+            else {
+                "updated_episodes": [0],
+                "rewritten_shards": 1,
+                "total_tasks": 2,
+                "noop": False,
+            }
+        ),
+    )
+    runner.tick()
+    completed = runner.store.get("instruction_apply", queued.json()["id"])
+    assert completed["state"] == "CONVERTED", completed
+    assert completed["report"]["updated_episodes"] == [0]
+
+
+def test_apply_failure_runs_transaction_recovery_before_reporting_rolled_back(
+    instruction_app, monkeypatch
+):
+    runner = instruction_app.state.instruction_apply
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    head = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    ).json()
+    head = client.put(
+        "/api/instructions/source/episodes/0",
+        json={
+            **versioned(head),
+            "selections": {
+                "object": "蓝色圆柱",
+                "target": "右侧盒子",
+            },
+        },
+    ).json()
+    queued = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(head),
+    )
+    job = runner.store.get("instruction_apply", queued.json()["id"])
+    marker = runner.settings.root / "partial-write"
+    calls = []
+
+    def fail_after_partial_write(action, *_args):
+        calls.append(action)
+        if action == "recover":
+            marker.unlink(missing_ok=True)
+            return {"recovered": []}
+        marker.write_text("partial")
+        raise RuntimeError("simulated worker timeout")
+
+    monkeypatch.setattr(runner, "_worker", fail_after_partial_write)
+    runner.run(job)
+
+    failed = runner.store.get("instruction_apply", queued.json()["id"])
+    assert failed["state"] == "FAILED", failed
+    assert calls == ["recover", "apply", "recover"]
+    assert not marker.exists()
+
+
+def test_restart_reconciles_a_durable_committed_apply_receipt(instruction_app):
+    runner = instruction_app.state.runner
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    head = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    ).json()
+    head = client.put(
+        "/api/instructions/source/episodes/0",
+        json={
+            **versioned(head),
+            "selections": {
+                "object": "蓝色圆柱",
+                "target": "右侧盒子",
+            },
+        },
+    ).json()
+    queued = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json=versioned(head),
+    ).json()
+    job = runner.store.get("instruction_apply", queued["id"])
+    job.update(state="RUNNING", stage="写入中")
+    runner.store.put("instruction_apply", job["id"], job)
+
+    (runner.settings.root / "source/applied.marker").write_text("committed")
+    receipt = (
+        runner.settings.root
+        / f"source/meta/.bodypipeline-instruction-journal-{job['id']}.json"
+    )
+    receipt.write_text(
+        json.dumps(
+            {
+                "operation_id": job["id"],
+                "state": "committed",
+                "files": [],
+                "validation": {"valid": True},
+                "report": {
+                    "updated_episodes": [0],
+                    "rewritten_shards": 1,
+                    "total_tasks": 2,
+                    "noop": False,
+                },
+            }
+        )
+    )
+
+    restarted = create_app(instruction_app.state.runner.settings, background=False)
+    with client_for(restarted) as restarted_client:
+        completed = restarted.state.runner.store.get(
+            "instruction_apply", job["id"]
+        )
+        assert completed["state"] == "CONVERTED", completed
+        draft = restarted.state.runner.store.get(
+            "instruction_draft", completed["dataset_key"]
+        )
+        snapshot = source_snapshot(Path(completed["dataset_path"]))
+        assert draft["source_signature"] == snapshot["signature"], (
+            draft["source_signature"],
+            snapshot["signature"],
+            draft,
+        )
+        response = restarted_client.get("/api/instructions/source")
+        assert response.status_code == 200, response.text
+    assert completed["report"]["updated_episodes"] == [0]
+    assert not receipt.exists()
 
 
 def test_stale_drafts_source_changes_and_locks_are_rejected(instruction_app):

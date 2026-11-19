@@ -418,6 +418,9 @@ def test_presentation_patch_accepts_an_already_patched_source(tmp_path, monkeypa
         "use-annotation-review.ts": "src/utils/use-annotation-review.ts",
         "instruction-model.ts": "src/utils/instruction-model.ts",
         "instruction-editor.tsx": "src/components/instruction-editor.tsx",
+        "instruction-episode-editor.tsx": (
+            "src/components/instruction-episode-editor.tsx"
+        ),
     }
     for name, target in destinations.items():
         (assets / name).write_text(name)
@@ -443,6 +446,8 @@ def test_presentation_patch_accepts_an_already_patched_source(tmp_path, monkeypa
 
     assert "viewer-tabbar" in episode.read_text()
     assert "videosInfo: sourceVideosInfo" in videos.read_text()
+    for name, target in destinations.items():
+        assert (source / target).read_text() == name
 
 
 def test_instruction_patch_removes_duplicate_navigation_import(tmp_path):

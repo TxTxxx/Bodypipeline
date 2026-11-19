@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   addVariable,
+  appliedInstructionOutcome,
+  mergeSavedEpisodeDraft,
   movePart,
   parseInstructionSource,
   removePart,
@@ -66,5 +68,60 @@ test("template changes drop stale selections and fill missing defaults", () => {
   })).toEqual({
     object: "蓝色圆柱",
     target: "左侧盒子",
+  });
+});
+
+test("a saved episode draft advances its version so a failed apply can retry", () => {
+  const head = {
+    revision: 4,
+    source_signature: "a".repeat(64),
+    template: template(),
+    warnings: [],
+  };
+  const episode = {
+    episode_index: 0,
+    frames: 12,
+    current_instruction: "旧指令",
+    revision: 4,
+    source_signature: "a".repeat(64),
+    has_draft: false,
+    selections: { object: "红色方块", target: "左侧盒子" },
+    rendered: "请将红色方块放入左侧盒子中",
+    valid: true,
+    error: null,
+  };
+  const next = mergeSavedEpisodeDraft(head, episode, {
+    revision: 5,
+    source_signature: "b".repeat(64),
+    selections: { object: "蓝色圆柱", target: "右侧盒子" },
+    rendered: "请将蓝色圆柱放入右侧盒子中",
+  });
+
+  expect(next.head.revision).toBe(5);
+  expect(next.head.source_signature).toBe("b".repeat(64));
+  expect(next.episode.revision).toBe(5);
+  expect(next.episode.source_signature).toBe("b".repeat(64));
+  expect(next.episode.has_draft).toBeTrue();
+  expect(next.episode.current_instruction).toBe("旧指令");
+});
+
+test("a failed post-apply refresh requires reload instead of claiming success", () => {
+  expect(
+    appliedInstructionOutcome(
+      false,
+      "Episode 0 的指令已写入原数据集",
+    ),
+  ).toEqual({
+    notice: "",
+    refreshRequired: true,
+  });
+  expect(
+    appliedInstructionOutcome(
+      true,
+      "Episode 0 的指令已写入原数据集",
+    ),
+  ).toEqual({
+    notice: "Episode 0 的指令已写入原数据集",
+    refreshRequired: false,
   });
 });

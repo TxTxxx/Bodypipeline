@@ -163,6 +163,9 @@ def patch_presentation(cache: Path):
         "use-annotation-review.ts": "src/utils/use-annotation-review.ts",
         "instruction-model.ts": "src/utils/instruction-model.ts",
         "instruction-editor.tsx": "src/components/instruction-editor.tsx",
+        "instruction-episode-editor.tsx": (
+            "src/components/instruction-episode-editor.tsx"
+        ),
     }
     for name, target in destinations.items():
         (source / target).write_bytes((UI_ASSETS / name).read_bytes())

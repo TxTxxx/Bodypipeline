@@ -129,6 +129,94 @@ def test_apply_job_rewrites_real_dataset_in_place_and_updates_viewer(
     assert validation.returncode == 0, validation.stdout + validation.stderr
 
 
+def test_episode_apply_rewrites_only_the_requested_episode(
+    settings_factory, tmp_path, letools_binary
+):
+    python = str(Path(letools_binary).with_name("python"))
+    fixtures = tmp_path / "fixtures"
+    subprocess.run(
+        [python, str(SCENARIO), "create", str(fixtures), "v3.0"], check=True
+    )
+    dataset = fixtures / "input-0"
+    settings = settings_factory(
+        "server", letools_bin=letools_binary, import_roots=[fixtures]
+    )
+    app = create_app(settings, background=False)
+    runner = app.state.runner
+    runner.store.put(
+        "job",
+        "source",
+        {
+            "id": "source",
+            "state": "CONVERTED",
+            "dataset_path": str(dataset),
+            "dataset_name": "fixture",
+            "created_at": 1,
+            "robot_type": "test_arm",
+        },
+    )
+    PreviewRegistry(runner.store, settings.viewer_ttl).register("source", dataset)
+    client = TestClient(app, headers=admin(app))
+
+    template = instructions_template()
+    template["variables"]["object"]["options"] = ["蓝色圆柱", "红色方块"]
+    template["variables"]["target"]["options"] = ["右侧盒子", "左侧盒子"]
+    head = client.get("/api/instructions/source").json()
+    saved = client.put(
+        "/api/instructions/source/template",
+        json={
+            "revision": head["revision"],
+            "source_signature": head["source_signature"],
+            "template": template,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    head = saved.json()
+
+    for episode, selections in (
+        (0, {"object": "蓝色圆柱", "target": "右侧盒子"}),
+        (1, {"object": "红色方块", "target": "左侧盒子"}),
+    ):
+        saved = client.put(
+            f"/api/instructions/source/episodes/{episode}",
+            json={
+                "revision": head["revision"],
+                "source_signature": head["source_signature"],
+                "selections": selections,
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        head = saved.json()
+
+    started = client.post(
+        "/api/instructions/source/episodes/0/apply",
+        json={
+            "revision": head["revision"],
+            "source_signature": head["source_signature"],
+        },
+    )
+    assert started.status_code == 202, started.text
+
+    app.state.instruction_apply.tick()
+    status = client.get(
+        f"/api/instructions/source/apply/{started.json()['id']}"
+    ).json()
+    assert status["state"] == "CONVERTED", status
+    assert status["report"]["updated_episodes"] == [0]
+    assert (
+        client.get("/api/instructions/source/episodes/0").json()[
+            "current_instruction"
+        ]
+        == "请使用蓝色圆柱放入右侧盒子"
+    )
+    assert (
+        client.get("/api/instructions/source/episodes/1").json()[
+            "current_instruction"
+        ]
+        == "place"
+    )
+
+
 def test_gateway_proxies_only_registered_instruction_identities(settings_factory, monkeypatch):
     settings = settings_factory("viewer")
     # The gateway validates against the same persisted preview registry.
@@ -164,5 +252,14 @@ def test_gateway_proxies_only_registered_instruction_identities(settings_factory
             client.get("/api/instructions/missing", headers=headers).status_code
             == 404
         )
-        assert len(calls) == 1
+        applied = client.post(
+            "/api/instructions/source/episodes/0/apply",
+            headers=headers,
+            json={"revision": 4, "source_signature": "x" * 64},
+        )
+        assert applied.status_code == 200, applied.text
+        assert str(calls[-1].url).endswith(
+            "/api/instructions/source/episodes/0/apply"
+        )
+        assert len(calls) == 2
         assert str(calls[0].url).endswith("/api/instructions/source")

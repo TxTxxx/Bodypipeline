@@ -552,6 +552,17 @@ def create_gateway(settings):
             dataset_id, f"episodes/{episode}", body, method="PUT"
         )
 
+    @app.post("/api/instructions/{dataset_id}/episodes/{episode}/apply")
+    async def instruction_episode_apply(
+        dataset_id: str, episode: int, body: ApplyInstructionsRequest
+    ):
+        return await instruction_proxy(
+            dataset_id,
+            f"episodes/{episode}/apply",
+            body,
+            method="POST",
+        )
+
     @app.post("/api/instructions/{dataset_id}/apply")
     async def instruction_apply(
         dataset_id: str, body: ApplyInstructionsRequest

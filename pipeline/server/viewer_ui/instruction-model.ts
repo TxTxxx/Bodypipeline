@@ -31,6 +31,56 @@ export interface MigrationWarning {
   message: string;
 }
 
+export interface SavedEpisodeDraft {
+  revision: number;
+  source_signature: string;
+  selections: Record<string, string>;
+  rendered: string;
+}
+
+export function appliedInstructionOutcome(
+  refreshed: boolean,
+  successNotice: string,
+): { notice: string; refreshRequired: boolean } {
+  return refreshed
+    ? { notice: successNotice, refreshRequired: false }
+    : { notice: "", refreshRequired: true };
+}
+
+export function mergeSavedEpisodeDraft<
+  Head extends { revision: number; source_signature: string },
+  Episode extends {
+    revision: number;
+    source_signature: string;
+    has_draft: boolean;
+    selections: Record<string, string>;
+    rendered: string | null;
+    valid: boolean;
+    error: string | null;
+  },
+>(
+  head: Head,
+  episode: Episode,
+  saved: SavedEpisodeDraft,
+): { head: Head; episode: Episode } {
+  const version = {
+    revision: saved.revision,
+    source_signature: saved.source_signature,
+  };
+  return {
+    head: { ...head, ...version },
+    episode: {
+      ...episode,
+      ...version,
+      has_draft: true,
+      selections: saved.selections,
+      rendered: saved.rendered,
+      valid: true,
+      error: null,
+    },
+  };
+}
+
 export function defaultSelections(template: InstructionTemplate): Record<string, string> {
   return Object.fromEntries(
     Object.entries(template.variables).map(([key, definition]) => [

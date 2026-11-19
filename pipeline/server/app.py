@@ -589,6 +589,17 @@ def create_app(settings, background=True):
     ):
         return instruction_review.save_episode(dataset_id, episode, body)
 
+    @app.post(
+        "/api/instructions/{dataset_id}/episodes/{episode}/apply",
+        status_code=202,
+    )
+    def instruction_episode_apply(
+        dataset_id: str, episode: int, body: ApplyInstructionsRequest
+    ):
+        return instruction_apply.enqueue(
+            dataset_id, body, episode_indices={episode}
+        )
+
     @app.post("/api/instructions/{dataset_id}/apply", status_code=202)
     def instruction_apply_start(
         dataset_id: str, body: ApplyInstructionsRequest

@@ -148,6 +148,14 @@ class InstructionReview:
             )
 
     @staticmethod
+    def _check_source(row, body):
+        if row["source_signature"] != body.source_signature:
+            raise DomainError(
+                "来源数据已变化，请重新加载后再编辑（不会覆盖其他窗口）",
+                409,
+            )
+
+    @staticmethod
     def _episode(data, episode):
         for item in data["episodes"]:
             if item["episode_index"] == episode:
@@ -286,21 +294,37 @@ class InstructionReview:
         self.store.put("instruction_revision", history_id, history)
         self.store.put("instruction_draft", row["id"], row)
 
-    def apply_plan(self, dataset_id, body: ApplyInstructionsRequest):
+    def apply_plan(
+        self,
+        dataset_id,
+        body: ApplyInstructionsRequest,
+        episode_indices: set[int] | None = None,
+        frozen_assignments: dict[int, str] | None = None,
+    ):
         """Called while the apply runner owns the dataset lock."""
 
         key, path, job = self.resolve(dataset_id)
         snapshot = source_snapshot(path)
         data = self._source(path, snapshot)
         row = self._draft(key, path, snapshot, data)
-        self._check(row, body)
+        if frozen_assignments is None:
+            self._check(row, body)
+        else:
+            self._check_source(row, body)
         if not row["episodes"]:
             raise DomainError("请先至少保存一个 Episode 的语言指令", 422)
+        selected = set(map(int, row["episodes"]))
+        if episode_indices is not None:
+            selected &= episode_indices
+            if not selected:
+                raise DomainError("当前 Episode 尚未保存语言指令", 422)
         assignments = {}
         for raw_episode, selections in sorted(
             row["episodes"].items(), key=lambda item: int(item[0])
         ):
             episode = int(raw_episode)
+            if episode not in selected:
+                continue
             self._episode(data, episode)
             try:
                 assignments[episode] = {
@@ -311,13 +335,32 @@ class InstructionReview:
                 raise DomainError(
                     f"Episode {episode} 的指令无效：{exc}", 422
                 ) from exc
+        rendered_assignments = {
+            episode: item["instruction"]
+            for episode, item in assignments.items()
+        }
+        if (
+            frozen_assignments is not None
+            and rendered_assignments != frozen_assignments
+        ):
+            raise DomainError(
+                "排队期间目标 Episode 指令已变化，请重新提交应用", 409
+            )
         return key, path, job, snapshot, row, assignments
 
     def finalize_apply(self, key, expected_signature, report):
         row = self.store.get("instruction_draft", key)
-        if row["source_signature"] != expected_signature:
-            raise DomainError("应用期间指令草稿已变化，请重新加载", 409)
         snapshot = source_snapshot(Path(row["dataset_path"]))
+        operation_id = report.get("operation_id")
+        if (
+            row["source_signature"] != expected_signature
+            and not (
+                operation_id
+                and (row.get("last_apply_report") or {}).get("operation_id")
+                == operation_id
+            )
+        ):
+            raise DomainError("应用期间指令草稿已变化，请重新加载", 409)
         row.update(
             source_signature=snapshot["signature"],
             revision=row["revision"] + 1,

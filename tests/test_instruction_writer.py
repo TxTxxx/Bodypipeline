@@ -66,6 +66,14 @@ def test_real_in_place_rewrite_preserves_paths_and_unassigned_episode(
     payload = json.loads(result.stdout)
     assert payload["updated_episodes"] == [0]
     assert str(dataset.resolve()) == original_path
+    journal = json.loads(
+        (
+            dataset
+            / "meta/.bodypipeline-instruction-journal-real-one.json"
+        ).read_text()
+    )
+    assert journal["state"] == "committed"
+    assert journal["report"]["updated_episodes"] == [0]
 
     loaded = subprocess.run(
         [python, str(WORKER), "read", str(dataset)],
