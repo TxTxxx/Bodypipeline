@@ -9,6 +9,9 @@
     <script src="/assets/clipboard.js" defer></script>
     <link rel="stylesheet" href="/assets/theme.css" />
     <script src="/assets/client-replay.js" defer></script>
+    <script src="/assets/capture-service.js" defer></script>
+    <script src="/assets/capture-telemetry.js" defer></script>
+    <script src="/assets/preview-stream.js" defer></script>
     <script src="/assets/app.js" defer></script>
     <script src="/assets/annotations.js" defer></script>
   </head>
@@ -79,7 +82,7 @@
             <div class="online" id="health-label">检查服务状态…</div>
           </div>
           <div id="notice" role="status" hidden></div>
-          <section id="client-view" hidden>
+          <section id="client-view" class="sonic-workbench" hidden>
             <div class="warning" id="mock-warning">
               模拟模式：相机与关节数据由程序生成，不连接真实机器人。
             </div>
@@ -92,6 +95,7 @@
                   <div class="preview-controls"><label for="preview-quality" class="sr-only">预览画质</label><select id="preview-quality"><option value="low">省流预览 · 320px</option><option value="full">清晰预览 · 640px</option></select><button id="preview-toggle" class="secondary" type="button">暂停预览</button></div>
                 </div>
                 <p id="preview-note" class="panel-note small muted">预览独立于原始录制；弱网时可暂停</p>
+                <div id="sonic-sources" class="sonic-source-grid" aria-label="数据源状态"></div>
                 <div id="camera-grid" class="camera-grid"></div>
                 <div class="telemetry">
                   <div>
@@ -117,6 +121,18 @@
                   <input id="dataset-name" list="dataset-names" required maxlength="2000" autocomplete="off" placeholder="选择已有数据集，或输入新任务名称" />
                   <datalist id="dataset-names"></datalist>
                   <p id="capture-dataset-summary" class="small muted">同名任务的采集会持续加入同一数据集；训练 instruction 在 Server 转换时填写。</p>
+                  <div id="managed-capture-fields" hidden>
+                    <label for="capture-instruction">任务描述</label>
+                    <textarea id="capture-instruction" rows="3" autocomplete="off"></textarea>
+                    <div id="managed-capture-options" class="capture-options"></div>
+                    <div class="action-row">
+                      <button id="prepare-capture-service" class="secondary" type="button">启动基础服务</button>
+                      <button id="apply-capture-options" class="secondary" type="button">应用采集配置</button>
+                    </div>
+                    <p id="managed-service-status" class="small" role="status"></p>
+                    <div id="managed-source-status" class="action-row" aria-label="数据源状态"></div>
+                    <div id="managed-episode-actions" class="action-row"></div>
+                  </div>
                   <label for="local-root">本地存储 · 机器人文件系统</label
                   ><select id="local-root"></select>
                   <div class="path-hint" id="local-path"></div>
@@ -136,12 +152,37 @@
                   <button class="primary" id="start-button" type="submit">
                     ● 采集下一个 episode
                   </button>
-                  <p class="small muted">
+                  <p class="small muted" id="capture-safety-note">
                     采集服务不会启动机械臂。停止录制 ≠ 机器人急停。
                   </p>
                 </form>
                 <div id="session-actions"></div>
+                <div id="external-batch-actions" hidden></div>
+                <p id="background-transfer-status" class="small muted"></p>
               </section>
+            <section id="sonic-signal-panel" class="panel sonic-signal-panel" hidden>
+              <div class="panel-heading">
+                <div>
+                  <h2>实时曲线</h2>
+                  <p id="capture-telemetry-summary" class="panel-note small muted">
+                    正在读取机器人数值信号…
+                  </p>
+                </div>
+                <span class="step">LIVE TELEMETRY</span>
+              </div>
+              <div class="sonic-signal-toolbar">
+                <label for="sonic-signal-search" class="sr-only">搜索遥测信号</label>
+                <input id="sonic-signal-search" placeholder="搜索 body_q、action、smpl、planner…" autocomplete="off" />
+                <button id="sonic-signal-clear" class="secondary" type="button">清空选择</button>
+              </div>
+              <div id="sonic-signal-list" class="sonic-signal-list" aria-label="遥测信号">
+                <span class="muted">等待数值信号…</span>
+              </div>
+              <div class="sonic-chart-wrap">
+                <canvas id="sonic-signal-chart" aria-label="机器人实时信号曲线"></canvas>
+              </div>
+              <p class="small muted">最多 16 条曲线；横轴为配置的历史窗口，纵轴自动缩放。曲线区域只读。</p>
+            </section>
             </div>
             <section class="panel">
               <div class="panel-heading"><h2>我的数据集</h2><span class="muted small">同一任务持续追加 episodes</span></div>

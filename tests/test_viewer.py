@@ -461,8 +461,109 @@ def test_parquet_zstd_patch_is_idempotent(tmp_path, monkeypatch):
     assert (source / "utils/fzstd.mjs").read_text() == assets.joinpath(
         "fzstd.mjs"
     ).read_text()
+def test_presentation_patch_accepts_an_already_patched_source(tmp_path, monkeypatch):
+    from pipeline.server import (
+        viewer_batch_preview,
+        viewer_manual_trim,
+        viewer_task_annotations,
+    )
+    from pipeline.server import viewer_bootstrap as bootstrap
+
+    source = tmp_path / "source"
+    assets = tmp_path / "assets"
+    episode = source / "src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    videos = source / "src/components/simple-videos-player.tsx"
+    episode.parent.mkdir(parents=True)
+    videos.parent.mkdir(parents=True)
+    assets.mkdir()
+    (source / "src/app/layout.tsx").write_text('<html lang="zh-CN">\n')
+    episode.write_text(
+        '<div className="viewer-tabbar flex">\n'
+        '<div className="viewer-identity">\n'
+    )
+    videos.write_text(
+        "export const SimpleVideosPlayer = ({ videosInfo: sourceVideosInfo }) => {\n"
+        '  const className = "camera-stage camera-view";\n'
+        "};\n"
+    )
+    destinations = {
+        "data-recharts.tsx": "src/components/data-recharts.tsx",
+        "theme-toggle.tsx": "src/components/theme-toggle.tsx",
+        "chart-model.ts": "src/utils/chart-model.ts",
+        "viewer-ui.css": "src/app/viewer-ui.css",
+        "side-nav.tsx": "src/components/side-nav.tsx",
+        "episode-scores.tsx": "src/components/episode-scores.tsx",
+        "episode-score-filter.tsx": "src/components/episode-score-filter.tsx",
+        "episode-score-filter-model.ts": "src/utils/episode-score-filter-model.ts",
+        "subtask-review-model.ts": "src/utils/subtask-review-model.ts",
+        "annotation-review-client.ts": "src/utils/annotation-review-client.ts",
+        "use-annotation-review.ts": "src/utils/use-annotation-review.ts",
+        "manual-trim.tsx": "src/components/manual-trim.tsx",
+        "instruction-model.ts": "src/utils/instruction-model.ts",
+        "instruction-editor.tsx": "src/components/instruction-editor.tsx",
+        "instruction-episode-editor.tsx": (
+            "src/components/instruction-episode-editor.tsx"
+        ),
+    }
+    for name, target in destinations.items():
+        (assets / name).write_text(name)
+        (source / target).parent.mkdir(parents=True, exist_ok=True)
+        (source / target).write_text("old")
+    versions = source / "src/utils/versionUtils.ts"
+    versions.write_text(
+        'import { authHeaders } from "./auth";\n'
+        "const CACHE_TTL_MS = 5 * 60 * 1000;\n"
+        "function cache(repoId, data) {\n"
+        "    datasetInfoCache.set(repoId, {\n"
+        "    });\n"
+        "}\n"
+    )
+    (source / "src/utils/parquetUtils.ts").write_text("const parquetFileCache = new Map();\n")
+
+    monkeypatch.setattr(bootstrap, "UI_ASSETS", assets)
+    monkeypatch.setattr(bootstrap, "patch_score_filter", lambda cache: None)
+    monkeypatch.setattr(bootstrap, "patch_episode_lengths", lambda cache: None)
+    monkeypatch.setattr(bootstrap, "patch_subtask_review", lambda cache: None)
+    monkeypatch.setattr(bootstrap, "patch_parquet_compression", lambda cache: None)
+    monkeypatch.setattr(bootstrap, "patch_instruction_editor", lambda cache: None)
+    monkeypatch.setattr(
+        viewer_task_annotations, "patch_task_annotations", lambda cache: None
+    )
+    monkeypatch.setattr(viewer_manual_trim, "patch_manual_trim", lambda cache: None)
+    monkeypatch.setattr(viewer_batch_preview, "patch_batch_preview", lambda cache: None)
+
+    bootstrap.patch_presentation(tmp_path)
+
+    assert "viewer-tabbar" in episode.read_text()
+    assert "videosInfo: sourceVideosInfo" in videos.read_text()
+    for name, target in destinations.items():
+        assert (source / target).read_text() == name
 
 
+def test_instruction_patch_removes_duplicate_navigation_import(tmp_path):
+    from pipeline.server.viewer_instructions import MARKER, patch_instruction_editor
+
+    page = tmp_path / "source/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    page.parent.mkdir(parents=True)
+    navigation_import = (
+        "import {\n"
+        "  initialEpisodePage,\n"
+        "  pageForEpisode,\n"
+        '} from "@/utils/episode-navigation-state";\n'
+    )
+    page.write_text(
+        navigation_import
+        + MARKER
+        + '\nimport { InstructionEditor } from "@/components/instruction-editor";\n'
+        + navigation_import
+        + "export const viewer = true;\n"
+    )
+
+    patch_instruction_editor(tmp_path)
+
+    patched = page.read_text()
+    assert patched.count(navigation_import) == 1
+    assert "export const viewer = true;" in patched
 def test_build_is_skipped_until_inputs_change(tmp_path, monkeypatch):
     from pipeline.server import viewer_bootstrap as bootstrap
 
