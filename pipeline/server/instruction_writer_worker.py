@@ -264,8 +264,8 @@ def _backup(source: Path, target: Path):
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.link(source, target)
-    except OSError:
-        shutil.copy2(source, target)
+    except OSError as exc:
+        raise OSError(f"无法创建保留 inode 的事务备份：{exc}") from exc
 
 
 def _replace(staged: Path, target: Path):
@@ -462,9 +462,18 @@ def recover(root: Path) -> dict:
         if journal.get("state") == "committed":
             continue
         _rollback(root, journal)
-        journal["state"] = "rolled_back"
-        _write_journal(journal_path, journal)
+        journal_path.unlink()
+        _fsync_dir(journal_path.parent)
         recovered.append(journal["operation_id"])
+    temporary_journals = list(
+        (root / "meta").glob(
+            ".bodypipeline-instruction-journal-*.json.tmp"
+        )
+    )
+    for journal_path in temporary_journals:
+        journal_path.unlink()
+    if temporary_journals:
+        _fsync_dir(root / "meta")
     for directory in (root / "meta").glob(
         ".bodypipeline-instruction-stage-*"
     ):

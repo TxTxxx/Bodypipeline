@@ -2,11 +2,13 @@
 
 import hashlib
 import json
-import shutil
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from pipeline.server.merges import source_snapshot
 
 SCENARIO = Path(__file__).parent / "fixtures/merge_scenario.py"
 WORKER = (
@@ -207,13 +209,15 @@ def test_restart_recovery_rolls_back_an_applied_uncommitted_journal(
         [python, str(SCENARIO), "create", str(fixtures), "v3.0"], check=True
     )
     dataset = fixtures / "input-0"
+    before = source_snapshot(dataset)
     relative = "data/chunk-000/file-000.parquet"
     original = dataset / relative
-    before = hashlib.sha256(original.read_bytes()).hexdigest()
     backup = dataset / "meta/.bodypipeline-instruction-backup-crash" / relative
     backup.parent.mkdir(parents=True)
-    shutil.copy2(original, backup)
-    original.write_bytes(original.read_bytes() + b"interrupted")
+    os.link(original, backup)
+    interrupted = tmp_path / "interrupted.parquet"
+    interrupted.write_bytes(original.read_bytes() + b"interrupted")
+    interrupted.replace(original)
     journal = (
         dataset
         / "meta/.bodypipeline-instruction-journal-crash.json"
@@ -241,7 +245,126 @@ def test_restart_recovery_rolls_back_an_applied_uncommitted_journal(
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["recovered"] == ["crash"]
-    assert hashlib.sha256(original.read_bytes()).hexdigest() == before
+    assert source_snapshot(dataset) == before
+    assert not journal.exists()
     assert not (
         dataset / "meta/.bodypipeline-instruction-backup-crash"
+    ).exists()
+
+
+def test_backup_link_failure_aborts_before_dataset_mutation(
+    tmp_path, letools_binary
+):
+    python = str(Path(letools_binary).with_name("python"))
+    fixtures = tmp_path / "fixtures"
+    subprocess.run(
+        [python, str(SCENARIO), "create", str(fixtures), "v3.0"], check=True
+    )
+    dataset = fixtures / "input-0"
+    before = source_snapshot(dataset)
+    spec = tmp_path / "backup-failure.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "operation_id": "backup-failure",
+                "dataset_path": str(dataset),
+                "assignments": [
+                    {"episode_index": 0, "instruction": "must not apply"}
+                ],
+            }
+        )
+    )
+    code = f"""
+import json
+from pathlib import Path
+from pipeline.server import instruction_writer_worker as worker
+worker.os.link = lambda *args, **kwargs: (_ for _ in ()).throw(
+    OSError("hard links unavailable")
+)
+try:
+    worker.apply_instructions(json.loads(Path({str(spec)!r}).read_text()))
+except Exception as exc:
+    print(type(exc).__name__ + ": " + str(exc))
+    raise SystemExit(7)
+raise SystemExit(0)
+"""
+    result = subprocess.run(
+        [python, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        env={
+            **__import__("os").environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        },
+    )
+
+    assert result.returncode == 7, result.stderr
+    assert "hard links unavailable" in result.stdout
+    assert source_snapshot(dataset) == before
+    assert not (dataset / "meta/.bodypipeline-instruction-backup-backup-failure").exists()
+    assert not (dataset / "meta/.bodypipeline-instruction-stage-backup-failure").exists()
+    assert not (
+        dataset
+        / "meta/.bodypipeline-instruction-journal-backup-failure.json"
+    ).exists()
+
+
+def test_restart_removes_orphaned_journal_temporary_file(
+    tmp_path, letools_binary
+):
+    python = str(Path(letools_binary).with_name("python"))
+    fixtures = tmp_path / "fixtures"
+    subprocess.run(
+        [python, str(SCENARIO), "create", str(fixtures), "v3.0"], check=True
+    )
+    dataset = fixtures / "input-0"
+    before = source_snapshot(dataset)
+    relative = "data/chunk-000/file-000.parquet"
+    original = dataset / relative
+    backup = dataset / "meta/.bodypipeline-instruction-backup-orphan" / relative
+    backup.parent.mkdir(parents=True)
+    os.link(original, backup)
+    staged = (
+        dataset
+        / "meta/.bodypipeline-instruction-stage-orphan"
+        / relative
+    )
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"staged but never installed")
+    journal_tmp = (
+        dataset
+        / "meta/.bodypipeline-instruction-journal-orphan.json.tmp"
+    )
+    journal_tmp.write_text(
+        json.dumps(
+            {
+                "operation_id": "orphan",
+                "state": "prepared",
+                "files": [
+                    {
+                        "path": relative,
+                        "staged": staged.relative_to(dataset).as_posix(),
+                        "backup": backup.relative_to(dataset).as_posix(),
+                    }
+                ],
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [python, str(WORKER), "recover", str(dataset)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["recovered"] == []
+    assert source_snapshot(dataset) == before
+    assert not journal_tmp.exists()
+    assert not (
+        dataset / "meta/.bodypipeline-instruction-backup-orphan"
+    ).exists()
+    assert not (
+        dataset / "meta/.bodypipeline-instruction-stage-orphan"
     ).exists()

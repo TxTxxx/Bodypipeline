@@ -361,6 +361,12 @@ class InstructionReview:
             )
         ):
             raise DomainError("应用期间指令草稿已变化，请重新加载", 409)
+        if (
+            operation_id
+            and (row.get("last_apply_report") or {}).get("operation_id")
+            == operation_id
+        ):
+            return snapshot, row
         row.update(
             source_signature=snapshot["signature"],
             revision=row["revision"] + 1,

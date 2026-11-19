@@ -249,6 +249,52 @@ def test_active_apply_job_does_not_absorb_a_different_episode_scope(
     assert "另一批语言指令" in other_scope.json()["detail"]
 
 
+def test_dataset_apply_reuses_pre_scope_upgrade_active_job(instruction_app):
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    head = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    ).json()
+    head = client.put(
+        "/api/instructions/source/episodes/0",
+        json={
+            **versioned(head),
+            "selections": {
+                "object": "蓝色圆柱",
+                "target": "右侧盒子",
+            },
+        },
+    ).json()
+    review = InstructionReview(
+        instruction_app.state.runner.settings,
+        instruction_app.state.runner.store,
+    )
+    key, path, _ = review.resolve("source")
+    instruction_app.state.runner.store.put(
+        "instruction_apply",
+        "legacy-apply",
+        {
+            "id": "legacy-apply",
+            "dataset_id": "source",
+            "dataset_key": key,
+            "dataset_path": str(path),
+            "source_signature": head["source_signature"],
+            "revision": head["revision"],
+            "fingerprint": "fingerprint-from-scope-less-release",
+            "state": "QUEUED",
+        },
+    )
+
+    duplicate = client.post(
+        "/api/instructions/source/apply",
+        json=versioned(head),
+    )
+
+    assert duplicate.status_code == 202, duplicate.text
+    assert duplicate.json()["id"] == "legacy-apply"
+
+
 def test_unrelated_episode_edit_does_not_invalidate_queued_scoped_apply(
     instruction_app, monkeypatch
 ):
@@ -435,6 +481,45 @@ def test_restart_reconciles_a_durable_committed_apply_receipt(instruction_app):
         assert response.status_code == 200, response.text
     assert completed["report"]["updated_episodes"] == [0]
     assert not receipt.exists()
+
+
+def test_repeated_finalize_for_the_same_apply_is_idempotent(
+    instruction_app, monkeypatch
+):
+    runner = instruction_app.state.runner
+    review = InstructionReview(runner.settings, runner.store)
+    client = client_for(instruction_app)
+    head = client.get("/api/instructions/source").json()
+    saved = client.put(
+        "/api/instructions/source/template",
+        json={**versioned(head), "template": instruction_template()},
+    )
+    assert saved.status_code == 200, saved.text
+    key, _, _ = review.resolve("source")
+    operation = {"operation_id": "duplicate-finalize"}
+    ticks = iter([101.0, 102.0, 201.0, 202.0])
+    monkeypatch.setattr(
+        "pipeline.server.instruction_review.now",
+        lambda: next(ticks),
+    )
+
+    first_snapshot, first = review.finalize_apply(
+        key, saved.json()["source_signature"], operation
+    )
+    first_revision = first["revision"]
+    first_updated_at = first["updated_at"]
+    first_applied_at = first["last_applied_at"]
+    first_history_count = len(runner.store.all("instruction_revision"))
+
+    second_snapshot, second = review.finalize_apply(
+        key, saved.json()["source_signature"], operation
+    )
+
+    assert second_snapshot == first_snapshot
+    assert second["revision"] == first_revision
+    assert second["updated_at"] == first_updated_at
+    assert second["last_applied_at"] == first_applied_at
+    assert len(runner.store.all("instruction_revision")) == first_history_count
 
 
 def test_stale_drafts_source_changes_and_locks_are_rejected(instruction_app):
