@@ -142,6 +142,7 @@ def patch_presentation(cache: Path):
         raise RuntimeError("Unexpected Visualizer source; cannot apply camera order")
     patch_score_filter(cache)
     patch_subtask_review(cache)
+    patch_instruction_editor(cache)
     destinations = {
         "data-recharts.tsx": "src/components/data-recharts.tsx",
         "theme-toggle.tsx": "src/components/theme-toggle.tsx",
@@ -154,6 +155,8 @@ def patch_presentation(cache: Path):
         "subtask-review-model.ts": "src/utils/subtask-review-model.ts",
         "annotation-review-client.ts": "src/utils/annotation-review-client.ts",
         "use-annotation-review.ts": "src/utils/use-annotation-review.ts",
+        "instruction-model.ts": "src/utils/instruction-model.ts",
+        "instruction-editor.tsx": "src/components/instruction-editor.tsx",
     }
     for name, target in destinations.items():
         (source / target).write_bytes((UI_ASSETS / name).read_bytes())
@@ -223,6 +226,12 @@ def patch_subtask_review(cache: Path):
     patch_annotations(cache)
 
 
+def patch_instruction_editor(cache: Path):
+    from .viewer_instructions import patch_instruction_editor as patch
+
+    patch(cache)
+
+
 def _fingerprint(cache: Path, data_origin: str) -> str:
     """Identify the build inputs; the origin is baked into the browser bundle."""
 
@@ -242,6 +251,7 @@ def _fingerprint(cache: Path, data_origin: str) -> str:
                     + THEME_SCRIPT.read_bytes()
                     + Path(__file__).read_bytes()
                     + Path(__file__).with_name("viewer_annotations.py").read_bytes()
+                    + Path(__file__).with_name("viewer_instructions.py").read_bytes()
                     + b"".join(
                         path.name.encode() + path.read_bytes()
                         for path in sorted(UI_ASSETS.iterdir())

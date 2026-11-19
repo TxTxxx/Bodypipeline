@@ -106,6 +106,332 @@ html[data-theme="dark"] .annotations-skin {
   --hf-green: #82dabb;
   --hf-purple: #c2a4ff;
 }
+
+/* Visual language-instruction studio. */
+.instruction-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 1500px;
+  margin: 0 auto;
+  color: var(--text-primary);
+}
+.instruction-editor-empty {
+  display: flex;
+  min-height: 280px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  color: var(--text-muted);
+}
+.instruction-editor-empty.error { color: #d95b6c; }
+.instruction-editor-header,
+.instruction-episode-card,
+.instruction-canvas,
+.instruction-inspector {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-0);
+  box-shadow: 0 8px 28px #0000000d;
+}
+.instruction-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 22px;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 88% 10%, var(--accent-soft), transparent 35%),
+    var(--surface-0);
+}
+.instruction-editor-header h1 {
+  margin: 3px 0 5px;
+  font-size: clamp(22px, 2.2vw, 30px);
+  font-weight: 570;
+  letter-spacing: -0.025em;
+}
+.instruction-editor-header p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.instruction-eyebrow {
+  color: var(--accent) !important;
+  font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+.instruction-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.instruction-button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 560;
+  transition: 140ms ease;
+}
+.instruction-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+.instruction-button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #07101d;
+}
+.instruction-button.danger {
+  border-color: #d45f7155;
+  color: #d95b6c;
+  background: #d45f7110;
+}
+.instruction-button:disabled { cursor: not-allowed; opacity: 0.42; }
+.instruction-message {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 10px 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.instruction-message.error { border-color: #d45f7155; color: #d95b6c; background: #d45f710e; }
+.instruction-message.warning { border-color: #d79a3755; color: #c18425; background: #d79a370e; }
+.instruction-message.success { border-color: #42a97d55; color: #278a61; background: #42a97d0e; }
+.instruction-message.progress { border-color: var(--accent-ring); color: var(--text-primary); background: var(--accent-soft); }
+.instruction-studio-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 16px;
+  align-items: start;
+}
+.instruction-canvas,
+.instruction-inspector,
+.instruction-episode-card { border-radius: 14px; }
+.instruction-canvas { min-width: 0; padding: 20px; }
+.instruction-inspector {
+  position: sticky;
+  top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 18px;
+}
+.instruction-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 15px;
+}
+.instruction-section-heading > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.instruction-section-heading span { font-size: 13px; font-weight: 620; }
+.instruction-section-heading small { color: var(--text-muted); font-size: 10px; }
+.instruction-new-variable {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.7fr;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+.instruction-new-variable input,
+.instruction-inspector input,
+.instruction-inspector textarea,
+.instruction-inspector select,
+.instruction-episode-fields select,
+.instruction-source-editor textarea,
+.instruction-text-part textarea {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font: inherit;
+}
+.instruction-new-variable input { padding: 8px 9px; font-size: 11px; }
+.instruction-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  min-height: 150px;
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(var(--border-subtle) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--surface-1);
+}
+.instruction-text-part {
+  display: flex;
+  min-width: 150px;
+  flex: 1 1 180px;
+  align-items: stretch;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--surface-0);
+}
+.instruction-text-part textarea {
+  min-height: 58px;
+  resize: vertical;
+  border: 0;
+  border-radius: 0;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.instruction-variable-chip {
+  display: flex;
+  min-width: 145px;
+  flex: 0 1 230px;
+  border: 1px solid var(--accent-ring);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-0);
+}
+.instruction-variable-chip.selected {
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.instruction-variable-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10px;
+  color: var(--text-primary);
+}
+.instruction-variable-main small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.instruction-variable-main strong {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instruction-part-tools {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-subtle);
+}
+.instruction-part-tools button {
+  flex: 1;
+  min-width: 27px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.instruction-part-tools button:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+.instruction-part-tools button:disabled { opacity: 0.2; cursor: default; }
+.instruction-preview,
+.instruction-episode-render {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 13px 15px;
+  border: 1px solid var(--accent-ring);
+  border-radius: 10px;
+  background: var(--accent-soft);
+}
+.instruction-preview > span,
+.instruction-episode-render > span {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.instruction-preview p,
+.instruction-episode-render strong {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.instruction-preview small { color: var(--text-muted); font-size: 9px; }
+.instruction-inspector label,
+.instruction-episode-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 560;
+}
+.instruction-inspector input,
+.instruction-inspector select,
+.instruction-episode-fields select { height: 36px; padding: 0 9px; }
+.instruction-inspector textarea { min-height: 150px; padding: 9px; resize: vertical; line-height: 1.5; }
+.instruction-inspector-empty {
+  margin: 0;
+  padding: 25px 12px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+}
+.instruction-inspector-error { margin: 0; color: #d95b6c; font-size: 11px; }
+.instruction-source-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+.instruction-source-editor p { margin: 0; color: var(--text-muted); font-size: 11px; }
+.instruction-source-editor textarea {
+  min-height: 170px;
+  padding: 13px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.instruction-source-editor .instruction-button { align-self: flex-start; }
+.instruction-episode-card { padding: 18px 20px; }
+.instruction-episode-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.instruction-episode-render { grid-template-columns: auto 1fr; }
+@media (max-width: 960px) {
+  .instruction-studio-grid { grid-template-columns: 1fr; }
+  .instruction-inspector { position: static; }
+}
+@media (max-width: 720px) {
+  .instruction-editor-header,
+  .instruction-section-heading { align-items: flex-start; flex-direction: column; }
+  .instruction-new-variable { grid-template-columns: 1fr; }
+  .instruction-preview { grid-template-columns: 1fr; }
+}
 html {
   color-scheme: light;
 }
