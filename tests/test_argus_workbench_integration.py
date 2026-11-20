@@ -80,6 +80,7 @@ def test_pinned_argus_trial_then_full_reuses_success_and_refines_real_frames(
     assert summary["mixed_transport_sends"] == 4
     assert summary["trial_success_reused"] and summary["coarse_requests"] == 15
     assert summary["fine_requests"] >= 12
+    assert summary["fine_concurrency"] == 4
     assert summary["trial_logical_sends"] == 4
     assert summary["unlimited_cli"] == unlimited
     assert summary["cap_usd"] == (None if unlimited else 1)

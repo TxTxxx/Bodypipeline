@@ -1,7 +1,7 @@
 """Argus-local scope selection and bounded boundary refinement.
 
 Copied verbatim into label/pipeline_runtime.py. It uses Argus's preparer, frame
-reader, model transport, pricing, receipts and global cap; no parallel pipeline.
+reader, model transport, pricing, receipts and global cap; no separate pipeline.
 """
 
 from __future__ import annotations
@@ -14,6 +14,9 @@ import json
 import math
 import os
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 
 UNLIMITED_BUDGET_VERSION = 1
@@ -252,6 +255,7 @@ def refine_record(
     price,
     remaining,
     verify=lambda: None,
+    reservation_lock=None,
 ):
     """Each fine request gets <= 4 total sends and a durable pre-dispatch reserve.
 
@@ -332,28 +336,33 @@ def refine_record(
                     >= int(os.environ.get("PIPELINE_CODEX_RESUME_INDEX", "1"))
                 ):
                     break
-                verify()
-                if reserve > remaining() + 1e-10:
-                    entry["pause_reason"] = "budget"
-                    break
-                invoice = {
-                    "kind": "bodypipeline_boundary",
-                    "request_id": key,
-                    "cost_usd": reserve,
-                    "reserved_usd": reserve,
-                    "cost_is_conservative_estimate": True,
-                    "dispatch_outcome": "claimed",
-                }
-                record.setdefault("auxiliary_cost_history", []).append(invoice)
-                attempt = {
-                    "index": len(entry["attempts"]) + 1,
-                    "reserved_usd": reserve,
-                    "status": "claimed",
-                }
-                entry["attempts"].append(attempt)
-                write_atomic(
-                    out_path, record
-                )  # a crash cannot erase an unsettled reserve
+                # All Episode workers share the same cap. Budget inspection and
+                # the durable claim must be one transaction before dispatch.
+                with (
+                    reservation_lock if reservation_lock is not None else nullcontext()
+                ):
+                    verify()
+                    if reserve > remaining() + 1e-10:
+                        entry["pause_reason"] = "budget"
+                        break
+                    invoice = {
+                        "kind": "bodypipeline_boundary",
+                        "request_id": key,
+                        "cost_usd": reserve,
+                        "reserved_usd": reserve,
+                        "cost_is_conservative_estimate": True,
+                        "dispatch_outcome": "claimed",
+                    }
+                    record.setdefault("auxiliary_cost_history", []).append(invoice)
+                    attempt = {
+                        "index": len(entry["attempts"]) + 1,
+                        "reserved_usd": reserve,
+                        "status": "claimed",
+                    }
+                    entry["attempts"].append(attempt)
+                    write_atomic(
+                        out_path, record
+                    )  # a crash cannot erase an unsettled reserve
                 try:
                     response = None
                     response = call(content)
@@ -459,12 +468,21 @@ def refine_outputs(job, args):
     keys = h.get_keys()
     if not keys:
         return
-    print("== boundary (template coarse-to-fine)", flush=True)
     out = job / "run/out"
-    for ep in sorted((job / "units").glob("episode_*")):
+    episodes = [
+        ep
+        for ep in sorted((job / "units").glob("episode_*"))
+        if (out / f"{ep.name}.json").is_file()
+    ]
+    concurrency = max(1, min(int(getattr(args, "concurrency", 1) or 1), len(episodes)))
+    print(
+        f"== boundary (template coarse-to-fine) concurrency={concurrency}",
+        flush=True,
+    )
+    reservation_lock = threading.Lock()
+
+    def refine_episode(ep):
         path = out / f"{ep.name}.json"
-        if not path.is_file():
-            continue
         record = json.loads(path.read_text())
         model = record.get("model") or args.model
         reasoning = record.get("reasoning_effort") or args.reasoning
@@ -507,5 +525,39 @@ def refine_outputs(job, args):
             price=lambda usage: h._verified_final_cost(usage, model),
             remaining=lambda: remaining_label_budget(job, args.cap),
             verify=verify,
+            reservation_lock=reservation_lock,
         )
         write_atomic(path, record)
+
+    if concurrency == 1:
+        for ep in episodes:
+            refine_episode(ep)
+        return
+
+    # One worker owns an Episode's record and its sequential boundary batches.
+    # Stop claiming new Episodes on an unexpected failure; let already running
+    # calls finish so their responses and reservations remain recoverable.
+    pending = iter(episodes)
+    pending_lock = threading.Lock()
+    stopped = threading.Event()
+
+    def worker():
+        while True:
+            with pending_lock:
+                if stopped.is_set():
+                    return
+                ep = next(pending, None)
+            if ep is None:
+                return
+            try:
+                refine_episode(ep)
+            except BaseException:
+                stopped.set()
+                raise
+
+    with ThreadPoolExecutor(
+        max_workers=concurrency, thread_name_prefix="boundary"
+    ) as executor:
+        futures = [executor.submit(worker) for _ in range(concurrency)]
+        for future in as_completed(futures):
+            future.result()

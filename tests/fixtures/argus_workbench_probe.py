@@ -297,6 +297,7 @@ def integrated(argus, work, source):
             assert run_info["cost_usd"] > 20
         trial_ep = next(k for k in counts if k.startswith("coarse:"))
         env["PIPELINE_ARGUS_EPISODES"] = "null"
+        cmd[cmd.index("--concurrency") + 1] = "4"
         second = subprocess.run(
             cmd, cwd=argus, env=env, capture_output=True, text=True, timeout=180
         )
@@ -305,6 +306,7 @@ def integrated(argus, work, source):
             raise RuntimeError(
                 "full failed: " + second.stdout[-1800:] + second.stderr[-1500:]
             )
+        assert "== boundary (template coarse-to-fine) concurrency=4" in second.stdout
         assert counts[trial_ep] == before[trial_ep] == 4, counts
         full = list((work / "argus/run/out").glob("episode_*.json"))
         assert len(full) == 12
@@ -321,6 +323,7 @@ def integrated(argus, work, source):
             "full_episodes": len(full),
             "coarse_requests": counts["coarse"],
             "fine_requests": counts["fine"],
+            "fine_concurrency": 4,
             "trial_success_reused": counts[trial_ep] == 4,
             "trial_logical_sends": counts[trial_ep],
             "prepared_receipt_verified": True,
