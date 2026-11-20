@@ -17,6 +17,9 @@ from pipeline.shared.core import DomainError, Store, confined, executable_path
 
 from .datasets import _dataset_roots
 
+DATASET_READ_LOCK_TIMEOUT_SECONDS = 1.0
+DATASET_LOCK_RETRY_SECONDS = 0.01
+
 
 def record_cleanup(row):
     """Journal completed renumberings once, including pre-journal deployments."""
@@ -42,22 +45,59 @@ def record_cleanup(row):
 
 
 @contextlib.contextmanager
-def dataset_lock(store: Store, key: str, *, shared=False, wait=False):
+def _dataset_file_lock(
+    store: Store,
+    key: str,
+    operation: int,
+    wait_seconds: float | None = 0.0,
+):
     directory = store.path / "recycle-locks"
     directory.mkdir(exist_ok=True)
     with (directory / f"{key}.lock").open("a") as lock:
-        try:
-            fcntl.flock(
-                lock,
-                (fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
-                | (0 if wait else fcntl.LOCK_NB),
-            )
-        except BlockingIOError as exc:
-            raise DomainError("该数据集正在处理，请稍后重试", 409) from exc
+        deadline = (
+            time.monotonic() + max(0.0, wait_seconds)
+            if wait_seconds is not None
+            else None
+        )
+        while True:
+            try:
+                fcntl.flock(
+                    lock, operation | (fcntl.LOCK_NB if deadline is not None else 0)
+                )
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic() if deadline is not None else 0
+                if remaining <= 0:
+                    raise DomainError(
+                        "该数据集正在处理，请稍后重试", 409
+                    ) from exc
+                time.sleep(min(DATASET_LOCK_RETRY_SECONDS, remaining))
         try:
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def dataset_read_lock(store: Store, key: str):
+    with _dataset_file_lock(
+        store,
+        key,
+        fcntl.LOCK_SH,
+        wait_seconds=DATASET_READ_LOCK_TIMEOUT_SECONDS,
+    ):
+        yield
+
+
+@contextlib.contextmanager
+def dataset_lock(store: Store, key: str, *, shared=False, wait=False):
+    with _dataset_file_lock(
+        store,
+        key,
+        fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
+        wait_seconds=None if wait else 0.0,
+    ):
+        yield
 
 
 class RecycleBin:

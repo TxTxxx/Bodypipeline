@@ -9,12 +9,14 @@ const esc = (v) =>
       ],
   );
 const sessionCaptures = new Set();
+const previewFrameTimes = new Map();
 let config = null,
   captures = [],
   timer = null,
   frameTimer = null,
   healthTimer = null,
   clockTimer = null,
+  previewFpsTimer = null,
   frameController = null,
   frameFetching = false,
   previewPaused = false,
@@ -54,7 +56,9 @@ const names = {
   STOPPING: "正在停止",
   RECOVERY_REQUIRED: "待恢复",
   REVIEW: "待确认保留",
-  SEALING: "HDF5 打包中",
+  SEALING: "待校验 / 封存中",
+  PAUSED: "已暂停",
+  SAVING: "保存中",
   SEALED: "已封存",
   DISCARDED: "已丢弃",
   QUEUED: "等待处理",
@@ -188,11 +192,14 @@ async function api(path, method = "GET", body) {  const controller = new AbortCo
 }
 function showLogin() {
   window.ClientReplay.deactivate();
+  window.ClientCaptureTelemetry?.stop();
   window.AnnotationUI?.hide();
   clearTimeout(timer);
   clearTimeout(frameTimer);
   clearTimeout(healthTimer);
   clearInterval(clockTimer);
+  clearInterval(previewFpsTimer);
+  resetPreviewFps();
   frameController?.abort();
   $("login-view").hidden = false;
   $("app-view").hidden = true;
@@ -212,6 +219,7 @@ async function action(fn) {
   if (client) {
     clearTimeout(frameTimer);
     frameController?.abort();
+    renderPreviewFps();
     renderClientCaptures();
   }
   try {
@@ -223,11 +231,12 @@ async function action(fn) {
     busy = false;
     if (config?.role === "server") { updateConversionSelection(); updateMergeSelection(); updateVersionConversionSelection(); updateTrimSelection(); renderDatasetManagement(); if ($("dataset-delete-dialog").open) $("dataset-delete-confirmation").oninput(); }
     if (client && config?.role === "client") {
+      renderPreviewFps();
       renderClientCaptures();
       void refresh();
       if (!frameFetching) {
         clearTimeout(frameTimer);
-        frameTimer = setTimeout(refreshFrames, 1500);
+        frameTimer = setTimeout(refreshFrames, config.capture_capabilities?.preview_stream ? 0 : 1500);
       }
     }
   }
@@ -255,6 +264,7 @@ async function boot() {
   $("login-view").hidden = true;
   $("app-view").hidden = false;
   const client = config.role === "client";
+  $("logout").hidden = client;
   $("client-nav").hidden = !client;
   $("server-nav").hidden = client;
   $("current-page").textContent = client ? "采集工作台" : "数据转换";
@@ -289,12 +299,28 @@ async function boot() {
       $("target-note").textContent = "远端目标暂未更新，请检查连接后刷新页面。";
     });
     $("camera-count").textContent = config.profile.cameras.length;
+    $("preview-quality").disabled = !!config.capture_capabilities?.preview_passthrough;
+    $("preview-quality").innerHTML = config.capture_capabilities?.preview_passthrough
+      ? '<option value="full">相机原图</option>'
+      : '<option value="low">省流预览 · 320px</option><option value="full">清晰预览 · 640px</option>';
+    window.ClientCaptureService.configure({config, api, action, notice, refreshHealth: refreshClientHealth});
+    window.ClientCaptureTelemetry?.configure({
+      config,
+      api,
+      notice,
+      esc,
+      isActive: () => clientTab === "capture",
+      service: () => clientHealth?.capture_service,
+    });
     $("camera-grid").innerHTML = config.profile.cameras
       .map(
         (c) =>
-          `<div class="camera-tile"><img id="cam-${esc(c.id)}" alt="${esc(c.label)} 实时预览"><div class="camera-error" id="err-${esc(c.id)}">等待相机图像…</div><div class="camera-caption">${esc(c.label)} <span>${esc(c.id.toUpperCase())}</span></div></div>`,
+          `<div class="camera-tile"><img id="cam-${esc(c.id)}" alt="${esc(c.label)} 实时预览"><div class="camera-error" id="err-${esc(c.id)}">等待相机图像…</div><div class="camera-caption">${esc(c.label)} <span>${esc(c.id.toUpperCase())}</span></div><span class="camera-fps" id="fps-${esc(c.id)}" title="浏览器成功显示的预览帧率；录制帧率由采集配置决定">预览 -- FPS</span></div>`,
       )
       .join("");
+    resetPreviewFps();
+    clearInterval(previewFpsTimer);
+    previewFpsTimer = setInterval(renderPreviewFps, 1000);
     setClientTab(location.hash.slice(1) || "capture", false);
     clearTimeout(healthTimer);
     void refreshClientHealth();
@@ -337,45 +363,110 @@ async function loadTargets() {
     ? "远端离线或不可达，使用缓存/待验证目标；不阻止本地录制。"
     : "目标由远端授权，路径不代表当前电脑文件夹。";
 }
+function resetPreviewFps(label = "预览 -- FPS") {
+  previewFrameTimes.clear();
+  document.querySelectorAll(".camera-fps").forEach((el) => { el.textContent = label; });
+}
+function renderPreviewFps() {
+  if (config?.role !== "client") return;
+  if (previewPaused || busy || document.hidden || clientTab !== "capture") {
+    resetPreviewFps(previewPaused ? "预览已暂停" : "预览暂停中");
+    return;
+  }
+  const now = performance.now();
+  for (const c of config.profile.cameras) {
+    const label = $("fps-" + c.id);
+    if (!label) continue;
+    const times = previewFrameTimes.get(c.id);
+    if (times?.length && now - times[times.length - 1] > 5000) times.length = 0;
+    label.textContent = times && !times.length
+      ? "预览 0.0 FPS"
+      : times?.length >= 2
+        ? `预览 ${((times.length - 1) * 1000 / (times[times.length - 1] - times[0])).toFixed(1)} FPS`
+        : "预览 -- FPS";
+  }
+}
+function recordPreviewFrame(cameraId) {
+  const now = performance.now();
+  const times = previewFrameTimes.get(cameraId) || [];
+  if (times.length && now - times[times.length - 1] > 5000) times.length = 0;
+  times.push(now);
+  // Retain one boundary sample so low-rate previews still have an interval.
+  while (times.length > 2 && times[1] < now - 5000) times.shift();
+  previewFrameTimes.set(cameraId, times);
+  renderPreviewFps();
+}
+document.addEventListener("visibilitychange", () => {
+  renderPreviewFps();
+  if (config?.role !== "client") return;
+  if (document.hidden) frameController?.abort();
+  else void refreshFrames();
+});
+async function displayPreview(c, blob, signal) {
+  if (signal.aborted) return;
+  const im = $("cam-" + c.id);
+  const url = URL.createObjectURL(blob);
+  if (im.dataset.url) URL.revokeObjectURL(im.dataset.url);
+  im.dataset.url = url;
+  im.src = url;
+  await im.decode();
+  if (signal.aborted || !im.isConnected) return;
+  $("err-" + c.id).hidden = true;
+  recordPreviewFrame(c.id);
+}
+function previewFailed(c) {
+  const err = $("err-" + c.id);
+  err.textContent = "预览暂未更新";
+  err.hidden = false;
+  previewFrameTimes.set(c.id, []);
+  renderPreviewFps();
+}
 async function refreshFrames() {
   clearTimeout(frameTimer);
   if (!config || config.role !== "client" || frameFetching) return;
   if (clientTab !== "capture" || previewPaused || busy || document.hidden) {
+    renderPreviewFps();
     frameTimer = setTimeout(refreshFrames, 1500);
     return;
   }
   frameFetching = true;
   const controller = new AbortController();
   frameController = controller;
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const streaming = config.capture_capabilities?.preview_stream;
+  const timeout = streaming ? null : setTimeout(() => controller.abort(), 8000);
   try {
+    if (streaming) {
+      await Promise.all(config.profile.cameras.map(c => window.ClientPreviewStream.run({
+        url: "/api/cameras/" + encodeURIComponent(c.id) + "/stream",
+        signal: controller.signal,
+        display: (blob, signal) => displayPreview(c, blob, signal),
+        failed: () => previewFailed(c),
+      })));
+      return;
+    }
     await Promise.all(config.profile.cameras.map(async (c) => {
-      const im = $("cam-" + c.id), err = $("err-" + c.id);
       try {
         const mode = $("preview-quality").value;
         const r = await fetch("/api/cameras/" + encodeURIComponent(c.id) + "/frame?preview=" + mode, {signal: controller.signal});
         if (!r.ok) throw Error();
         const blob = await r.blob();
-        if (controller.signal.aborted) return;
-        const url = URL.createObjectURL(blob);
-        if (im.dataset.url) URL.revokeObjectURL(im.dataset.url);
-        im.dataset.url = url;
-        im.src = url;
-        err.hidden = true;
+        await displayPreview(c, blob, controller.signal);
       } catch {
-        if (!controller.signal.aborted) { err.textContent = "预览暂未更新"; err.hidden = false; }
+        if (!controller.signal.aborted) previewFailed(c);
       }
     }));
   } finally {
     clearTimeout(timeout);
     frameFetching = false;
-    if (config?.role === "client") frameTimer = setTimeout(refreshFrames, 1500);
+    if (config?.role === "client") frameTimer = setTimeout(refreshFrames, streaming ? 0 : 1500);
   }
 }
 $("preview-toggle").onclick = () => {
   previewPaused = !previewPaused;
   $("preview-toggle").textContent = previewPaused ? "恢复预览" : "暂停预览";
   $("preview-note").textContent = previewPaused ? "预览已暂停，原始录制不受影响" : "预览独立于原始录制；弱网时可暂停";
+  resetPreviewFps();
+  renderPreviewFps();
   if (previewPaused) frameController?.abort();
   else void refreshFrames();
 };
@@ -392,7 +483,7 @@ async function refreshClientHealth() {
   } finally {
     if (config?.role === "client") {
       renderClientCaptures();
-      healthTimer = setTimeout(refreshClientHealth, 10000);
+      healthTimer = setTimeout(refreshClientHealth, config.capture_capabilities?.external_trigger ? 2000 : 10000);
     }
   }
 }
@@ -408,7 +499,7 @@ function acceptCaptures(rows) {
 function currentCapture() {
   return (
     captures.find((c) =>
-      ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(c.state),
+      ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED", "PAUSED", "SAVING"].includes(c.state),
     ) ||
     captures.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id))
   );
@@ -426,7 +517,9 @@ const normalizedName = (v) => v.normalize("NFKC").trim().replace(/\s+/g, " ");
 function updateClientDatasetSummary() {
   const name = normalizedName($("dataset-name").value);
   $("capture-dataset-summary").textContent = name
-    ? `当前数据集：${name}。保留的每次采集作为一个 episode 加入，instruction 在 Server 转换时填写。`
+    ? config?.capture_capabilities?.service_control
+      ? `当前数据集：${name}。正常保存的每段采集自动加入上传队列。`
+      : `当前数据集：${name}。保留的每次采集作为一个 episode 加入，instruction 在 Server 转换时填写。`
     : "选择已有数据集或输入新名称；同名任务持续追加 episodes。";
 }
 $("dataset-name").oninput = updateClientDatasetSummary;
@@ -456,6 +549,7 @@ function captureBadge(c) {
     : badge(c.state);
 }
 function controls(c) {
+  if (c.external_trigger) return '<span class="small muted">手柄控制 · 自动保留正常保存的数据</span>';
   const buttons = [];
   if (["RECORDING", "RECOVERY_REQUIRED"].includes(c.state))
     buttons.push(
@@ -494,6 +588,15 @@ $("capture-form").onsubmit = (e) => {
     };
     $("start-button").disabled = true;
     notice("正在请求开始采集，等待机器人确认…");
+    if (config.capture_capabilities?.external_trigger) {
+      const serviceOptions = await window.ClientCaptureService.prepareForStart();
+      const batch = await api("/api/capture-batches", "POST", { ...data, instruction: data.dataset_name, ...serviceOptions });
+      requestKey = null;
+      await refreshClientHealth();
+      if (batch.state !== "ACTIVE") throw Error(batch.error || "作业状态待核实，勿重复启动");
+      notice(config.capture_capabilities.service_control?.start_notice || "采集作业已就绪：请使用手柄开始、结束或丢弃。后台校验和上传已暂停；本操作不会启动机器人控制器。");
+      return;
+    }
     const c = await api("/api/captures/start", "POST", data);
     acceptCaptures([c]);
     sessionCaptures.add(c.id);
@@ -504,6 +607,19 @@ $("capture-form").onsubmit = (e) => {
   });
 };
 document.addEventListener("click", (e) => {
+  const endBatch = e.target.closest("[data-end-batch]");
+  if (endBatch) action(async () => {
+    const force = endBatch.dataset.force === "true";
+    const confirmation = force
+      ? "确认强制停止本批次数采服务？尚未保存的当前段将被丢弃。此操作不是急停。"
+      : config.capture_capabilities.service_control?.end_confirmation || "确认结束本批次采集？请先用手柄保存当前段。本操作仅退出 raw 采集器，不停止机器人控制器。";
+    if (!confirm(confirmation)) return;
+    const result = await api(`/api/capture-batches/${endBatch.dataset.endBatch}/end`, "POST", {force});
+    await refreshClientHealth();
+    if (result.state === "STOPPING") { notice("正在退出本批次数采服务；退出并核对完成后自动上传。"); return; }
+    if (result.state !== "ENDED") throw Error(result.error || "采集器退出尚未确认，上传仍暂停");
+    notice("本批次采集结束，资源空闲后自动校验与上传。");
+  });
   const copy = e.target.closest("[data-copy-path]");
   if (copy) {
     copyText(copy.dataset.copyPath).then((copied) =>
@@ -642,13 +758,13 @@ function renderClientCaptures() {
   const rows = captures;
   renderClientDatasets();
   const active = rows.find((c) =>
-    ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(
+    ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED", "PAUSED", "SAVING"].includes(
       c.state,
     ),
   );
   for (const row of rows)
     if (
-      ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED"].includes(
+      ["STARTING", "RECORDING", "STOPPING", "RECOVERY_REQUIRED", "PAUSED", "SAVING"].includes(
         row.state,
       )
     )
@@ -659,14 +775,27 @@ function renderClientCaptures() {
   const current =
     active ||
     rows.find((c) => c.state === "REVIEW" && sessionCaptures.has(c.id));
-  $("start-button").disabled = !!active || busy;
+  const external = !!config?.capture_capabilities?.external_trigger;
+  const managed = config?.capture_capabilities?.service_control;
+  const batch = clientHealth?.batch;
+  window.ClientCaptureService.render(clientHealth, busy);
+  $("start-button").disabled = !!active || busy || (external && (!clientHealth || !!batch));
+  $("start-button").textContent = managed?.start_label || (external ? "进入手柄采集作业" : "● 采集下一个 episode");
+  $("external-batch-actions").hidden = !external;
+  $("external-batch-actions").innerHTML = external && batch
+    ? `<p class="small">作业 ${esc(batch.state)} · ${esc(batch.adapter_status?.state || "等待就绪")} · ${batch.episode_count || 0} 段</p>${batch.error ? `<p class="error">${esc(batch.error)}</p>` : ""}<div class="action-row"><button class="secondary" type="button" data-end-batch="${esc(batch.id)}" ${busy || batch.state === "STOPPING" ? "disabled" : ""}>${esc(managed?.end_label || "结束本批次采集")}</button>${config.capture_capabilities.force_end ? `<button class="danger" type="button" data-end-batch="${esc(batch.id)}" data-force="true" ${busy || batch.state === "STOPPING" ? "disabled" : ""}>强制停止服务</button>` : ""}</div>`
+    : external && !managed ? '<p class="small muted">进入作业后使用遥操手柄；正常保存自动入队，丢弃不上传。机器人控制由现场单独启动。</p>' : "";
+  const transfer = clientHealth?.background_transfer;
+  const pendingBytes = rows.filter(c => c.upload_state !== "ACKED" && c.state !== "DISCARDED").reduce((n, c) => n + (c.total_bytes || 0), 0);
+  $("background-transfer-status").textContent = transfer?.enabled
+    ? `待处理 ${bytes(pendingBytes)} · ${transfer.allowed ? "资源空闲，后台处理可运行" : transfer.reason}` : "";
   $("health-label").textContent = active
     ? "● " + (names[active.state] || active.state)
     : clientHealth?.ready
       ? "● 采集适配器就绪"
       : clientHealth ? "○ 适配器尚未就绪" : "○ 健康检查待更新";
   $("capture-state").textContent = !current
-    ? "就绪"
+    ? (external && batch ? (names[batch.adapter_status?.state] || "作业就绪 · 等待手柄") : "就绪")
     : current.capture_failed
       ? "采集失败，只能丢弃"
       : names[current.state];
@@ -683,7 +812,7 @@ function renderClientCaptures() {
                 Math.round((100 * (c.uploaded_bytes || 0)) / c.total_bytes),
               )
             : 0;
-          return `<tr><td><strong class="task-name">${esc(c.dataset_name || c.instruction)}</strong><span class="sub">${esc(c.id.slice(0, 8))} · ${new Date(c.created_at * 1000).toLocaleString("zh-CN")}</span>${c.error ? `<span class="sub job-error">${esc(c.error)}</span>` : ""}</td><td>${captureBadge(c)}</td><td>${esc(c.remote_target)}<span class="sub">${esc(c.remote_prefix || "/")}</span></td><td>${badge(c.upload_state)} ${c.total_bytes ? `<span class="small">${percent}% · ${bytes(c.total_bytes)}</span><div class="progress"><span data-width="${percent}"></span></div>` : ""}${c.upload_error ? `<span class="sub job-error">${esc(c.upload_error)}</span>` : ""}</td><td>${controls(c)}</td></tr>`;
+          return `<tr><td><strong class="task-name">${esc(c.dataset_name || c.instruction)}</strong><span class="sub">${esc(c.id.slice(0, 8))} · ${new Date(c.created_at * 1000).toLocaleString("zh-CN")}</span>${c.error ? `<span class="sub job-error">${esc(c.error)}</span>` : ""}</td><td>${captureBadge(c)}</td><td>${esc(c.remote_target)}<span class="sub">${esc(c.remote_prefix || "/")}</span></td><td>${badge(c.upload_state)} ${c.total_bytes ? `<span class="small">${percent}% · ${bytes(c.total_bytes)}</span><div class="progress"><span data-width="${percent}"></span></div>` : ""}${c.background_wait ? `<span class="sub">${esc(c.background_wait)}</span>` : ""}${c.upload_error ? `<span class="sub job-error">${esc(c.upload_error)}</span>` : ""}</td><td>${controls(c)}</td></tr>`;
         })
         .join("")
     : '<tr><td colspan="5" class="empty">还没有采集记录。填写任务描述，开始第一段示教。</td></tr>';
@@ -826,6 +955,8 @@ function setClientTab(value, updateHistory = true) {
   if (updateHistory && location.hash !== "#" + value) { location.hash = value; return; }
   $("client-view").hidden = tab !== "capture";
   $("client-replay-panel").hidden = tab !== "replay";
+  if (tab === "capture") window.ClientCaptureTelemetry?.refresh();
+  else window.ClientCaptureTelemetry?.stop();
   document.querySelectorAll("[data-client-tab]").forEach((button) => {
     const active = button.dataset.clientTab === tab;
     button.classList.toggle("active", active);
@@ -833,7 +964,10 @@ function setClientTab(value, updateHistory = true) {
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  const title = tab === "replay" ? "数据回放" : "采集工作台";
+  const title =
+    tab === "replay"
+      ? "数据回放"
+      : "采集工作台";
   $("page-title").textContent = $("current-page").textContent = title;
   document.title = title + " · BodyPipeline";
   $("page-eyebrow").textContent = tab === "replay" ? "ROBOT REPLAY" : "TELEOPERATION COLLECTION";
@@ -842,6 +976,8 @@ function setClientTab(value, updateHistory = true) {
     : "在机器人本地录制，确认保留后可靠上传。";
   $("notice").hidden = true;
   clearTimeout(frameTimer); frameController?.abort();
+  resetPreviewFps();
+  renderPreviewFps();
   if (tab === "replay") void window.ClientReplay.activate(api, config.robot_id);
   else {
     window.ClientReplay.deactivate();

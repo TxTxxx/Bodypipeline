@@ -1015,4 +1015,3 @@ def test_real_conversion_removes_mid_recording_static_intervals(
     assert len(lineage["episodes"]) == 1
     # The raw capture is only read, never mutated by the in-conversion trim.
     assert all((raw / entry["path"]).is_file() for entry in manifest["files"])
-

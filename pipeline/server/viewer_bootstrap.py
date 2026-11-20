@@ -107,45 +107,52 @@ def patch_presentation(cache: Path):
     """Install the signal explorer, camera layout and shared theme assets."""
 
     source = cache / "source"
-    patch = PRESENTATION_PATCH.read_text()
-    layout = (source / "src/app/layout.tsx").read_text()
-    if 'lang="en"' in layout:
-        # Context lines differ when the optional Chinese base theme is absent.
-        for chinese, upstream in {
-            'lang="zh-CN"': 'lang="en"',
-            '{renderTab("episodes", "Episode")}': '{renderTab("episodes", "Episodes")}',
-            "数据集质量诊断（由 lerobot-doctor 提供）": "Dataset quality diagnostics (powered by lerobot-doctor)",
-            "语言指令": "Language Instruction",
-            "后退 5 秒": "Jump backward 5 seconds",
-            "className={`${inter.variable} pipeline-font`}": "className={inter.className}",
-        }.items():
-            patch = patch.replace(chinese, upstream)
     command = ["git", "apply", "--unsafe-paths", "--directory", str(source)]
-    for flags in (["--check"], ["--reverse", "--check"]):
-        result = subprocess.run(
-            command + flags, input=patch, text=True, capture_output=True
-        )
-        if result.returncode == 0:
-            if "--reverse" not in flags:
-                subprocess.run(command, input=patch, text=True, check=True)
-            break
-    else:
-        raise RuntimeError("Unexpected Visualizer source; cannot apply presentation")
-    camera_patch = CAMERA_ORDER_PATCH.read_text()
-    for flags in (["--check"], ["--reverse", "--check"]):
-        result = subprocess.run(
-            command + flags, input=camera_patch, text=True, capture_output=True
-        )
-        if result.returncode == 0:
-            if "--reverse" not in flags:
-                subprocess.run(command, input=camera_patch, text=True, check=True)
-            break
-    else:
-        raise RuntimeError("Unexpected Visualizer source; cannot apply camera order")
+    episode_viewer = (
+        source / "src/app/[org]/[dataset]/[episode]/episode-viewer.tsx"
+    ).read_text()
+    if 'className="viewer-tabbar' not in episode_viewer:
+        patch = PRESENTATION_PATCH.read_text()
+        layout = (source / "src/app/layout.tsx").read_text()
+        if 'lang="en"' in layout:
+            # Context lines differ when the optional Chinese base theme is absent.
+            for chinese, upstream in {
+                'lang="zh-CN"': 'lang="en"',
+                '{renderTab("episodes", "Episode")}': '{renderTab("episodes", "Episodes")}',
+                "数据集质量诊断（由 lerobot-doctor 提供）": "Dataset quality diagnostics (powered by lerobot-doctor)",
+                "语言指令": "Language Instruction",
+                "后退 5 秒": "Jump backward 5 seconds",
+                "className={`${inter.variable} pipeline-font`}": "className={inter.className}",
+            }.items():
+                patch = patch.replace(chinese, upstream)
+        for flags in (["--check"], ["--reverse", "--check"]):
+            result = subprocess.run(
+                command + flags, input=patch, text=True, capture_output=True
+            )
+            if result.returncode == 0:
+                if "--reverse" not in flags:
+                    subprocess.run(command, input=patch, text=True, check=True)
+                break
+        else:
+            raise RuntimeError("Unexpected Visualizer source; cannot apply presentation")
+    video_player = (source / "src/components/simple-videos-player.tsx").read_text()
+    if "videosInfo: sourceVideosInfo" not in video_player:
+        camera_patch = CAMERA_ORDER_PATCH.read_text()
+        for flags in (["--check"], ["--reverse", "--check"]):
+            result = subprocess.run(
+                command + flags, input=camera_patch, text=True, capture_output=True
+            )
+            if result.returncode == 0:
+                if "--reverse" not in flags:
+                    subprocess.run(command, input=camera_patch, text=True, check=True)
+                break
+        else:
+            raise RuntimeError("Unexpected Visualizer source; cannot apply camera order")
     patch_score_filter(cache)
     patch_episode_lengths(cache)
     patch_subtask_review(cache)
     patch_parquet_compression(cache)
+    patch_instruction_editor(cache)
     destinations = {
         "data-recharts.tsx": "src/components/data-recharts.tsx",
         "theme-toggle.tsx": "src/components/theme-toggle.tsx",
@@ -159,6 +166,11 @@ def patch_presentation(cache: Path):
         "annotation-review-client.ts": "src/utils/annotation-review-client.ts",
         "use-annotation-review.ts": "src/utils/use-annotation-review.ts",
         "manual-trim.tsx": "src/components/manual-trim.tsx",
+        "instruction-model.ts": "src/utils/instruction-model.ts",
+        "instruction-editor.tsx": "src/components/instruction-editor.tsx",
+        "instruction-episode-editor.tsx": (
+            "src/components/instruction-episode-editor.tsx"
+        ),
     }
     for name, target in destinations.items():
         (source / target).write_bytes((UI_ASSETS / name).read_bytes())
@@ -347,6 +359,12 @@ def patch_subtask_review(cache: Path):
     patch_annotations(cache)
 
 
+def patch_instruction_editor(cache: Path):
+    from .viewer_instructions import patch_instruction_editor as patch
+
+    patch(cache)
+
+
 def patch_episode_lengths(cache: Path):
     """Extend the length statistics and duration filter to LeRobot v2.1."""
     command = ["git", "apply", "--unsafe-paths", "--directory", str(cache / "source")]
@@ -383,6 +401,7 @@ def _fingerprint(cache: Path, data_origin: str) -> str:
                     + (Path(__file__).parents[1] / "web/workbench.css").read_bytes()
                     + Path(__file__).read_bytes()
                     + Path(__file__).with_name("viewer_annotations.py").read_bytes()
+                    + Path(__file__).with_name("viewer_instructions.py").read_bytes()
                     + Path(__file__).with_name("viewer_task_annotations.py").read_bytes()
                     + Path(__file__).with_name("viewer_manual_trim.py").read_bytes()
                     + Path(__file__).with_name("viewer_batch_preview.py").read_bytes()

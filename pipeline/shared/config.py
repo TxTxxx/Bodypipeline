@@ -174,6 +174,8 @@ class Settings:
     devices: list[dict] = field(default_factory=list)
     accepted_capture_profile_hashes: list[str] = field(default_factory=list)
     replay: dict = field(default_factory=dict)
+    capture: dict = field(default_factory=dict)
+    background_transfer: dict = field(default_factory=dict)
 
     def __post_init__(self):
         from .delivery_config import validate_delivery_config
@@ -253,7 +255,11 @@ class Settings:
             )
         if settings.token and settings.token == settings.device_token:
             raise ValueError("用户密钥与设备密钥必须不同")
-        if settings.mode not in {"mock", "ros2"} or settings.processing_mode not in {
+        if settings.mode not in {
+            "mock",
+            "ros2",
+            "external",
+        } or settings.processing_mode not in {
             "demo",
             "real",
         }:

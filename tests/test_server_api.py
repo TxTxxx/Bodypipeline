@@ -175,8 +175,22 @@ def test_job_list_summary_omits_detail_reports(settings_factory):
     ):
         assert field in full
         assert field not in slim
-
-
+def test_server_workbench_refresh_endpoints_are_available(settings_factory):
+    s = settings_factory("server")
+    headers = {"Authorization": "Bearer " + s.token}
+    paths = (
+        "/api/collections",
+        "/api/jobs",
+        "/api/viewer",
+        "/api/merge-candidates",
+        "/api/version-conversion-candidates",
+        "/api/trim-candidates",
+        "/api/annotations",
+    )
+    with TestClient(create_app(s, background=False)) as http:
+        for path in paths:
+            response = http.get(path, headers=headers)
+            assert response.status_code == 200, (path, response.text)
 def test_report_page_is_server_only():
     from fastapi import FastAPI
 

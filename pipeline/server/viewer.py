@@ -29,6 +29,11 @@ from pipeline.shared.web import themed_html
 
 from .datasets import dataset_for_job
 from .episode_scores import EpisodeScoreCache
+from .instruction_review import (
+    ApplyInstructionsRequest,
+    EpisodeSaveRequest,
+    TemplateSaveRequest,
+)
 from .recycle import RecycleBin
 from .subtask_review import DraftRequest, RevisionExportRequest
 from .task_annotations import TemplateRequest
@@ -506,6 +511,33 @@ def create_gateway(settings):
 
     mount_workbench(app, settings, store)
 
+    async def instruction_proxy(dataset_id, suffix, body=None, method="GET"):
+        score_preview(dataset_id)
+        suffix = f"/{suffix}" if suffix else ""
+        url = settings.server_url.rstrip("/") + f"/api/instructions/{dataset_id}{suffix}"
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.request(
+                    method,
+                    url,
+                    json=body.model_dump() if body is not None else None,
+                    headers={"Authorization": "Bearer " + settings.token},
+                    timeout=settings.command_timeout,
+                )
+        except httpx.HTTPError as exc:
+            raise DomainError(
+                "Server 语言指令服务暂不可用，请稍后重试", 503
+            ) from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise DomainError("Server 语言指令服务返回无效响应", 502) from exc
+        return JSONResponse(
+            payload,
+            status_code=response.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.get("/api/task-templates")
     async def task_templates():
         return await annotation_proxy("/api/task-templates")
@@ -534,6 +566,59 @@ def create_gateway(settings):
         ):
             raise DomainError("修订导出任务编号无效", 404)
         return await review_proxy(dataset_id, f"exports/{export_id}")
+
+    @app.get("/api/instructions/{dataset_id}")
+    async def instruction_dataset(dataset_id: str):
+        return await instruction_proxy(dataset_id, "")
+
+    @app.put("/api/instructions/{dataset_id}/template")
+    async def instruction_template_save(
+        dataset_id: str, body: TemplateSaveRequest
+    ):
+        return await instruction_proxy(
+            dataset_id, "template", body, method="PUT"
+        )
+
+    @app.get("/api/instructions/{dataset_id}/episodes/{episode}")
+    async def instruction_episode(dataset_id: str, episode: int):
+        return await instruction_proxy(dataset_id, f"episodes/{episode}")
+
+    @app.put("/api/instructions/{dataset_id}/episodes/{episode}")
+    async def instruction_episode_save(
+        dataset_id: str, episode: int, body: EpisodeSaveRequest
+    ):
+        return await instruction_proxy(
+            dataset_id, f"episodes/{episode}", body, method="PUT"
+        )
+
+    @app.post("/api/instructions/{dataset_id}/episodes/{episode}/apply")
+    async def instruction_episode_apply(
+        dataset_id: str, episode: int, body: ApplyInstructionsRequest
+    ):
+        return await instruction_proxy(
+            dataset_id,
+            f"episodes/{episode}/apply",
+            body,
+            method="POST",
+        )
+
+    @app.post("/api/instructions/{dataset_id}/apply")
+    async def instruction_apply(
+        dataset_id: str, body: ApplyInstructionsRequest
+    ):
+        return await instruction_proxy(dataset_id, "apply", body, method="POST")
+
+    @app.get("/api/instructions/{dataset_id}/apply/{apply_id}")
+    async def instruction_apply_status(dataset_id: str, apply_id: str):
+        if not apply_id or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for character in apply_id
+        ):
+            raise DomainError("语言指令任务编号无效", 404)
+        return await instruction_proxy(
+            dataset_id, f"apply/{apply_id}"
+        )
 
     @app.get("/api/episode-scores/{dataset_id}")
     async def score_status(dataset_id: str):

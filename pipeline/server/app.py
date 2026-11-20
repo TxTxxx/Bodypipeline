@@ -26,6 +26,13 @@ from .deliveries import DeliveryScanner
 from .episode_validation import InvalidEpisodePolicy
 from .imports import ImportService
 from .ingest import IngestService
+from .instruction_review import (
+    ApplyInstructionsRequest,
+    EpisodeSaveRequest,
+    InstructionReview,
+    TemplateSaveRequest,
+)
+from .instruction_worker import InstructionApplyRunner
 from .jobs import JobRunner
 from .providers import RuntimeCatalog
 from .quality import robot_profile_blockers
@@ -211,6 +218,10 @@ def create_app(settings, background=True):
     imports = ImportService(settings, ingest, runtimes)
     runner = JobRunner(settings, ingest)
     subtask_review = SubtaskReview(settings, ingest.store)
+    instruction_review = InstructionReview(settings, ingest.store)
+    instruction_apply = InstructionApplyRunner(
+        settings, ingest.store, instruction_review
+    )
     checks = QualityRunner(
         settings,
         ingest.store,
@@ -236,6 +247,7 @@ def create_app(settings, background=True):
             for worker in (
                 datasets.tick,
                 runner.tick,
+                instruction_apply.tick,
                 checks.tick,
                 analyses.tick,
                 trims.tick,
@@ -296,6 +308,7 @@ def create_app(settings, background=True):
         checks.recover()
         analyses.recover()
         annotations.recover()
+        instruction_apply.recover()
         viewer.recover()
         datasets.recover()
         trims.recover()
@@ -332,6 +345,8 @@ def create_app(settings, background=True):
     app.state.checks = checks
     app.state.analyses = analyses
     app.state.annotations = annotations
+    app.state.instructions = instruction_review
+    app.state.instruction_apply = instruction_apply
     app.state.runtimes = runtimes
     app.state.datasets = datasets
     app.state.trims = trims
@@ -760,6 +775,47 @@ def create_app(settings, background=True):
         return {
             k: job.get(k) for k in ("id", "state", "stage", "dataset_name", "error")
         }
+
+    @app.get("/api/instructions/{dataset_id}")
+    def instruction_dataset(dataset_id: str):
+        return instruction_review.dataset(dataset_id)
+
+    @app.put("/api/instructions/{dataset_id}/template")
+    def instruction_template_save(
+        dataset_id: str, body: TemplateSaveRequest
+    ):
+        return instruction_review.save_template(dataset_id, body)
+
+    @app.get("/api/instructions/{dataset_id}/episodes/{episode}")
+    def instruction_episode(dataset_id: str, episode: int):
+        return instruction_review.episode(dataset_id, episode)
+
+    @app.put("/api/instructions/{dataset_id}/episodes/{episode}")
+    def instruction_episode_save(
+        dataset_id: str, episode: int, body: EpisodeSaveRequest
+    ):
+        return instruction_review.save_episode(dataset_id, episode, body)
+
+    @app.post(
+        "/api/instructions/{dataset_id}/episodes/{episode}/apply",
+        status_code=202,
+    )
+    def instruction_episode_apply(
+        dataset_id: str, episode: int, body: ApplyInstructionsRequest
+    ):
+        return instruction_apply.enqueue(
+            dataset_id, body, episode_indices={episode}
+        )
+
+    @app.post("/api/instructions/{dataset_id}/apply", status_code=202)
+    def instruction_apply_start(
+        dataset_id: str, body: ApplyInstructionsRequest
+    ):
+        return instruction_apply.enqueue(dataset_id, body)
+
+    @app.get("/api/instructions/{dataset_id}/apply/{apply_id}")
+    def instruction_apply_status(dataset_id: str, apply_id: str):
+        return instruction_apply.status(dataset_id, apply_id)
 
     @app.get("/api/annotations/options")
     def annotation_options():

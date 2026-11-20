@@ -19,7 +19,7 @@ index 8bf95eb..74feaa9 100644
 -  return loadAllEpisodeLengthsV3(repoId, version, info.fps);
 +  return loadAllEpisodeLengths(repoId, version, info.fps);
  }
- 
+
  export async function fetchEpisodeFrames(
 diff --git a/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx b/src/app/[org]/[dataset]/[episode]/episode-viewer.tsx
 index cd71f33..3918a85 100644
@@ -55,7 +55,7 @@ index ec36f11..b9a9d62 100644
 @@ -1616,89 +1616,54 @@ export async function loadAllEpisodeLengthsV3(
        }
      }
- 
+
 -    if (allEpisodes.length === 0) return null;
 -
 -    const withSeconds = allEpisodes.map((ep) => ({
@@ -85,7 +85,7 @@ index ec36f11..b9a9d62 100644
 +    return null;
 +  }
 +}
- 
+
 -    const variance =
 -      lengths.reduce((acc, l) => acc + (l - mean) ** 2, 0) / lengths.length;
 -    const std = Math.round(Math.sqrt(variance) * 100) / 100;
@@ -98,7 +98,7 @@ index ec36f11..b9a9d62 100644
 +  fps: number,
 +): EpisodeLengthStats | null {
 +  if (allEpisodes.length === 0) return null;
- 
+
 -    // Build histogram
 -    const histMin = Math.min(...lengths);
 -    const histMax = Math.max(...lengths);
@@ -107,7 +107,7 @@ index ec36f11..b9a9d62 100644
 +    frames: ep.length,
 +    lengthSeconds: Math.round((ep.length / fps) * 100) / 100,
 +  }));
- 
+
 -    if (histMax === histMin) {
 -      return {
 -        shortestEpisodes,
@@ -126,14 +126,14 @@ index ec36f11..b9a9d62 100644
 +  );
 +  const shortestEpisodes = sortedByLength.slice(0, 5);
 +  const longestEpisodes = sortedByLength.slice(-5).reverse();
- 
+
 -    const p1 = sorted[Math.floor(sorted.length * 0.01)];
 -    const p99 = sorted[Math.ceil(sorted.length * 0.99) - 1];
 -    const range = p99 - p1 || 1;
 +  const lengths = withSeconds.map((e) => e.lengthSeconds);
 +  const sum = lengths.reduce((a, b) => a + b, 0);
 +  const mean = Math.round((sum / lengths.length) * 100) / 100;
- 
+
 -    const targetBins = Math.max(
 -      10,
 -      Math.min(50, Math.ceil(Math.log2(lengths.length) + 1)),
@@ -158,7 +158,7 @@ index ec36f11..b9a9d62 100644
 +    sorted.length % 2 === 0
 +      ? Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100
 +      : sorted[mid];
- 
+
 -    for (const len of lengths) {
 -      let binIdx = Math.floor((len - niceMin) / niceBinWidth);
 -      if (binIdx < 0) binIdx = 0;
@@ -168,7 +168,7 @@ index ec36f11..b9a9d62 100644
 +  const variance =
 +    lengths.reduce((acc, l) => acc + (l - mean) ** 2, 0) / lengths.length;
 +  const std = Math.round(Math.sqrt(variance) * 100) / 100;
- 
+
 -    const histogram = bins.map((count, i) => {
 -      const lo = niceMin + i * niceBinWidth;
 -      const hi = lo + niceBinWidth;
@@ -177,7 +177,7 @@ index ec36f11..b9a9d62 100644
 +  // Build histogram
 +  const histMin = Math.min(...lengths);
 +  const histMax = Math.max(...lengths);
- 
+
 +  if (histMax === histMin) {
      return {
        shortestEpisodes,
@@ -274,7 +274,7 @@ index ec36f11..b9a9d62 100644
      return null;
    }
  }
- 
+
 +/**
 + * Load episode length statistics for every dataset version the viewer parses.
 + * Unsupported versions stay null so the statistics and duration filter hide.
