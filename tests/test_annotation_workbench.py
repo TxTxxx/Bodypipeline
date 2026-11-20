@@ -10,6 +10,58 @@ from pipeline.server.annotation_contract import content_key
 BASE = "/api/annotation-workbench/source"
 
 
+def test_many_episode_copy_does_not_reload_frozen_job_per_episode(
+    review_app, monkeypatch
+):
+    service = review_app.state.annotation_workbench
+    store = review_app.state.runner.store
+    job = store.get("job", "source")
+    job["revision_plan"] = {"episodes": [{"saved_document": "x" * 1000}] * 200}
+    store.put("job", "source", job)
+    monkeypatch.setattr(
+        service.legacy,
+        "_source",
+        lambda *_: {
+            "fps": 10,
+            "episodes": [
+                {
+                    "episode_index": ep,
+                    "frames": 6,
+                    "segments": [{"start_frame": 0, "end_frame": 6, "text": "grasp"}],
+                }
+                for ep in range(200)
+            ],
+        },
+    )
+    original_get = store.get
+    job_reads = []
+
+    def get(kind, key):
+        if kind == "job":
+            job_reads.append(key)
+        return original_get(kind, key)
+
+    monkeypatch.setattr(store, "get", get)
+    client = client_for(review_app)
+    listed = client.get(BASE + "/episodes")
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()["episodes"]) == 200
+    assert len(job_reads) <= 3  # Source validation is per request, not per Episode.
+    job_reads.clear()
+    bundle = client.post(
+        BASE + "/bundle",
+        json={
+            "source_signature": listed.json()["source_signature"],
+            "episodes": list(range(200)),
+            "revisions": {str(ep): 0 for ep in range(200)},
+        },
+    )
+    assert bundle.status_code == 200, bundle.text
+    assert len(bundle.json()["episodes"]) == 200
+    assert len(job_reads) <= 3
+    assert store.all("annotation_episode") == []
+
+
 def save_body(head, **kw):
     return {
         "revision": head["revision"],

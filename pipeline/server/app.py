@@ -58,6 +58,7 @@ JOB_SUMMARY_OMIT = (
     "merge_sources",
     "source_description",
     "source_snapshot",
+    "revision_plan",
 )
 
 # Keep the episode picker and Runtime checks intact; full manifests and paths

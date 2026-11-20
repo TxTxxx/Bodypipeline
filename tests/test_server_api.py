@@ -158,6 +158,7 @@ def test_job_list_summary_omits_detail_reports(settings_factory):
         "alignment_report": {"frames": 1},
         "episode_diagnostics": [{"passed": True}],
         "source_manifest_hashes": {"file": "hash"},
+        "revision_plan": {"episodes": [{"document": "saved annotation"}]},
         "selection_report": {"kept": 1},
     }
     app.state.ingest.store.put("job", row["id"], row)
@@ -172,6 +173,7 @@ def test_job_list_summary_omits_detail_reports(settings_factory):
         "alignment_report",
         "episode_diagnostics",
         "source_manifest_hashes",
+        "revision_plan",
     ):
         assert field in full
         assert field not in slim

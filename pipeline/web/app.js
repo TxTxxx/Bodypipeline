@@ -10,6 +10,7 @@ const esc = (v) =>
   );
 const sessionCaptures = new Set();
 const previewFrameTimes = new Map();
+let linkedDataset = new URLSearchParams(location.search).get("dataset");
 let config = null,
   captures = [],
   timer = null,
@@ -1482,13 +1483,18 @@ function renderServer(uploads, jobs) {
   const runtimeTypes = (config.runtimes || []).map((r) => r.robot_type).filter(Boolean);
   const types = [...new Set([...runtimeTypes, ...uploads.map(rowRobotType), ...jobs.map(rowRobotType), ...serverDatasets.map(rowRobotType), ...serverDeletions.map(rowRobotType)])].sort();
   const oldType = $("server-robot-type").value;
-  const type = types.includes(oldType) ? oldType : "";
+  const linkedJob = linkedDataset && jobs.find((job) => job.id === linkedDataset);
+  const type = linkedJob ? rowRobotType(linkedJob) : types.includes(oldType) ? oldType : "";
   if (oldType && !type) {
     selectedJob = null;
     detailSignature = null;
     $("job-detail-panel").hidden = true;
   }
   replaceOptions($("server-robot-type"), '<option value="">请选择机器人类型</option>' + types.map((t) => `<option value="${esc(t)}">${esc(robotTypeLabel(t))}</option>`).join(""), type);
+  if (linkedJob) {
+    $("server-robot-type").value = type;
+    linkedDataset = null;
+  }
   const robotTypes = [...new Set([config.profile?.robot_type, ...runtimeTypes, ...types].filter(Boolean))];
   replaceOptions($("import-robot-types"), robotTypes.map((t) => `<option value="${esc(t)}">${esc(robotTypeLabel(t))}</option>`).join(""), $("import-robot-type").value);
   $("robot-scope-hint").textContent = type ? `当前范围：${robotTypeLabel(type)}。下方数据、任务、结果仅显示此类型；同类型多台设备通过设备 ID 区分。` : "选择后，再选择该类型下的数据集。原始数据、转换任务、合并任务和预览结果会一起筛选。";

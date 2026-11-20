@@ -117,10 +117,15 @@ def test_frozen_whole_episode_subset_is_independent_and_source_unchanged(
         "revisions": {"1": head["revision"]},
         "filter": {"subtask": "grasp", "count": 2, "basis": "recorded"},
         "origins": {"1": "manual"},
+        "name": "  螺丝对准 · 已调整副本  ",
     }
     queued = client.post(base + "/exports", json=selection)
     assert queued.status_code == 202, queued.text
     jid = queued.json()["id"]
+    assert queued.json()["dataset_name"] == "螺丝对准 · 已调整副本"
+    listed = next(row for row in client.get("/api/jobs").json() if row["id"] == jid)
+    assert listed["dataset_name"] == "螺丝对准 · 已调整副本"
+    assert listed["state"] == "QUEUED"
     frozen = runner.store.get("job", jid)["revision_plan"]
     # Later annotation edits do not alter the submitted plan.
     head["document"]["segments"][0]["note"] = "later local change"
@@ -136,6 +141,17 @@ def test_frozen_whole_episode_subset_is_independent_and_source_unchanged(
     runner.tick()
     result = runner.store.get("job", jid)
     assert result["state"] == "CONVERTED", result.get("error")
+    listed = next(
+        row for row in client.get("/api/jobs?summary=true").json() if row["id"] == jid
+    )
+    assert listed["dataset_name"] == "螺丝对准 · 已调整副本"
+    assert listed["dataset_available"] is True
+    status = client.get(base + f"/exports/{jid}").json()
+    assert status["viewer_url"] == (
+        settings.viewer_origin + f"/bp/{jid}/episode_0?tab=annotations"
+    )
+    assert status["data_url"] == settings.server_url + f"/?dataset={jid}#results"
+    assert status["dataset_name"] == listed["dataset_name"]
     output = Path(result["dataset_path"])
     assert hashes(source) == before
     mapping = json.loads(

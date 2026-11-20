@@ -84,6 +84,11 @@ VIEWER_LOGIN_PAGE = themed_html(VIEWER_LOGIN_PAGE)
 TRUSTED_NETWORK_VALUES = {"1", "true", "yes", "on"}
 
 
+def authorization_headers(token: str) -> dict[str, str]:
+    """A trusted deployment may omit its token; ``Bearer `` is invalid HTTP."""
+    return {"Authorization": "Bearer " + token} if token else {}
+
+
 def trusted_network_enabled(settings) -> bool:
     """Return whether browser login is disabled for this deployment.
 
@@ -235,9 +240,7 @@ def install_security(app: FastAPI, settings, device_prefix: str | None = None):
             # device token is still required separately when this Client calls
             # the Server upload API.
             response = await call_next(request)
-        elif (trusted and not device_path) or (
-            public and settings.role != "viewer"
-        ):
+        elif (trusted and not device_path) or (public and settings.role != "viewer"):
             response = await call_next(request)
         else:
             authorised, cookie_only = credentials(request)

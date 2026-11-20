@@ -24,7 +24,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from pipeline.shared.core import DomainError, Store, executable_path
-from pipeline.shared.security import install_security
+from pipeline.shared.security import authorization_headers, install_security
 from pipeline.shared.web import themed_html
 
 from .datasets import dataset_for_job
@@ -491,7 +491,7 @@ def create_gateway(settings):
                     "GET" if body is None else "POST",
                     url,
                     json=body.model_dump() if body is not None else None,
-                    headers={"Authorization": "Bearer " + settings.token},
+                    headers=authorization_headers(settings.token),
                     timeout=settings.command_timeout,
                 )
         except httpx.HTTPError as exc:
@@ -521,7 +521,7 @@ def create_gateway(settings):
                     method,
                     url,
                     json=body.model_dump() if body is not None else None,
-                    headers={"Authorization": "Bearer " + settings.token},
+                    headers=authorization_headers(settings.token),
                     timeout=settings.command_timeout,
                 )
         except httpx.HTTPError as exc:
@@ -656,7 +656,7 @@ def create_gateway(settings):
             async with httpx.AsyncClient(trust_env=False) as client:
                 response = await client.get(
                     url,
-                    headers={"Authorization": "Bearer " + settings.token},
+                    headers=authorization_headers(settings.token),
                     timeout=settings.command_timeout,
                 )
         except httpx.HTTPError as exc:
@@ -695,7 +695,7 @@ def create_gateway(settings):
             async with httpx.AsyncClient(trust_env=False) as client:
                 response = await client.post(
                     url,
-                    headers={"Authorization": "Bearer " + settings.token},
+                    headers=authorization_headers(settings.token),
                     timeout=settings.command_timeout,
                 )
         except httpx.HTTPError as exc:

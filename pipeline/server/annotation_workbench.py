@@ -226,6 +226,7 @@ class AnnotationWorkbench:
         snapshot,
         data,
         *,
+        source_key,
         initial_ai=True,
         pin=False,
         initial_candidates=None,
@@ -236,7 +237,9 @@ class AnnotationWorkbench:
         except DomainError as exc:
             if exc.code != 404:
                 raise
-            legacy = self.legacy._draft(self.legacy.resolve(dataset)[0], path, snapshot)
+            # The caller already resolved and locked this source. Re-resolving
+            # here reloads the entire frozen export job for every Episode.
+            legacy = self.legacy._draft(source_key, path, snapshot)
             document = self.legacy._document(legacy, item, data, path, job)
             document = migrate_document(document)
             if "manualAtoms" not in document:
@@ -343,6 +346,7 @@ class AnnotationWorkbench:
                 job,
                 snapshot,
                 data,
+                source_key=key,
                 initial_ai=initial_ai,
                 pin=initial_ai,
             )
@@ -358,7 +362,9 @@ class AnnotationWorkbench:
         key, path, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key, [episode]):
             _, path, job, snapshot, data = self.context(dataset)
-            row, item = self._head(dataset, episode, path, job, snapshot, data)
+            row, item = self._head(
+                dataset, episode, path, job, snapshot, data, source_key=key
+            )
             self.check(row, body.revision, body.source_signature)
             doc = validate_annotation(
                 body.document.model_dump(exclude_none=True), item["frames"]
@@ -514,6 +520,7 @@ class AnnotationWorkbench:
                     job,
                     snapshot,
                     data,
+                    source_key=key,
                     initial_candidates=candidate_index.get(ep, []),
                 )
                 doc = row["document"]
@@ -561,12 +568,14 @@ class AnnotationWorkbench:
             }
 
     def _selection(self, dataset, body):
-        _, path, job, snapshot, data = self.context(dataset)
+        key, path, job, snapshot, data = self.context(dataset)
         if snapshot["signature"] != body.source_signature:
             raise DomainError("来源已变化，请重新核对导出清单", 409)
         episodes = []
         for ep in sorted(set(body.episodes)):
-            row, item = self._head(dataset, ep, path, job, snapshot, data)
+            row, item = self._head(
+                dataset, ep, path, job, snapshot, data, source_key=key
+            )
             self.check(row, body.revisions.get(str(ep), -1), body.source_signature)
             episodes.append((row, item))
         if not episodes:
@@ -693,7 +702,9 @@ class AnnotationWorkbench:
         key, _, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key, [episode]):
             _, path, job, snapshot, data = self.context(dataset)
-            row, item = self._head(dataset, episode, path, job, snapshot, data)
+            row, item = self._head(
+                dataset, episode, path, job, snapshot, data, source_key=key
+            )
             self.check(row, body.revision, body.source_signature)
             c = self.store.get("annotation_candidate", body.candidate)
             if (

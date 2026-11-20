@@ -6,6 +6,7 @@ from fastapi import Body, Request
 from fastapi.responses import FileResponse, Response
 
 from pipeline.shared.core import DomainError, digest
+from pipeline.shared.security import authorization_headers
 from pipeline.shared.web import ASSETS
 
 from .annotation_media import AnnotationMedia
@@ -146,7 +147,7 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
                         + route,
                         params=request.query_params,
                         json=await request.json() if request.method == "POST" else None,
-                        headers={"Authorization": "Bearer " + settings.token},
+                        headers=authorization_headers(settings.token),
                         timeout=settings.command_timeout,
                     )
             except httpx.HTTPError as exc:
@@ -324,5 +325,13 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
                 settings.viewer_origin.rstrip("/")
                 + row["page_path"]
                 + "?tab=annotations"
+            )
+            from urllib.parse import urlencode
+
+            result["data_url"] = (
+                settings.server_url.rstrip("/")
+                + "/?"
+                + urlencode({"dataset": export_id})
+                + "#results"
             )
         return result

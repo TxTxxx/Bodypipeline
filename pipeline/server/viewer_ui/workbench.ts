@@ -88,6 +88,7 @@ export function mountWorkbench(
     page = 0,
     filterState: EpisodeFilter = {},
     signature = "",
+    datasetName = "",
     library: { revision: number; templates: Template[] } = {
       revision: 0,
       templates: [],
@@ -487,7 +488,10 @@ export function mountWorkbench(
     }
   }
   function publishNavigation() {
-    if (!options.navigation || disposed) return;
+    if (disposed) return;
+    ($("delivery") as HTMLButtonElement).disabled =
+      navigationLoading || !signature;
+    if (!options.navigation) return;
     const filtered = navigationRows();
     const pageCount = Math.max(1, Math.ceil(filtered.length / 10));
     if (allRows.length) page = Math.max(0, Math.min(page, pageCount - 1));
@@ -587,10 +591,11 @@ export function mountWorkbench(
       rows = result.episodes;
       allRows = completeRows;
       signature = result.source_signature;
+      datasetName = result.name || sourceDataset;
       try {
         localStorage.setItem(
           `bp-catalog:${sourceDataset}`,
-          JSON.stringify({ rows: allRows, signature }),
+          JSON.stringify({ rows: allRows, signature, name: datasetName }),
         );
       } catch {
         note("列表本地备份失败，服务器读取结果仍保留。请保持页面打开。");
@@ -607,6 +612,7 @@ export function mountWorkbench(
       allRows = old.rows;
       rows = allRows;
       signature = old.signature;
+      datasetName = old.name || sourceDataset;
       note(
         `${e.message}。来源列表使用本地备份；未同步修改继续保留，筛选需恢复连接后核实。`,
       );
@@ -639,6 +645,7 @@ export function mountWorkbench(
     page = 0;
     let previousEpisode = episode;
     signature = "";
+    datasetName = "";
     if (options.navigation) {
       try {
         const saved = JSON.parse(
@@ -1922,7 +1929,7 @@ export function mountWorkbench(
   }
   function deliveryDialog() {
     modal(
-      `<h2>导出标注与数据</h2><p>使用最新保存的标注。未人工检查的结果也可以导出，文件中会保留真实来源与检查状态。</p><label>导出范围<select id="export-scope"><option value="selected">已选 ${selection.entries.size} 条</option><option value="all">全部 ${availableRows().length} 条</option></select></label><p class="hint">在左侧 Episode 列表勾选要导出的条目；“全部”包含当前数据集的全部可用 Episode。</p><div class="row"><button id="export-bundle" class="primary">下载标注文件（JSON）</button><button id="export-subset">生成数据副本（含视频与标注）</button></div><p class="hint">JSON 只包含标注；数据副本包含所选条目的原始数据和标注，生成后可在数据列表中预览、下载。</p><div id="export-state" role="status"></div>`,
+      `<h2>导出标注与数据</h2><p>使用最新保存的标注。未人工检查的结果也可以导出，文件中会保留真实来源与检查状态。</p><label>导出范围<select id="export-scope"><option value="selected">已选 ${selection.entries.size} 条</option><option value="all">全部 ${availableRows().length} 条</option></select></label><p class="hint">在左侧 Episode 列表勾选要导出的条目；“全部”包含当前数据集的全部可用 Episode。</p><label>新数据集名称（生成数据副本时使用）<input id="export-name" type="text" maxlength="2000" value="${esc((datasetName || dataset).slice(0, 1970) + "-副本")}" required></label><div class="row"><button id="export-bundle" class="primary">下载标注文件（JSON）</button><button id="export-subset">生成数据副本（含视频与标注）</button></div><p class="hint">JSON 只包含标注；数据副本包含所选条目的原始数据和标注，生成后会出现在主页面的“预览与质检”列表中。</p><div id="export-state" role="status"></div>`,
     );
     const exportState = $("export-state");
     const busy = (state: boolean) =>
@@ -1944,11 +1951,19 @@ export function mountWorkbench(
       }
     });
     btn("export-subset", async () => {
+      const name = value("export-name").value.trim();
+      if (!name) {
+        value("export-name").focus();
+        throw Error("请填写新数据集名称");
+      }
       busy(true);
       try {
         const job = await request(
             `${dataset}/exports`,
-            await exportSelection(value("export-scope").value),
+            {
+              ...(await exportSelection(value("export-scope").value)),
+              name,
+            },
           ),
           ds = dataset;
         exportState.textContent =
@@ -1961,7 +1976,7 @@ export function mountWorkbench(
               const result = await request(`${ds}/exports/${job.id}`),
                 host = $("export-state");
               if (host)
-                host.innerHTML = `${esc(({ QUEUED: "等待生成数据副本", RUNNING: "正在生成数据副本", CONVERTED: "数据副本已生成", FAILED: "生成失败", INTERRUPTED: "生成已中断" } as Record<string, string>)[result.state] || result.stage)}${result.error ? ` · ${esc(result.error)}` : ""}${result.viewer_url ? ` · <a href="${esc(result.viewer_url)}">预览生成的数据</a>` : ""}`;
+                host.innerHTML = `${esc(({ QUEUED: "等待生成数据副本", RUNNING: "正在生成数据副本", CONVERTED: "数据副本已生成", FAILED: "生成失败", INTERRUPTED: "生成已中断" } as Record<string, string>)[result.state] || result.stage)} · ${esc(result.dataset_name || name)}${result.error ? ` · ${esc(result.error)}` : ""}${result.viewer_url ? ` · <a href="${esc(result.viewer_url)}">预览生成的数据</a>` : ""}${result.data_url ? ` · <a href="${esc(result.data_url)}">在预览与质检中查看</a>` : ""}`;
               if (!["QUEUED", "RUNNING"].includes(result.state)) return;
             } catch (e: any) {
               note(e.message);
