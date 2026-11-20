@@ -16,7 +16,7 @@
 
 ## 部署
 
-Server 和已有 Argus/CPU 媒体工具链必须可用。新安装使用 `scripts/install_argus.sh`，它将补丁 0001–0005 及受控 transport 一起安装。更新现有部署时应在自己的 Argus 副本应用补丁并提交，保持工具源码干净；不要覆盖其他任务的 vendor。无需 GPU、Slurm 或重新安装训练环境。
+Server 和已有 Argus/CPU 媒体工具链必须可用。新安装使用 `scripts/install_argus.sh`，它将补丁 0001–0006 及受控 transport 一起安装。补丁 0006 避免原生分段保存到毫秒的时长显示值被误判为超出精确帧预算；真正超限的帧数及不同的较长时长声明仍会被拦截。更新现有部署时应在自己的 Argus 副本应用补丁并提交，保持工具源码干净；不要覆盖其他任务的 vendor。无需 GPU、Slurm 或重新安装训练环境。
 
 受信 Server 配置可设置：
 
