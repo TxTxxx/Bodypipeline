@@ -84,12 +84,24 @@ def test_ai_initial_draft_is_pinned_and_never_overwrites_human_head(
         base_revision=0,
         provenance={"annotation": "ai-1"},
     )
+    # Looking ahead must not create a saved annotation or review history.
+    prefetched = client.get(BASE + "/episodes/0?prefetch=true")
+    assert prefetched.status_code == 200
+    assert prefetched.json()["revision"] == 0
+    assert prefetched.json()["document"]["provenance"]["initialAI"] == candidate["id"]
+    assert review_app.state.runner.store.all("annotation_episode") == []
+    assert review_app.state.runner.store.all("annotation_episode_history") == []
     head = client.get(BASE + "/episodes/0").json()
     assert head["revision"] == 1
     assert head["document"]["values"]["episode-comment"] == "AI result"
     assert head["document"]["provenance"]["initialAI"] == candidate["id"]
     assert head["complete"] is False
     assert all(not s.get("review") for s in head["document"]["segments"])
+    opened = client.get(BASE + "/episodes/0")
+    unchanged = client.get(
+        BASE + "/episodes/0", headers={"If-None-Match": opened.headers["etag"]}
+    )
+    assert unchanged.status_code == 304 and unchanged.content == b""
     # Direct export needs no review. The model's provenance remains truthful.
     payload = {
         "source_signature": head["source_signature"],
@@ -111,6 +123,11 @@ def test_ai_initial_draft_is_pinned_and_never_overwrites_human_head(
         },
     )
     assert response.status_code == 200, response.text
+    changed = client.get(
+        BASE + "/episodes/0", headers={"If-None-Match": opened.headers["etag"]}
+    )
+    assert changed.status_code == 200
+    assert changed.json()["document"]["values"]["episode-comment"] == "my edit"
     incoming["values"]["episode-comment"] = "later AI"
     service.add_candidate(
         "source",

@@ -335,7 +335,7 @@ class AnnotationWorkbench:
                 "此 Episode 或来源已变化；本地与服务器内容均保留，请对照处理冲突", 409
             )
 
-    def episode(self, dataset, episode, *, initial_ai=True):
+    def episode(self, dataset, episode, *, initial_ai=True, pin=True):
         key, path, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key, [episode]):
             _, path, job, snapshot, data = self.context(dataset)
@@ -348,7 +348,7 @@ class AnnotationWorkbench:
                 data,
                 source_key=key,
                 initial_ai=initial_ai,
-                pin=initial_ai,
+                pin=pin and initial_ai,
             )
             return {
                 **row,

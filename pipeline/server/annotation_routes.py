@@ -147,7 +147,14 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
                         + route,
                         params=request.query_params,
                         json=await request.json() if request.method == "POST" else None,
-                        headers=authorization_headers(settings.token),
+                        headers={
+                            **authorization_headers(settings.token),
+                            **(
+                                {"If-None-Match": request.headers["if-none-match"]}
+                                if request.headers.get("if-none-match")
+                                else {}
+                            ),
+                        },
                         timeout=settings.command_timeout,
                     )
             except httpx.HTTPError as exc:
@@ -156,6 +163,11 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
                 response.content,
                 status_code=response.status_code,
                 media_type=response.headers.get("content-type", "application/json"),
+                headers={
+                    k: response.headers[k]
+                    for k in ("etag", "cache-control")
+                    if k in response.headers
+                },
             )
 
         return
@@ -203,10 +215,17 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         return workbench.listing(dataset, subtask, count, recorded, template_signature)
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}")
-    def episode(dataset: str, episode: int):
+    def episode(dataset: str, episode: int, request: Request, prefetch: bool = False):
         if annotations is not None:
             annotations.refresh_workbench(dataset)
-        return workbench.episode(dataset, episode)
+        head = workbench.episode(dataset, episode, pin=not prefetch)
+        etag = '"' + digest(head) + '"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(head, headers=headers)
 
     @app.post("/api/annotation-workbench/{dataset}/episodes/{episode}")
     def save(dataset: str, episode: int, body: SaveAnnotation):

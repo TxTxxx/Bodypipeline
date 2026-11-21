@@ -338,6 +338,174 @@ class VideoTransport {
   }
 }
 
+// pipeline/server/viewer_ui/workbench-prefetch.ts
+var mediaUrl = (dataset, signature, path) => `/api/annotation-workbench/${encodeURIComponent(dataset)}/media/${path.split("/").map(encodeURIComponent).join("/")}?signature=${encodeURIComponent(signature)}`;
+var releaseVideos = (videos) => {
+  videos.forEach((video) => {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  });
+  videos.clear();
+};
+
+class EpisodePreloader {
+  load;
+  warm;
+  lifetime;
+  slot;
+  expiry;
+  constructor(load, warm, lifetime = 20000) {
+    this.load = load;
+    this.warm = warm;
+    this.lifetime = lifetime;
+  }
+  matches(target) {
+    const s = this.slot;
+    return !!s && s.dataset === target.dataset && s.episode === target.episode && s.signature === target.signature;
+  }
+  prepare(target, status) {
+    if (this.matches(target))
+      return;
+    this.clear();
+    const slot = {
+      ...target,
+      abort: new AbortController,
+      ready: Promise.resolve(undefined)
+    };
+    this.slot = slot;
+    slot.ready = this.load(target, slot.abort.signal).then((data) => {
+      if (this.slot !== slot || slot.abort.signal.aborted) {
+        releaseVideos(data.videos);
+        return;
+      }
+      slot.data = data;
+      if (data.head.source_signature !== target.signature || data.media.source_signature !== target.signature)
+        throw Error("来源已变化");
+      this.warm(data, slot.abort.signal).then((ready) => {
+        if (this.slot === slot && !slot.abort.signal.aborted)
+          status(ready || null);
+      }).catch(() => {
+        if (this.slot === slot && !slot.abort.signal.aborted)
+          status(null);
+      });
+      return data;
+    }).catch(() => {
+      if (this.slot === slot) {
+        this.clear();
+        status(null);
+      }
+      return;
+    });
+    status(false);
+  }
+  async take(target) {
+    if (!this.matches(target))
+      return;
+    clearTimeout(this.expiry);
+    const slot = this.slot;
+    const data = await slot.ready;
+    if (this.slot !== slot)
+      return;
+    this.slot = undefined;
+    slot.abort.abort();
+    return data;
+  }
+  retainFor(target) {
+    if (!this.matches(target))
+      this.clear();
+    else
+      clearTimeout(this.expiry);
+  }
+  leave() {
+    clearTimeout(this.expiry);
+    this.expiry = setTimeout(() => this.clear(), this.lifetime);
+  }
+  clear() {
+    clearTimeout(this.expiry);
+    const slot = this.slot;
+    this.slot = undefined;
+    slot?.abort.abort();
+    if (slot?.data)
+      releaseVideos(slot.data.videos);
+  }
+}
+async function read(url, signal) {
+  const response = await fetch(url, {
+    signal,
+    cache: "no-store",
+    priority: "low"
+  });
+  if (!response.ok)
+    throw Error("预加载暂不可用");
+  return {
+    value: await response.json(),
+    etag: response.headers.get("etag") || undefined
+  };
+}
+async function load(target, signal) {
+  const base = `/api/annotation-workbench/${encodeURIComponent(target.dataset)}/episodes/${target.episode}`;
+  const [head, media] = await Promise.all([
+    read(base + "?prefetch=true", signal),
+    read(base + "/media", signal)
+  ]);
+  return {
+    head: head.value,
+    etag: head.etag,
+    media: media.value,
+    videos: new Map
+  };
+}
+async function warm(data, signal) {
+  for (let index = 0;index < data.media.cameras.length; index++) {
+    if (signal.aborted)
+      return false;
+    const camera = data.media.cameras[index];
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.dataset.prefetched = "true";
+    data.videos.set(camera.key, video);
+    await new Promise((resolve) => {
+      let sought = false;
+      const finish = () => {
+        clearTimeout(timer);
+        for (const event of ["loadedmetadata", "loadeddata", "seeked", "error"])
+          video.removeEventListener(event, ready);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const failed = () => {
+        finish();
+        video.removeAttribute("src");
+        video.load();
+      };
+      const ready = () => {
+        if (video.error)
+          return failed();
+        if (video.readyState >= 1 && !sought) {
+          sought = true;
+          video.currentTime = seekTime(data.media, index, 0);
+        }
+        if (sought && !video.seeking && video.readyState >= 2)
+          finish();
+      };
+      const timer = setTimeout(failed, 6000);
+      signal.addEventListener("abort", finish, { once: true });
+      for (const event of ["loadedmetadata", "loadeddata", "seeked", "error"])
+        video.addEventListener(event, ready);
+      video.src = mediaUrl(data.head.dataset, data.head.source_signature, camera.path);
+      video.load();
+    });
+  }
+  return data.media.cameras.every((camera) => {
+    const video = data.videos.get(camera.key);
+    return video && !video.error && !video.seeking && video.readyState >= 2;
+  });
+}
+var episodePreloader = new EpisodePreloader(load, warm);
+
 // pipeline/server/viewer_ui/workbench-model.ts
 var copy = (x) => structuredClone(x);
 function uid() {
@@ -646,6 +814,7 @@ function attemptOrdinals(doc) {
 
 // pipeline/server/viewer_ui/workbench.ts
 var pendingSaves = new Map;
+var recentCatalog;
 function mountWorkbench(root, options = {}) {
   const lifecycle = new AbortController;
   let disposed = false;
@@ -683,6 +852,9 @@ function mountWorkbench(root, options = {}) {
   let reviewingEpisode;
   const sessions = new Map;
   let loadGeneration = 0, datasetGeneration = 0, listGeneration = 0;
+  let prefetchTimer;
+  let plannedPrefetch;
+  let handingOffPrefetch = false;
   function note(text = "") {
     if (disposed)
       return;
@@ -697,16 +869,19 @@ function mountWorkbench(root, options = {}) {
       note(e.message || String(e));
     }
   }
-  async function request(path, body, finishSave = false) {
+  async function request(path, body, finishSave = false, cached) {
     if (disposed)
       throw Error("工作区已关闭，修改已在本机保留");
     const response = await fetch(apiBase + path, {
       method: body === undefined ? "GET" : "POST",
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body)
+      headers: body === undefined ? cached?.etag ? { "If-None-Match": cached.etag } : {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: cached ? "no-store" : "default"
     });
     if (disposed && !finishSave)
       throw Error("工作区已关闭，修改已在本机保留");
+    if (response.status === 304 && cached)
+      return copy(cached.value);
     let result;
     try {
       result = await response.json();
@@ -1012,6 +1187,41 @@ function mountWorkbench(root, options = {}) {
       currentOutsideFilter: !!active && !filtered.some((row) => row.episode === episode)
     });
     persistNavigation();
+    planPrefetch();
+  }
+  function stopPrefetch() {
+    clearTimeout(prefetchTimer);
+    plannedPrefetch = undefined;
+    episodePreloader.clear();
+  }
+  function planPrefetch() {
+    if (!options.native || disposed || !active || navigationLoading)
+      return;
+    const next = navigationRows().find((row) => row.episode > episode);
+    const status = $("prefetch-state");
+    if (!next) {
+      stopPrefetch();
+      status.textContent = "";
+      return;
+    }
+    const target = { dataset, episode: next.episode, signature };
+    if (plannedPrefetch?.dataset === dataset && plannedPrefetch.episode === next.episode && plannedPrefetch.signature === signature)
+      return;
+    if (transport?.alignedFrame == null && !playing)
+      return;
+    const videos = [...$("preview").querySelectorAll("video")];
+    if (videos.some((video) => video.readyState < 2 || video.seeking))
+      return;
+    stopPrefetch();
+    plannedPrefetch = target;
+    prefetchTimer = setTimeout(() => {
+      if (disposed || active?.head.episode !== episode)
+        return;
+      episodePreloader.prepare(target, (ready) => {
+        if (!disposed && plannedPrefetch === target)
+          status.textContent = `下一条 Episode ${target.episode} · ${ready === null ? "按需加载" : ready ? "已预加载" : "后台预加载中"}`;
+      });
+    }, 900);
   }
   function renderEpisodes() {
     if (options.navigation) {
@@ -1043,10 +1253,12 @@ function mountWorkbench(root, options = {}) {
     $("selection-count").textContent = String(selection.entries.size);
     publishNavigation();
   }
-  async function refresh(reset = true) {
+  async function refresh(reset = true, quiet = false) {
     const sourceDataset = dataset, generation = ++listGeneration;
     const chosenFilter = copy(filterState);
-    navigationLoading = true;
+    if (!quiet)
+      stopPrefetch();
+    navigationLoading = !quiet;
     publishNavigation();
     let query = "";
     if (chosenFilter.subtask)
@@ -1060,6 +1272,15 @@ function mountWorkbench(root, options = {}) {
       allRows = completeRows;
       signature = result.source_signature;
       datasetName = result.name || sourceDataset;
+      recentCatalog = {
+        dataset: sourceDataset,
+        signature,
+        name: datasetName,
+        rows: copy(rows),
+        allRows: copy(allRows),
+        filter: JSON.stringify(chosenFilter),
+        at: Date.now()
+      };
       try {
         localStorage.setItem(`bp-catalog:${sourceDataset}`, JSON.stringify({ rows: allRows, signature, name: datasetName }));
       } catch {
@@ -1123,7 +1344,23 @@ function mountWorkbench(root, options = {}) {
     allRows = [];
     rows = [];
     renderSelectionCount();
-    await refresh(false);
+    const cachedCatalog = recentCatalog;
+    const fast = !!(options.native && cachedCatalog?.dataset === dataset && cachedCatalog.filter === JSON.stringify(filterState) && episodePreloader.matches({
+      dataset,
+      episode,
+      signature: cachedCatalog.signature
+    }));
+    if (fast) {
+      rows = copy(cachedCatalog.rows);
+      allRows = copy(cachedCatalog.allRows);
+      signature = cachedCatalog.signature;
+      datasetName = cachedCatalog.name;
+      navigationLoading = false;
+      renderEpisodes();
+    } else {
+      episodePreloader.clear();
+      await refresh(false);
+    }
     if (generation !== datasetGeneration || dataset !== id)
       return;
     if (options.navigation && previousEpisode !== episode) {
@@ -1138,6 +1375,8 @@ function mountWorkbench(root, options = {}) {
       return;
     }
     await openEpisode(allRows.some((r) => r.episode === episode) ? episode : allRows[0].episode);
+    if (fast && !disposed)
+      refresh(false, true).catch(() => {});
     if (options.native)
       return;
     const prefetchDataset = dataset, prefetchDrafts = drafts, prefetchRows = [...allRows];
@@ -1173,6 +1412,11 @@ function mountWorkbench(root, options = {}) {
       await sync(active);
       if (active.dirty || active.remote)
         throw Error("当前修改尚未保存，请先处理保存问题");
+      handingOffPrefetch = episodePreloader.matches({
+        dataset,
+        episode: ep,
+        signature
+      });
       options.onEpisode(ep);
       return;
     }
@@ -1189,13 +1433,24 @@ function mountWorkbench(root, options = {}) {
       active = existing;
     else {
       const saved = drafts.read(ep);
+      const target = { dataset, episode: ep, signature };
+      episodePreloader.retainFor(target);
+      let prepared = await episodePreloader.take(target);
+      if (disposed || load !== loadGeneration || dataset !== sourceDataset) {
+        if (prepared)
+          releaseVideos(prepared.videos);
+        return;
+      }
       let head;
       let headError = "", readFailure;
       try {
-        head = await request(`${dataset}/episodes/${ep}`);
+        head = await request(`${dataset}/episodes/${ep}`, undefined, false, prepared ? { value: prepared.head, etag: prepared.etag } : undefined);
       } catch (e) {
         const network = e instanceof TypeError;
         headError = network ? "网络不可用，正在使用本地备份" : `服务器读取失败：${e.message}`;
+        if (prepared)
+          releaseVideos(prepared.videos);
+        prepared = undefined;
         if (!saved)
           throw Error(`${headError}；这个 Episode 尚未缓存`);
         head = saved.head;
@@ -1204,8 +1459,11 @@ function mountWorkbench(root, options = {}) {
         note(readFailure || headError);
       }
       const sameSource = !saved || saved.head.source_signature === head.source_signature;
-      if (disposed || load !== loadGeneration || dataset !== sourceDataset)
+      if (disposed || load !== loadGeneration || dataset !== sourceDataset) {
+        if (prepared)
+          releaseVideos(prepared.videos);
         return;
+      }
       const use = saved && sameSource && (saved.dirty || saved.head.revision === head.revision);
       const s = {
         head,
@@ -1229,6 +1487,11 @@ function mountWorkbench(root, options = {}) {
         s.doc = copy(saved.document);
         s.error = "服务器修订或来源与本地草稿不同";
       }
+      if (prepared && prepared.media.source_signature === s.head.source_signature && !readFailure && (!s.remote || s.remote.source_signature === s.head.source_signature)) {
+        s.media = prepared.media;
+        s.preparedVideos = prepared.videos;
+      } else if (prepared)
+        releaseVideos(prepared.videos);
       sessions.set(ep, s);
       active = s;
     }
@@ -1253,7 +1516,7 @@ function mountWorkbench(root, options = {}) {
         throw Error(s.readFailure);
       if (s.remote && s.remote.source_signature !== s.head.source_signature)
         throw Error("来源版本改变，旧草稿与新来源隔离，请先处理冲突");
-      s.media = await request(`${sourceDataset}/episodes/${ep}/media`);
+      s.media ??= await request(`${sourceDataset}/episodes/${ep}/media`);
       if (s.media.source_signature && s.media.source_signature !== s.head.source_signature) {
         s.media = undefined;
         throw Error("来源媒体版本不同，禁止混用新画面和旧帧标注");
@@ -1322,7 +1585,28 @@ function mountWorkbench(root, options = {}) {
       $("preview").innerHTML = '<div class="empty">此来源没有可用视频。标注数据帧仍保留，不能把帧号当作画面验证。</div>';
       return;
     }
-    $("preview").innerHTML = s.media.cameras.map((c, i) => `<div class="camera" data-camera="${esc(c.key)}"><span class="camera-label">${esc(c.key)}</span><video preload="auto" playsinline muted data-video="${i}" src="${apiBase}${encodeURIComponent(s.head.dataset)}/media/${c.path.split("/").map(encodeURIComponent).join("/")}?signature=${s.head.source_signature}"></video><img hidden alt="${esc(c.key)} 当前数据帧画面" data-frame-image="${i}"><span class="frame-tag">视频预览</span></div>`).join("");
+    $("preview").innerHTML = s.media.cameras.map((c, i) => `<div class="camera" data-camera="${esc(c.key)}"><span class="camera-label">${esc(c.key)}</span><video preload="none" playsinline muted data-video="${i}"></video><img hidden alt="${esc(c.key)} 当前数据帧画面" data-frame-image="${i}"><span class="frame-tag">视频预览</span></div>`).join("");
+    s.media.cameras.forEach((camera, index) => {
+      const placeholder = $("preview").querySelectorAll("video")[index];
+      const video = s.preparedVideos?.get(camera.key) || placeholder;
+      s.preparedVideos?.delete(camera.key);
+      if (video !== placeholder)
+        placeholder.replaceWith(video);
+      video.dataset.video = String(index);
+      video.preload = "auto";
+      const url = mediaUrl(s.head.dataset, s.head.source_signature, camera.path);
+      if (video.error || video.getAttribute("src") !== url)
+        video.src = url;
+      video.addEventListener("waiting", () => {
+        if (!disposed && active === s) {
+          stopPrefetch();
+          $("prefetch-state").textContent = "优先加载当前视频";
+        }
+      }, { signal: lifecycle.signal });
+      video.addEventListener("canplay", planPrefetch, {
+        signal: lifecycle.signal
+      });
+    });
     const controller = new VideoTransport({
       media: s.media,
       hosts: Array.from($("preview").querySelectorAll(".camera")),
@@ -1337,6 +1621,8 @@ function mountWorkbench(root, options = {}) {
         updateFrameNumber(state);
         renderPlayhead();
         frameEditing(aligned);
+        if (running)
+          planPrefetch();
       },
       settled: () => {
         if (disposed || active !== s || transport !== controller)
@@ -1344,6 +1630,7 @@ function mountWorkbench(root, options = {}) {
         renderFrameFields();
         frameEditing(true);
         backup(s);
+        planPrefetch();
       },
       error: (message) => {
         if (active === s && transport === controller)
@@ -2520,6 +2807,11 @@ function mountWorkbench(root, options = {}) {
     if (options.native)
       root.querySelector(".episode-picker")?.removeAttribute("open");
     value("dataset").disabled = !!options.native;
+    if (options.native && dataset) {
+      value("dataset").innerHTML = `<option value="${esc(dataset)}">${esc(dataset)}</option>`;
+      await openDataset(dataset);
+      return;
+    }
     try {
       const result = await request("datasets");
       value("dataset").innerHTML = result.datasets.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("");
@@ -2566,6 +2858,15 @@ function mountWorkbench(root, options = {}) {
       ++datasetGeneration;
       ++listGeneration;
       lifecycle.abort();
+      clearTimeout(prefetchTimer);
+      if (handingOffPrefetch)
+        episodePreloader.leave();
+      else
+        episodePreloader.clear();
+      sessions.forEach((s) => {
+        if (s.preparedVideos)
+          releaseVideos(s.preparedVideos);
+      });
       clearTimeout(saveTimer);
       clearInterval(autosaveInterval);
       disconnectNavigation?.();

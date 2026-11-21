@@ -239,6 +239,7 @@ def patch_task_annotations(cache: Path):
         "workbench.ts": "src/utils/workbench.ts",
         "workbench-model.ts": "src/utils/workbench-model.ts",
         "workbench-media.ts": "src/utils/workbench-media.ts",
+        "workbench-prefetch.ts": "src/utils/workbench-prefetch.ts",
         "workbench-markup.ts": "src/utils/workbench-markup.ts",
         "task-annotation-model.ts": "src/utils/task-annotation-model.ts",
         "task-annotation-studio.tsx": "src/components/task-annotation-studio.tsx",

@@ -22,6 +22,11 @@ def test_gateway_proxies_workspace_and_related_routes_with_optional_token(
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             seen.append((self.command, self.path, self.headers.get("Authorization")))
+            if self.headers.get("If-None-Match") == '"saved-head"':
+                self.send_response(304)
+                self.send_header("ETag", '"saved-head"')
+                self.end_headers()
+                return
             payload = json.dumps(
                 {
                     "operation": "manual_trim",
@@ -32,6 +37,7 @@ def test_gateway_proxies_workspace_and_related_routes_with_optional_token(
             ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("ETag", '"saved-head"')
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -71,12 +77,23 @@ def test_gateway_proxies_workspace_and_related_routes_with_optional_token(
             )
             assert opened.status_code == 200, opened.text
             assert opened.json()["url"] == "http://viewer.example/bp/trim/episode_0"
-        assert len(seen) == len(paths) + 2
+            prefetch = client.get(
+                "/api/annotation-workbench/source/episodes/0?prefetch=true",
+                headers=headers,
+            )
+            assert prefetch.headers["etag"] == '"saved-head"'
+            validated = client.get(
+                "/api/annotation-workbench/source/episodes/0",
+                headers={**headers, "If-None-Match": prefetch.headers["etag"]},
+            )
+            assert validated.status_code == 304 and validated.content == b""
+        assert len(seen) == len(paths) + 4
         assert all(
             auth == (None if trusted else "Bearer " + token) for _, _, auth in seen
         )
         assert seen[0][1] == paths[0]
-        assert seen[-1][:2] == ("POST", "/api/jobs/trim/viewer")
+        assert seen[-3][:2] == ("POST", "/api/jobs/trim/viewer")
+        assert seen[-2][1].endswith("?prefetch=true")
     finally:
         server.shutdown()
         server.server_close()
