@@ -598,6 +598,29 @@ class AnnotationWorkbench:
             raise DomainError("导出清单为空，不能自动改成全量", 422)
         return path, job, snapshot, data, episodes
 
+    def revisions(self, dataset):
+        """Refresh export revisions without rebuilding every annotation document.
+
+        The subsequent selection still validates and freezes the requested heads
+        under its locks. Missing heads start at revision zero, just as in listing.
+        """
+        key, _, _ = self.legacy.resolve(dataset)
+        with annotation_lock(self.store, key):
+            _, _, _, snapshot, data = self.context(dataset)
+            revisions = {}
+            for item in data["episodes"]:
+                ep = item["episode_index"]
+                try:
+                    row = self.store.get("annotation_episode", self.key(dataset, ep))
+                except DomainError as exc:
+                    if exc.code != 404:
+                        raise
+                    revisions[str(ep)] = 0
+                else:
+                    self.check(row, row["revision"], snapshot["signature"])
+                    revisions[str(ep)] = row["revision"]
+            return {"source_signature": snapshot["signature"], "revisions": revisions}
+
     def bundle(self, dataset, body: Selection):
         key, _, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key, body.episodes):

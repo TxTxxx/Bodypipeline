@@ -11,6 +11,44 @@ from pipeline.server.annotation_contract import content_key
 BASE = "/api/annotation-workbench/source"
 
 
+def test_export_revisions_skip_document_reconstruction_and_keep_conflict_guard(
+    review_app, monkeypatch
+):
+    client = client_for(review_app)
+    catalog = client.get(BASE + "/episodes").json()
+    head = client.get(BASE + "/episodes/0").json()
+    saved = client.post(BASE + "/episodes/0", json=save_body(head)).json()
+    service = review_app.state.annotation_workbench
+
+    def no_reconstruction(*args, **kwargs):
+        raise AssertionError("Revision refresh must not reconstruct documents")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service, "_head", no_reconstruction)
+        response = client.get(BASE + "/revisions")
+    assert response.status_code == 200, response.text
+    latest = response.json()
+    assert latest["source_signature"] == catalog["source_signature"]
+    assert latest["revisions"] == {"0": saved["revision"], "1": 0}
+    # Updating the source or saved head after this read still blocks stale export.
+    selection = {
+        **latest,
+        "episodes": [0],
+    }
+    changed = client.post(BASE + "/episodes/0", json=save_body(saved))
+    assert changed.status_code == 200, changed.text
+    conflict = client.post(BASE + "/bundle", json=selection)
+    assert conflict.status_code == 409, conflict.text
+    assert client.get(BASE + "/revisions").json()["revisions"]["0"] == (
+        changed.json()["revision"]
+    )
+    store = review_app.state.runner.store
+    row = store.get("annotation_episode", head["id"])
+    row["source_signature"] = "f" * 64
+    store.put("annotation_episode", head["id"], row)
+    assert client.get(BASE + "/revisions").status_code == 409
+
+
 def test_many_episode_copy_does_not_reload_frozen_job_per_episode(
     review_app, monkeypatch
 ):

@@ -878,6 +878,9 @@ function mountWorkbench(root, options = {}) {
     if (disposed)
       return;
     $("notice").textContent = text;
+    const dialogNotice = $("dialog-notice");
+    if (dialogNotice)
+      dialogNotice.textContent = text;
   }
   function safe(run) {
     try {
@@ -1283,8 +1286,8 @@ function mountWorkbench(root, options = {}) {
     }, 900);
   }
   function renderEpisodes() {
+    publishNavigation();
     if (options.navigation) {
-      publishNavigation();
       return;
     }
     const list = navigationRows().slice(page * 10, (page + 1) * 10);
@@ -2109,7 +2112,7 @@ function mountWorkbench(root, options = {}) {
     });
   }
   function modal(html) {
-    $("dialog-body").innerHTML = html;
+    $("dialog-body").innerHTML = '<div id="dialog-notice" role="alert"></div>' + html;
     const d = $("dialog");
     if (!d.open)
       d.showModal();
@@ -2347,7 +2350,7 @@ function mountWorkbench(root, options = {}) {
     }));
   }
   async function exportSelection(scope = "selected") {
-    const ids = scope === "all" ? availableRows().map((r) => r.episode) : [...selection.entries.keys()];
+    const ids = scope === "all" ? availableRows().map((r) => r.episode) : scope === "filtered" ? navigationRows().map((r) => r.episode) : [...selection.entries.keys()];
     if (!ids.length)
       throw Error("请先选择要导出的数据，或选择导出全部数据");
     for (const ep of ids) {
@@ -2358,74 +2361,100 @@ function mountWorkbench(root, options = {}) {
       if (session.dirty || session.remote || session.readFailure)
         throw Error(`Episode ${ep} 尚未保存，请先处理保存问题`);
     }
-    const latest = await request(`${dataset}/episodes`);
+    const latest = await request(`${dataset}/revisions`);
     if (latest.source_signature !== signature)
       throw Error("原始数据已变化，请刷新页面再导出");
-    allRows = latest.episodes;
     const revisions = {};
     for (const ep of ids) {
-      const row = allRows.find((r) => r.episode === ep);
-      if (!row)
+      const revision = latest.revisions[String(ep)];
+      if (!Number.isInteger(revision))
         throw Error(`Episode ${ep} 已不存在，请重新选择`);
-      revisions[ep] = row.revision;
+      revisions[ep] = revision;
     }
     return {
       source_signature: signature,
       episodes: ids,
       revisions,
       filter: scope === "all" ? {} : copy(filterState),
-      origins: Object.fromEntries(ids.map((ep) => [ep, scope === "all" ? "all" : "manual"]))
+      origins: Object.fromEntries(ids.map((ep) => [
+        ep,
+        scope === "all" ? "all" : scope === "filtered" ? "filter" : "manual"
+      ]))
     };
   }
   function deliveryDialog() {
-    modal(`<h2>导出标注与数据</h2><p>使用最新保存的标注。未人工检查的结果也可以导出，文件中会保留真实来源与检查状态。</p><label>导出范围<select id="export-scope"><option value="selected">已选 ${selection.entries.size} 条</option><option value="all">全部 ${availableRows().length} 条</option></select></label><p class="hint">在左侧 Episode 列表勾选要导出的条目；“全部”包含当前数据集的全部可用 Episode。</p><label>新数据集名称（生成数据副本时使用）<input id="export-name" type="text" maxlength="2000" value="${esc((datasetName || dataset).slice(0, 1970) + "-副本")}" required></label><div class="row"><button id="export-bundle" class="primary">下载标注文件（JSON）</button><button id="export-subset">生成数据副本（含视频与标注）</button></div><p class="hint">JSON 只包含标注；数据副本包含所选条目的原始数据和标注，生成后会出现在主页面的“预览与质检”列表中。</p><div id="export-state" role="status"></div>`);
+    const filtered = navigationRows(), hasFilter = !!filterState.subtask || !!filterState.review && filterState.review !== "all" || options.navigation?.getVisibility().flagged !== null && options.navigation?.getVisibility().flagged !== undefined;
+    modal(`<h2>导出标注与数据</h2><p>使用最新保存的标注。未人工检查的结果也可以导出，文件中会保留真实来源与检查状态。</p><label>导出范围<select id="export-scope"><option value="selected">已勾选 ${selection.entries.size} 条</option>${hasFilter ? `<option value="filtered">当前筛选结果 ${filtered.length} 条（所有页）</option>` : ""}<option value="all">全部 ${availableRows().length} 条</option></select></label><p class="hint">“已勾选”使用左侧勾选的条目；“当前筛选结果”无需额外勾选；“全部”包含当前数据集的全部可用 Episode。</p><label>新数据集名称（生成数据副本时使用）<input id="export-name" type="text" maxlength="2000" value="${esc((datasetName || dataset).slice(0, 1970) + "-副本")}" required></label><div class="row"><button id="export-bundle" class="primary">下载标注文件（JSON）</button><button id="export-subset">生成数据副本（含视频与标注）</button></div><p class="hint">JSON 只包含标注；数据副本包含所选条目的原始数据和标注，生成后会出现在主页面的“预览与质检”列表中。</p><div id="export-state" role="status" aria-live="polite"></div>`);
     const exportState = $("export-state");
-    const busy = (state) => ["export-bundle", "export-subset"].forEach((id) => {
-      const el = $(id);
-      if (el)
+    const exportScope = value("export-scope"), exportButtons = ["export-bundle", "export-subset"].map((id) => $(id));
+    if (!selection.entries.size && hasFilter)
+      value("export-scope").value = "filtered";
+    let submitting = false, tracking = 0;
+    const busy = (state) => {
+      submitting = state;
+      exportScope.disabled = state;
+      exportButtons.forEach((el) => {
         el.disabled = state;
-    });
+      });
+    };
     btn("export-bundle", async () => {
+      if (submitting)
+        return;
       busy(true);
+      note("");
+      exportState.textContent = "正在保存修改并读取所选 Episode 的最新标注…";
       try {
         const bundle = await request(`${dataset}/bundle`, await exportSelection(value("export-scope").value));
         download(bundle, `bodypipeline-${dataset}-annotations.json`);
         exportState.textContent = `已下载 ${bundle.episodes.length} 条标注。`;
+      } catch (e) {
+        exportState.textContent = "标注文件未下载，请根据上方提示重试。";
+        throw e;
       } finally {
         if (!disposed)
           busy(false);
       }
     });
     btn("export-subset", async () => {
+      if (submitting)
+        return;
+      note("");
       const name = value("export-name").value.trim();
       if (!name) {
         value("export-name").focus();
         throw Error("请填写新数据集名称");
       }
       busy(true);
+      const attempt = ++tracking;
+      exportState.textContent = "正在保存修改并核对导出范围，请等待提交完成…";
       try {
-        const job = await request(`${dataset}/exports`, {
-          ...await exportSelection(value("export-scope").value),
-          name
-        }), ds = dataset;
+        const selected = await exportSelection(value("export-scope").value);
+        exportState.textContent = `正在提交「${name}」：${selected.episodes.length} 条 Episode…`;
+        const job = await request(`${dataset}/exports`, { ...selected, name }), ds = dataset;
         exportState.textContent = "正在生成数据副本，可以继续编辑；本次导出内容已固定。";
         (async () => {
-          while (!disposed) {
+          while (!disposed && exportState.isConnected && attempt === tracking) {
             await new Promise((r) => setTimeout(r, 1500));
-            if (disposed)
+            if (disposed || !exportState.isConnected || attempt !== tracking)
               return;
             try {
-              const result = await request(`${ds}/exports/${job.id}`), host = $("export-state");
-              if (host)
-                host.innerHTML = `${esc({ QUEUED: "等待生成数据副本", RUNNING: "正在生成数据副本", CONVERTED: "数据副本已生成", FAILED: "生成失败", INTERRUPTED: "生成已中断" }[result.state] || result.stage)} · ${esc(result.dataset_name || name)}${result.error ? ` · ${esc(result.error)}` : ""}${result.viewer_url ? ` · <a href="${esc(result.viewer_url)}">预览生成的数据</a>` : ""}${result.data_url ? ` · <a href="${esc(result.data_url)}">在预览与质检中查看</a>` : ""}`;
+              const result = await request(`${ds}/exports/${job.id}`);
+              if (disposed || !exportState.isConnected || attempt !== tracking)
+                return;
+              exportState.innerHTML = `${esc({ QUEUED: "等待生成数据副本", RUNNING: "正在生成数据副本", CONVERTED: "数据副本已生成", FAILED: "生成失败", INTERRUPTED: "生成已中断" }[result.state] || result.stage)} · ${esc(result.dataset_name || name)}${result.error ? ` · ${esc(result.error)}` : ""}${result.viewer_url ? ` · <a href="${esc(result.viewer_url)}">预览生成的数据</a>` : ""}${result.data_url ? ` · <a href="${esc(result.data_url)}">在预览与质检中查看</a>` : ""}`;
               if (!["QUEUED", "RUNNING"].includes(result.state))
                 return;
             } catch (e) {
-              note(e.message);
+              if (disposed || !exportState.isConnected || attempt !== tracking)
+                return;
+              exportState.textContent = `「${name}」已提交，但暂时无法读取生成进度：${e.message}。可在主页面“数据转换”中查看此任务。`;
               return;
             }
           }
         })();
+      } catch (e) {
+        exportState.textContent = "暂未确认生成任务，请查看上方提示。";
+        throw e;
       } finally {
         if (!disposed)
           busy(false);

@@ -631,6 +631,14 @@
   color: #79869a;
   line-height: 1.7;
 }
+.bp-workbench #dialog-notice:not(:empty) {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: #fff2ce;
+  color: #714a09;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
 .bp-workbench .dialog-table {
   width: 100%;
   border-collapse: collapse;

@@ -314,6 +314,10 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         ]
         return {"candidates": [c["id"] for c in candidates]}
 
+    @app.get("/api/annotation-workbench/{dataset}/revisions")
+    def revisions(dataset: str):
+        return workbench.revisions(dataset)
+
     @app.post("/api/annotation-workbench/{dataset}/bundle")
     def bundle(dataset: str, body: Selection):
         return workbench.bundle(dataset, body)
