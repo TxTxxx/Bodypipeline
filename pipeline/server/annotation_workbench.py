@@ -358,7 +358,15 @@ class AnnotationWorkbench:
                 "template_signature": template_key(row["document"]),
             }
 
-    def save(self, dataset, episode, body: SaveAnnotation):
+    def save(
+        self,
+        dataset,
+        episode,
+        body: SaveAnnotation,
+        *,
+        subtask=None,
+        template_signature=None,
+    ):
         key, path, _ = self.legacy.resolve(dataset)
         with annotation_lock(self.store, key, [episode]):
             _, path, job, snapshot, data = self.context(dataset)
@@ -496,7 +504,37 @@ class AnnotationWorkbench:
                 )
             )
             self._publish(row, doc, complete=done, operation=body.operation)
-            return {**row, "status": status, "saved": True}
+            return {
+                **row,
+                "status": status,
+                "saved": True,
+                "navigation_row": self.navigation_row(
+                    row, item, subtask=subtask, template_signature=template_signature
+                ),
+            }
+
+    @staticmethod
+    def navigation_row(row, item, *, subtask=None, template_signature=None):
+        doc = row["document"]
+        valid_target = (
+            template_signature is None or template_key(doc) == template_signature
+        ) and subtask in {s["id"] for s in doc["templateSnapshot"]["subtasks"]}
+        return {
+            "episode": row["episode"],
+            "revision": row["revision"],
+            "frames": item["frames"],
+            "complete": row["complete"],
+            "status": completion(doc, item["frames"]),
+            "templateId": doc["templateId"],
+            "templateSignature": template_key(doc),
+            "counts": count_attempts(doc, subtask, item["frames"])
+            if valid_target
+            else {
+                "recorded_count": None,
+                "complete": item.get("annotation_complete", False),
+                "basis": "未选择目标标签或该 Episode 使用不同模板",
+            },
+        }
 
     def listing(
         self, dataset, subtask=None, count=None, recorded=False, template_signature=None
@@ -523,38 +561,16 @@ class AnnotationWorkbench:
                     source_key=key,
                     initial_candidates=candidate_index.get(ep, []),
                 )
-                doc = row["document"]
-                valid_target = (
-                    template_signature is None
-                    or template_key(doc) == template_signature
-                ) and subtask in {s["id"] for s in doc["templateSnapshot"]["subtasks"]}
-                number = (
-                    count_attempts(doc, subtask, item["frames"])
-                    if valid_target
-                    else {
-                        "recorded_count": None,
-                        "complete": item.get("annotation_complete", False),
-                        "basis": "未选择目标标签或该 Episode 使用不同模板",
-                    }
+                summary = self.navigation_row(
+                    row, item, subtask=subtask, template_signature=template_signature
                 )
+                number = summary["counts"]
                 if count is not None and (
-                    not valid_target
-                    or number["recorded_count"] != count
+                    number["recorded_count"] != count
                     or (not recorded and not number["complete"])
                 ):
                     continue
-                rows.append(
-                    {
-                        "episode": ep,
-                        "revision": row["revision"],
-                        "frames": item["frames"],
-                        "complete": row["complete"],
-                        "status": completion(doc, item["frames"]),
-                        "templateId": doc["templateId"],
-                        "templateSignature": template_key(doc),
-                        "counts": number,
-                    }
-                )
+                rows.append(summary)
             return {
                 "dataset": dataset,
                 "name": job.get("dataset_name") or dataset,

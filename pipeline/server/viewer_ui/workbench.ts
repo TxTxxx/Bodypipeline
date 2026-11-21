@@ -1,5 +1,8 @@
 import {
   filterNavigationRows,
+  nextUncheckedEpisode,
+  nextPrefetchEpisode,
+  reconcileNavigationRow,
   type AnnotationNavigationStore,
   type EpisodeFilter,
 } from "./annotation-navigation-model";
@@ -292,17 +295,79 @@ export function mountWorkbench(
           safe(() => sync(s));
     }, 500);
   }
+  function savePath(s: Session, filter: EpisodeFilter) {
+    const query = new URLSearchParams();
+    if (filter.subtask) {
+      query.set("subtask", filter.subtask);
+      if (filter.template_signature)
+        query.set("template_signature", filter.template_signature);
+    }
+    return `${s.head.dataset}/episodes/${s.head.episode}${query.size ? "?" + query : ""}`;
+  }
+  function rememberCatalog(
+    at = recentCatalog?.dataset === dataset ? recentCatalog.at : Date.now(),
+  ) {
+    recentCatalog = {
+      dataset,
+      signature,
+      name: datasetName,
+      rows: copy(rows),
+      allRows: copy(allRows),
+      filter: JSON.stringify(filterState),
+      at,
+    };
+  }
+  function savedNavigation(
+    s: Session,
+    result: any,
+    requestedFilter: EpisodeFilter,
+  ) {
+    if (
+      disposed ||
+      dataset !== s.head.dataset ||
+      signature !== s.head.source_signature
+    )
+      return;
+    const sameFilter =
+      JSON.stringify(requestedFilter) === JSON.stringify(filterState);
+    const summary = {
+      ...(result.navigation_row || {
+        episode: s.head.episode,
+        revision: s.head.revision,
+        complete: s.head.complete,
+        status: result.status,
+        frames: s.head.frames,
+      }),
+    };
+    if (!sameFilter) delete summary.counts;
+    const row = allRows.find((row) => row.episode === s.head.episode);
+    if (row) Object.assign(row, summary);
+    if (sameFilter)
+      rows = reconcileNavigationRow(rows, row || summary, filterState);
+    else {
+      const existing = rows.find((row) => row.episode === s.head.episode);
+      if (existing)
+        Object.assign(existing, {
+          revision: s.head.revision,
+          complete: s.head.complete,
+          status: result.status,
+        });
+    }
+    rememberCatalog();
+    renderEpisodes();
+  }
   async function sync(s: Session): Promise<void> {
     if (s.saving) return s.saving;
     if (!s.dirty || s.remote || s.readFailure) return;
     const snapshot = copy(s.doc);
     const op = s.operation;
     const revision = s.head.revision;
+    const requestedFilter = dataset === s.head.dataset ? copy(filterState) : {};
     s.error = "";
     const promise = (async () => {
       try {
         const result = await request(
-          `${s.head.dataset}/episodes/${s.head.episode}`,
+          savePath(s, requestedFilter),
           {
             revision,
             source_signature: s.head.source_signature,
@@ -330,24 +395,7 @@ export function mountWorkbench(
           renderSummary();
           renderTimeline();
         }
-        const row =
-          dataset === s.head.dataset
-            ? allRows.find((r) => r.episode === s.head.episode)
-            : undefined;
-        if (row && !disposed) {
-          const saved = {
-            revision: s.head.revision,
-            complete: s.head.complete,
-            status: result.status,
-          };
-          Object.assign(row, saved);
-          const filteredRow = rows.find(
-            (row) => row.episode === s.head.episode,
-          );
-          if (filteredRow) Object.assign(filteredRow, saved);
-          renderEpisodes();
-          if (filterState.subtask) safe(() => refresh(false));
-        }
+        savedNavigation(s, result, requestedFilter);
       } catch (e: any) {
         s.error = e.message;
         s.retryAt = Date.now() + 8000;
@@ -383,16 +431,14 @@ export function mountWorkbench(
     if (s.readFailure) throw Error(s.readFailure);
     if (s.dirty || s.remote) throw Error("请先同步或处理冲突；本地输入保留");
     const original = copy(s.doc);
-    const response = await request(
-      `${s.head.dataset}/episodes/${s.head.episode}`,
-      {
-        revision: s.head.revision,
-        source_signature: s.head.source_signature,
-        document: original,
-        operation: "human-review",
-        ...extra,
-      },
-    );
+    const requestedFilter = copy(filterState);
+    const response = await request(savePath(s, requestedFilter), {
+      revision: s.head.revision,
+      source_signature: s.head.source_signature,
+      document: original,
+      operation: "human-review",
+      ...extra,
+    });
     s.undo.edit(s.doc, response.document);
     s.head = { ...s.head, ...response };
     if (JSON.stringify(s.doc) === JSON.stringify(original))
@@ -402,9 +448,9 @@ export function mountWorkbench(
       schedule?.();
     }
     backup(s);
+    savedNavigation(s, response, requestedFilter);
     if (active === s) {
       renderAll(false);
-      await refresh(false);
     }
     return response;
   }
@@ -475,9 +521,7 @@ export function mountWorkbench(
         note("检查期间又有修改，请检查最新标注后再确认。");
         return;
       }
-      const next = navigationRows().find(
-        (r) => r.episode > s.head.episode && !r.complete,
-      );
+      const next = nextUncheckedEpisode(navigationRows(), s.head.episode);
       if (next) await openEpisode(next.episode);
       else note("当前 Episode 的标注已检查并保存；后面没有尚未检查的数据。");
     } finally {
@@ -559,7 +603,7 @@ export function mountWorkbench(
   }
   function planPrefetch() {
     if (!options.native || disposed || !active || navigationLoading) return;
-    const next = navigationRows().find((row) => row.episode > episode);
+    const next = nextPrefetchEpisode(navigationRows(), episode);
     const status = $("prefetch-state");
     if (!next) {
       stopPrefetch();
@@ -661,15 +705,7 @@ export function mountWorkbench(
       allRows = completeRows;
       signature = result.source_signature;
       datasetName = result.name || sourceDataset;
-      recentCatalog = {
-        dataset: sourceDataset,
-        signature,
-        name: datasetName,
-        rows: copy(rows),
-        allRows: copy(allRows),
-        filter: JSON.stringify(chosenFilter),
-        at: Date.now(),
-      };
+      rememberCatalog(Date.now());
       try {
         localStorage.setItem(
           `bp-catalog:${sourceDataset}`,
@@ -746,12 +782,7 @@ export function mountWorkbench(
     const fast = !!(
       options.native &&
       cachedCatalog?.dataset === dataset &&
-      cachedCatalog.filter === JSON.stringify(filterState) &&
-      episodePreloader.matches({
-        dataset,
-        episode,
-        signature: cachedCatalog.signature,
-      })
+      cachedCatalog.filter === JSON.stringify(filterState)
     );
     if (fast) {
       rows = copy(cachedCatalog!.rows);
@@ -781,7 +812,8 @@ export function mountWorkbench(
     await openEpisode(
       allRows.some((r) => r.episode === episode) ? episode : allRows[0].episode,
     ); // Cache annotation heads to allow Episode switches while offline.
-    if (fast && !disposed) void refresh(false, true).catch(() => {});
+    if (fast && !disposed && Date.now() - cachedCatalog!.at > 30000)
+      void refresh(false, true).catch(() => {});
     if (options.native) return;
     const prefetchDataset = dataset,
       prefetchDrafts = drafts,
@@ -1047,6 +1079,8 @@ export function mountWorkbench(
         "waiting",
         () => {
           if (!disposed && active === s) {
+            if (plannedPrefetch && episodePreloader.isReady(plannedPrefetch))
+              return;
             stopPrefetch();
             $("prefetch-state").textContent = "优先加载当前视频";
           }

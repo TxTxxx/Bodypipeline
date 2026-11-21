@@ -228,10 +228,22 @@ def mount_workbench(app, settings, store, runner=None, annotations=None):
         return JSONResponse(head, headers=headers)
 
     @app.post("/api/annotation-workbench/{dataset}/episodes/{episode}")
-    def save(dataset: str, episode: int, body: SaveAnnotation):
+    def save(
+        dataset: str,
+        episode: int,
+        body: SaveAnnotation,
+        subtask: str | None = None,
+        template_signature: str | None = None,
+    ):
         if runner is None:
             raise DomainError("请通过 Server 同步工作区", 503)
-        return workbench.save(dataset, episode, body)
+        return workbench.save(
+            dataset,
+            episode,
+            body,
+            subtask=subtask,
+            template_signature=template_signature,
+        )
 
     @app.get("/api/annotation-workbench/{dataset}/episodes/{episode}/history")
     def history(dataset: str, episode: int):

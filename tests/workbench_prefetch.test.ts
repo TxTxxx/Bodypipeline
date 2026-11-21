@@ -51,7 +51,9 @@ test("route remount adopts the same video buffers and cancels background work", 
     8,
   );
   cache.prepare(target(), () => {});
+  expect(cache.isReady(target())).toBe(false);
   await tick();
+  expect(cache.isReady(target())).toBe(true);
   cache.leave();
   cache.retainFor(target());
   const result = await cache.take(target());

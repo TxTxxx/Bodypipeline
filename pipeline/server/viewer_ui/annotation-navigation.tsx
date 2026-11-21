@@ -22,7 +22,10 @@ export function AnnotationNavigationProvider({
   repoId: string;
   children: React.ReactNode;
 }) {
-  const store = useMemo(() => new AnnotationNavigationStore(), [repoId]);
+  const store = useMemo(
+    () => new AnnotationNavigationStore(repoId.replace(/^bp\//, "")),
+    [repoId],
+  );
   return (
     <NavigationContext.Provider value={store}>
       {children}
@@ -53,7 +56,7 @@ export function AnnotationEpisodeNavigation({
   const state = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,
-    store.getSnapshot,
+    store.getServerSnapshot,
   );
   const [number, setNumber] = useState("");
   const [draft, setDraft] = useState<EpisodeFilter>({});

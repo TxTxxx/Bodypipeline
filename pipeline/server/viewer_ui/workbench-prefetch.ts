@@ -16,6 +16,7 @@ type Slot = PrefetchTarget & {
   abort: AbortController;
   data?: PreparedEpisode;
   ready: Promise<PreparedEpisode | undefined>;
+  warmed?: boolean;
 };
 export const mediaUrl = (dataset: string, signature: string, path: string) =>
   `/api/annotation-workbench/${encodeURIComponent(dataset)}/media/${path.split("/").map(encodeURIComponent).join("/")}?signature=${encodeURIComponent(signature)}`;
@@ -52,6 +53,9 @@ export class EpisodePreloader {
       s.signature === target.signature
     );
   }
+  isReady(target: PrefetchTarget) {
+    return this.matches(target) && this.slot?.warmed === true;
+  }
   prepare(target: PrefetchTarget, status: (ready: boolean | null) => void) {
     if (this.matches(target)) return;
     this.clear();
@@ -75,8 +79,10 @@ export class EpisodePreloader {
           throw Error("来源已变化");
         void this.warm(data, slot.abort.signal)
           .then((ready) => {
-            if (this.slot === slot && !slot.abort.signal.aborted)
+            if (this.slot === slot && !slot.abort.signal.aborted) {
+              slot.warmed = ready;
               status(ready || null);
+            }
           })
           .catch(() => {
             if (this.slot === slot && !slot.abort.signal.aborted) status(null);

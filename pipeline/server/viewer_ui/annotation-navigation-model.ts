@@ -44,6 +44,35 @@ export interface NavigationVisibility {
   excluded: number[];
   flagged: number[] | null;
 }
+let lastNavigation:
+  | { state: NavigationState; visibility: NavigationVisibility }
+  | undefined;
+/** The review button and its look-ahead must agree, including skipped rows. */
+export function nextUncheckedEpisode(rows: EpisodeRow[], episode: number) {
+  return rows.find((row) => row.episode > episode && !row.complete);
+}
+export function nextPrefetchEpisode(rows: EpisodeRow[], episode: number) {
+  return (
+    nextUncheckedEpisode(rows, episode) ||
+    rows.find((row) => row.episode > episode)
+  );
+}
+export function reconcileNavigationRow(
+  rows: EpisodeRow[],
+  saved: EpisodeRow,
+  filter: EpisodeFilter,
+) {
+  const remaining = rows.filter((row) => row.episode !== saved.episode);
+  const count = filter.count;
+  const matches =
+    !filter.subtask ||
+    count === undefined ||
+    count === "" ||
+    (saved.counts?.recorded_count === Number(count) &&
+      (filter.basis === "recorded" || saved.counts.complete));
+  if (matches) remaining.push(saved);
+  return remaining.sort((a, b) => a.episode - b.episode);
+}
 export function filterNavigationRows(
   rows: EpisodeRow[],
   filter: EpisodeFilter,
@@ -79,10 +108,26 @@ export class AnnotationNavigationStore {
     subtasks: [],
     currentOutsideFilter: false,
   };
+  private readonly serverState = this.state;
   private listeners = new Set<() => void>();
   private actions: NavigationActions | null = null;
   private visibility: NavigationVisibility = { excluded: [], flagged: null };
+  constructor(dataset?: string) {
+    if (
+      typeof window !== "undefined" &&
+      dataset &&
+      lastNavigation?.state.dataset === dataset
+    ) {
+      this.state = {
+        ...lastNavigation.state,
+        ready: false,
+        currentOutsideFilter: false,
+      };
+      this.visibility = lastNavigation.visibility;
+    }
+  }
   getSnapshot = () => this.state;
+  getServerSnapshot = () => this.serverState;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -91,6 +136,12 @@ export class AnnotationNavigationStore {
   };
   publish(state: NavigationState) {
     this.state = state;
+    if (
+      typeof window !== "undefined" &&
+      state.dataset &&
+      (!state.loading || state.rows.length)
+    )
+      lastNavigation = { state, visibility: this.visibility };
     this.listeners.forEach((listener) => listener());
   }
   connect(actions: NavigationActions) {
@@ -98,7 +149,7 @@ export class AnnotationNavigationStore {
     return () => {
       if (this.actions === actions) {
         this.actions = null;
-        this.publish({ ...this.state, ready: false, loading: true });
+        this.publish({ ...this.state, ready: false });
       }
     };
   }

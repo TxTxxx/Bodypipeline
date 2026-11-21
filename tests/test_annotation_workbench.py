@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+import pytest
 from test_subtask_review import client_for
 from test_subtask_review import review_app as review_app
 
@@ -69,6 +70,48 @@ def save_body(head, **kw):
         "document": head["document"],
         **kw,
     }
+
+
+def test_save_returns_the_same_navigation_summary_as_listing(review_app, monkeypatch):
+    client = client_for(review_app)
+    head = client.get(BASE + "/episodes/0").json()
+    sid = head["document"]["attempts"][0]["subtaskId"]
+    signature = head["template_signature"]
+    query = f"?subtask={sid}&template_signature={signature}"
+    head["document"]["segments"].append(
+        {"id": "background-gap", "start": 2, "end": 4, "label": "NULL"}
+    )
+    head["document"]["segments"].sort(key=lambda segment: segment["start"])
+    for attempt in head["document"]["attempts"]:
+        attempt["outcome"] = "success"
+    service = review_app.state.annotation_workbench
+    with monkeypatch.context() as guarded:
+        guarded.setattr(
+            service,
+            "listing",
+            lambda *_args, **_kw: pytest.fail("save scanned the catalog"),
+        )
+        saved = client.post(BASE + "/episodes/0" + query, json=save_body(head))
+    assert saved.status_code == 200, saved.text
+    row = saved.json()["navigation_row"]
+    assert row["counts"]["recorded_count"] == 2
+    assert row["counts"]["complete"] is False
+    assert (
+        row
+        == client.get(BASE + "/episodes" + query + "&recorded=true&count=2").json()[
+            "episodes"
+        ][0]
+    )
+    checked = client.post(
+        BASE + "/episodes/0" + query,
+        json=save_body(saved.json(), confirm=[[0, 6]], complete=True),
+    )
+    assert checked.status_code == 200, checked.text
+    row = checked.json()["navigation_row"]
+    assert row["complete"] and row["counts"]["complete"]
+    assert (
+        row == client.get(BASE + "/episodes" + query + "&count=2").json()["episodes"][0]
+    )
 
 
 def test_episode_isolated_revision_history_and_conflict_preserves_both(review_app):
