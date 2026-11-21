@@ -118,7 +118,11 @@ class SubtaskReview:
         except subprocess.TimeoutExpired as exc:
             raise DomainError("读取 Subtask 超时，请稍后重试", 504) from exc
         if result.returncode:
-            raise DomainError("无法读取 Subtask：" + result.stderr[-1200:], 409)
+            detail = result.stderr.strip().splitlines()
+            message = (
+                detail[-1].removeprefix("ValueError: ") if detail else "读取器异常退出"
+            )
+            raise DomainError("无法读取标注：" + message[:1200], 409)
         try:
             data = json.loads(result.stdout)
         except ValueError as exc:

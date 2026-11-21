@@ -103,6 +103,7 @@ export function mountWorkbench(
     episode =
       options.episode ??
       Number(new URLSearchParams(location.search).get("episode") || 0);
+  let selectionSignature = "";
   let allRows: any[] = [],
     rows: any[] = [],
     page = 0,
@@ -675,12 +676,31 @@ export function mountWorkbench(
   }
   function persistSelection() {
     try {
+      if (signature) selectionSignature = signature;
       localStorage.setItem(
         `bp-selection:${dataset}`,
         JSON.stringify([...selection.entries]),
       );
+      if (selectionSignature)
+        localStorage.setItem(
+          `bp-selection-source:${dataset}`,
+          selectionSignature,
+        );
     } catch (e) {
       note("选择清单本地备份失败，请保持页面打开");
+    }
+  }
+  function reconcileSelectionSource() {
+    const stale =
+      selection.entries.size > 0 && selectionSignature !== signature;
+    selectionSignature = signature;
+    if (stale) {
+      selection.entries.clear();
+      persistSelection();
+      renderSelectionCount();
+      note(
+        "数据集已更新，原来的导出勾选已清空，请按当前列表重新选择。筛选条件已保留。",
+      );
     }
   }
   function renderSelectionCount() {
@@ -707,6 +727,7 @@ export function mountWorkbench(
       allRows = completeRows;
       signature = result.source_signature;
       datasetName = result.name || sourceDataset;
+      reconcileSelectionSource();
       rememberCatalog(Date.now());
       try {
         localStorage.setItem(
@@ -751,11 +772,19 @@ export function mountWorkbench(
     sessions.clear();
     active = null;
     selection = new EpisodeSelection();
+    selectionSignature = "";
     drafts = new LocalDrafts(localStorage, dataset);
     try {
       selection.entries = new Map(
         JSON.parse(localStorage.getItem(`bp-selection:${dataset}`) || "[]"),
       );
+      selectionSignature =
+        localStorage.getItem(`bp-selection-source:${dataset}`) ||
+        JSON.parse(localStorage.getItem(`bp-navigation:${dataset}`) || "{}")
+          .source_signature ||
+        JSON.parse(localStorage.getItem(`bp-catalog:${dataset}`) || "{}")
+          .signature ||
+        "";
     } catch {}
     filterState = {};
     page = 0;
@@ -792,6 +821,7 @@ export function mountWorkbench(
       signature = cachedCatalog!.signature;
       datasetName = cachedCatalog!.name;
       navigationLoading = false;
+      reconcileSelectionSource();
       renderEpisodes();
     } else {
       episodePreloader.clear();
@@ -931,13 +961,20 @@ export function mountWorkbench(
         s.undo.past = saved!.past || [];
         s.undo.future = saved!.future || [];
       }
+      // A clean backup can precede a server-side Episode renumbering. Only
+      // unsaved edits need the old-source conflict workflow.
       if (
-        saved &&
-        (!sameSource || (saved.dirty && saved.head.revision !== head.revision))
+        saved?.dirty &&
+        (!sameSource || saved.head.revision !== head.revision)
       ) {
         s.remote = copy(head);
         s.head = saved.head;
         s.doc = copy(saved.document);
+        s.dirty = true;
+        s.input = copy(saved.input);
+        s.mapping = saved.mapping;
+        s.undo.past = saved.past || [];
+        s.undo.future = saved.future || [];
         s.error = "服务器修订或来源与本地草稿不同";
       }
       if (

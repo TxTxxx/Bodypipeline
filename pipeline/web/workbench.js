@@ -860,6 +860,7 @@ function mountWorkbench(root, options = {}) {
   const outcomes = { success: "成功", failure: "失败", unknown: "无法判断" };
   const apiBase = "/api/annotation-workbench/";
   let dataset = options.dataset ?? new URLSearchParams(location.search).get("dataset") ?? "", episode = options.episode ?? Number(new URLSearchParams(location.search).get("episode") || 0);
+  let selectionSignature = "";
   let allRows = [], rows = [], page = 0, filterState = {}, signature = "", datasetName = "", library = {
     revision: 0,
     templates: []
@@ -1306,9 +1307,23 @@ function mountWorkbench(root, options = {}) {
   }
   function persistSelection() {
     try {
+      if (signature)
+        selectionSignature = signature;
       localStorage.setItem(`bp-selection:${dataset}`, JSON.stringify([...selection.entries]));
+      if (selectionSignature)
+        localStorage.setItem(`bp-selection-source:${dataset}`, selectionSignature);
     } catch (e) {
       note("选择清单本地备份失败，请保持页面打开");
+    }
+  }
+  function reconcileSelectionSource() {
+    const stale = selection.entries.size > 0 && selectionSignature !== signature;
+    selectionSignature = signature;
+    if (stale) {
+      selection.entries.clear();
+      persistSelection();
+      renderSelectionCount();
+      note("数据集已更新，原来的导出勾选已清空，请按当前列表重新选择。筛选条件已保留。");
     }
   }
   function renderSelectionCount() {
@@ -1334,6 +1349,7 @@ function mountWorkbench(root, options = {}) {
       allRows = completeRows;
       signature = result.source_signature;
       datasetName = result.name || sourceDataset;
+      reconcileSelectionSource();
       rememberCatalog(Date.now());
       try {
         localStorage.setItem(`bp-catalog:${sourceDataset}`, JSON.stringify({ rows: allRows, signature, name: datasetName }));
@@ -1375,9 +1391,11 @@ function mountWorkbench(root, options = {}) {
     sessions.clear();
     active = null;
     selection = new EpisodeSelection;
+    selectionSignature = "";
     drafts = new LocalDrafts(localStorage, dataset);
     try {
       selection.entries = new Map(JSON.parse(localStorage.getItem(`bp-selection:${dataset}`) || "[]"));
+      selectionSignature = localStorage.getItem(`bp-selection-source:${dataset}`) || JSON.parse(localStorage.getItem(`bp-navigation:${dataset}`) || "{}").source_signature || JSON.parse(localStorage.getItem(`bp-catalog:${dataset}`) || "{}").signature || "";
     } catch {}
     filterState = {};
     page = 0;
@@ -1406,6 +1424,7 @@ function mountWorkbench(root, options = {}) {
       signature = cachedCatalog.signature;
       datasetName = cachedCatalog.name;
       navigationLoading = false;
+      reconcileSelectionSource();
       renderEpisodes();
     } else {
       episodePreloader.clear();
@@ -1531,10 +1550,15 @@ function mountWorkbench(root, options = {}) {
         s.undo.past = saved.past || [];
         s.undo.future = saved.future || [];
       }
-      if (saved && (!sameSource || saved.dirty && saved.head.revision !== head.revision)) {
+      if (saved?.dirty && (!sameSource || saved.head.revision !== head.revision)) {
         s.remote = copy(head);
         s.head = saved.head;
         s.doc = copy(saved.document);
+        s.dirty = true;
+        s.input = copy(saved.input);
+        s.mapping = saved.mapping;
+        s.undo.past = saved.past || [];
+        s.undo.future = saved.future || [];
         s.error = "服务器修订或来源与本地草稿不同";
       }
       if (prepared && prepared.media.source_signature === s.head.source_signature && !readFailure && (!s.remote || s.remote.source_signature === s.head.source_signature)) {

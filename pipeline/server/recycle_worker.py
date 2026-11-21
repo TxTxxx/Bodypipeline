@@ -44,6 +44,9 @@ def recover_operation(store, row):
     if _published(row):
         marker = json.loads((Path(row["dataset_path"]) / MARKER).read_text())
         mapping = marker["mapping"]
+        from .annotation_reindex import publish_reindex
+
+        publish_reindex(store, op["id"])
         entries = {
             str(mapping[key]): {**entry, "episode": mapping[key]}
             for key, entry in op["entries_before"].items()
@@ -443,6 +446,9 @@ def rebuild(root, stage, deleted, progress):
         stage / "meta/stats.json",
         aggregate_episode_stats([row["stats"] for row in stats]) if stats else {},
     )
+    from pipeline.server.annotation_reindex import reindex_sidecars
+
+    reindex_sidecars(stage, mapping)
     progress("正在验证保留的数据和视频")
     report = validate_dataset(stage, deep=True)
     if not report.valid:
@@ -457,10 +463,24 @@ def rebuild(root, stage, deleted, progress):
         ):
             raise ValueError("清理后全局帧索引不连续")
         offset += ep.length
+    # Structural LeRobot validation does not compare annotation sidecars with
+    # their per-frame labels. Check both representations before publication.
+    if any(
+        (stage / "meta" / name).is_file()
+        for name in (
+            "bodypipeline-task-annotations.json",
+            "bodypipeline-manual-annotations.json",
+            "bodypipeline-annotation-bundle.json",
+        )
+    ):
+        from pipeline.server.subtask_review_worker import read_subtasks
+
+        read_subtasks(stage)
     return {
         "mapping": mapping,
         "total_episodes": len(kept),
         "deleted_frames": source.metadata.total_frames - global_offset,
+        "annotation_reindex_version": 1,
     }
 
 
@@ -490,6 +510,10 @@ def run(store, key, operation):
                 if not os.access(directory, os.W_OK | os.X_OK):
                     raise PermissionError(f"无法清理数据目录：{directory}")
             snapshot = _snapshot(root)
+            from .annotation_reindex import prepare_reindex
+            from .merges import source_snapshot
+
+            before_signature = source_snapshot(root)["signature"]
             result = rebuild(root, stage, set(op["episodes"]), progress)
             atomic_json(stage / MARKER, {**result, "operation": operation})
             # atomic_json uses private state-file permissions. Dataset metadata
@@ -514,6 +538,14 @@ def run(store, key, operation):
             ):
                 fsync_dir(directory)
             fsync_dir(stage)
+            prepare_reindex(
+                store,
+                operation,
+                root,
+                result["mapping"],
+                before_signature,
+                source_snapshot(stage)["signature"],
+            )
             if snapshot != _snapshot(root):
                 raise ValueError("清理期间数据集被其他进程修改，已取消本次清理")
             progress("正在提交清理结果")

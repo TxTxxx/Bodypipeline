@@ -210,7 +210,10 @@ def read_subtasks(root: Path) -> dict:
                 for a in records
             ]
             if coalesced(segments) != coalesced(item["segments"]):
-                raise ValueError("任务标注 sidecar 与逐帧 Subtask 标签不一致")
+                raise ValueError(
+                    f"Episode {item['episode_index']} 的结构化标注与逐帧标签不一致；"
+                    "请检查清理或导出时的 Episode 编号映射"
+                )
             item["segments"] = sorted(
                 segments, key=lambda s: (s["start_frame"], s["end_frame"])
             )

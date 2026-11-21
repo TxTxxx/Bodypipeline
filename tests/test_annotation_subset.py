@@ -8,6 +8,7 @@ import pytest
 from test_subtask_review import SCENARIO, client_for, hashes
 
 from pipeline.server.app import create_app
+from pipeline.server.recycle import RecycleBin
 from pipeline.server.viewer_data import PreviewRegistry
 
 
@@ -194,3 +195,199 @@ def test_frozen_whole_episode_subset_is_independent_and_source_unchanged(
     )
     assert image.status_code == 200, image.text
     assert image.headers["x-data-frame"] == "4"
+
+
+@pytest.mark.parametrize("version", ["v2.1", "v3.0"])
+def test_recycle_renumbers_annotations_preserves_manual_edits_and_can_export_again(
+    settings_factory, tmp_path, letools_binary, version
+):
+    python = str(Path(letools_binary).with_name("python"))
+    fixtures = tmp_path / "fixtures"
+    subprocess.run(
+        [python, str(SCENARIO), "create", str(fixtures), version],
+        check=True,
+        capture_output=True,
+    )
+    settings = settings_factory(
+        "server", letools_bin=letools_binary, import_roots=[fixtures]
+    )
+    app = create_app(settings, background=False)
+    runner = app.state.runner
+    source = fixtures / "input-0"
+    runner.store.put(
+        "job",
+        "source",
+        {
+            "id": "source",
+            "state": "CONVERTED",
+            "dataset_path": str(source),
+            "dataset_name": "cleanup-fixture",
+            "created_at": 1,
+            "robot_type": "test_arm",
+        },
+    )
+    registry = PreviewRegistry(runner.store, settings.viewer_ttl)
+    registry.register("source", source)
+    client = client_for(app)
+    base = "/api/annotation-workbench/source"
+    heads = []
+    for ep in range(2):
+        head = client.get(base + f"/episodes/{ep}").json()
+        doc = {
+            "version": 2,
+            "templateId": "fixture",
+            "templateSnapshot": {
+                "id": "fixture",
+                "name": "Fixture",
+                "subtasks": [
+                    {"id": "a", "name": "First"},
+                    {"id": "b", "name": "Second"},
+                ],
+                "fields": [],
+            },
+            "values": {},
+            "frames": [],
+            "manualAtoms": [],
+            "history": [],
+            "countEvidence": {},
+            "provenance": {},
+            "attempts": [
+                {
+                    "id": "attempt",
+                    "subtaskId": "a" if ep == 0 else "b",
+                    "subtaskName": "First" if ep == 0 else "Second",
+                    "outcome": "success",
+                    "values": {},
+                }
+            ],
+            "segments": [
+                {
+                    "id": "segment",
+                    "label": "SUBTASK",
+                    "start": 0,
+                    "end": head["frames"],
+                    "subtaskId": "a" if ep == 0 else "b",
+                    "attemptId": "attempt",
+                }
+            ],
+        }
+        saved = client.post(
+            base + f"/episodes/{ep}",
+            json={
+                "source_signature": head["source_signature"],
+                "revision": head["revision"],
+                "document": doc,
+                "template_mapping": {},
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        heads.append(saved.json())
+    queued = client.post(
+        base + "/exports",
+        json={
+            "source_signature": heads[0]["source_signature"],
+            "episodes": [0, 1],
+            "revisions": {str(i): h["revision"] for i, h in enumerate(heads)},
+            "name": "before-cleanup",
+        },
+    )
+    assert queued.status_code == 202, queued.text
+    jid = queued.json()["id"]
+    runner.tick()
+    result = runner.store.get("job", jid)
+    assert result["state"] == "CONVERTED", result.get("error")
+    assert client.get(base + f"/exports/{jid}").status_code == 200
+    copied = f"/api/annotation-workbench/{jid}"
+    old = client.get(copied + "/episodes/1").json()
+    old["document"]["segments"][0]["note"] = "Manual edit on the retained Episode"
+    saved = client.post(
+        copied + "/episodes/1",
+        json={
+            "source_signature": old["source_signature"],
+            "revision": old["revision"],
+            "document": old["document"],
+            "confirm": [[0, old["frames"]]],
+            "complete": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    old = saved.json()
+    recycle = RecycleBin(settings, runner.store, registry)
+    key, path = recycle.resolve(f"bp/{jid}")
+    row = recycle._load(key, path)
+    row["entries"] = {"0": {"episode": 0, "deleted_at": 1}}
+    row["operation"] = {
+        "id": "annotation-cleanup",
+        "state": "pending",
+        "episodes": [0],
+        "entries_before": row["entries"],
+    }
+    runner.store.put("recycle", key, row)
+    cleanup = subprocess.run(
+        [
+            python,
+            "-m",
+            "pipeline.server.recycle_worker",
+            "--store",
+            str(runner.store.path),
+            "--key",
+            key,
+            "--operation",
+            "annotation-cleanup",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=settings.tool_environment(),
+    )
+    assert cleanup.returncode == 0, cleanup.stderr
+    catalog = client.get(copied + "/episodes")
+    assert catalog.status_code == 200, catalog.text
+    assert len(catalog.json()["episodes"]) == 1
+    rebased = client.get(copied + "/episodes/0")
+    assert rebased.status_code == 200, rebased.text
+    rebased = rebased.json()
+    assert rebased["document"] == old["document"]
+    assert rebased["complete"] is True
+    assert rebased["revision"] == old["revision"] + 1
+    assert rebased["source_signature"] != old["source_signature"]
+    # Old clients cannot overwrite either retained data or its new neighbor.
+    stale = client.post(
+        copied + "/episodes/0",
+        json={
+            "source_signature": old["source_signature"],
+            "revision": old["revision"],
+            "document": old["document"],
+        },
+    )
+    assert stale.status_code == 409
+    next_copy = client.post(
+        copied + "/exports",
+        json={
+            "source_signature": rebased["source_signature"],
+            "episodes": [0],
+            "revisions": {"0": rebased["revision"]},
+            "name": "after-cleanup",
+        },
+    )
+    assert next_copy.status_code == 202, next_copy.text
+    runner.tick()
+    final = runner.store.get("job", next_copy.json()["id"])
+    assert final["state"] == "CONVERTED", final.get("error")
+    bundle = json.loads(
+        (
+            Path(final["dataset_path"]) / "meta/bodypipeline-annotation-bundle.json"
+        ).read_text()
+    )
+    assert bundle["episodes"][0]["document"] == old["document"]
+    # A real inconsistency still fails closed, with a useful error rather than
+    # exposing a worker traceback in the Annotation page.
+    assert client.get(copied + f"/exports/{final['id']}").status_code == 200
+    sidecar = Path(final["dataset_path"]) / "meta/bodypipeline-task-annotations.json"
+    broken = json.loads(sidecar.read_text())
+    broken["episodes"]["0"]["segments"][0]["start"] = 1
+    sidecar.write_text(json.dumps(broken))
+    rejected = client.get(f"/api/annotation-workbench/{final['id']}/episodes/0")
+    assert rejected.status_code == 409, rejected.text
+    assert "Episode 0" in rejected.json()["detail"]
+    assert "Traceback" not in rejected.text
